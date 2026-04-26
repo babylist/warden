@@ -5,9 +5,10 @@
  * Reporter spec: specs/reporters.md
  */
 
-import type { SkillReport, SeverityThreshold, ConfidenceThreshold, Finding, UsageStats, EventContext } from '../../types/index.js';
+import type { SkillReport, SeverityThreshold, ConfidenceThreshold, Finding, UsageStats, EventContext, HunkFailure } from '../../types/index.js';
 import type { SkillDefinition } from '../../config/schema.js';
 import { Sentry, emitSkillMetrics, emitDedupMetrics, emitFixGateMetrics, logger } from '../../sentry.js';
+import { SkillRunnerError, WardenAuthenticationError, classifyError } from '../../sdk/errors.js';
 import {
   prepareFiles,
   analyzeFile,
@@ -41,6 +42,7 @@ interface FileProcessResult {
   durationMs: number;
   failedHunks: number;
   failedExtractions: number;
+  hunkFailures: HunkFailure[];
   auxiliaryUsage?: AuxiliaryUsageEntry[];
 }
 
@@ -186,10 +188,21 @@ export async function runSkillTask(
       });
 
       const startTime = Date.now();
+      // Mirror of the inner-scope `skill` so the outer catch can use
+      // skill.name when resolveSkill succeeded but a later step threw.
+      // Stays undefined only if resolveSkill itself failed.
+      let resolvedSkillName: string | undefined;
 
       try {
-        // Resolve the skill
-        const skill = await resolveSkill();
+        let skill: SkillDefinition;
+        try {
+          skill = await resolveSkill();
+          resolvedSkillName = skill.name;
+        } catch (err) {
+          if (err instanceof WardenAuthenticationError) throw err;
+          const message = err instanceof Error ? err.message : String(err);
+          throw new SkillRunnerError(message, { cause: err, code: 'skill_resolution_failed' });
+        }
 
         // Prepare files (parse patches into hunks)
         const { files: preparedFiles, skippedFiles } = prepareFiles(context, {
@@ -206,6 +219,8 @@ export async function runSkillTask(
               summary: 'No code changes to analyze',
               findings: [],
               usage: { inputTokens: 0, outputTokens: 0, costUSD: 0 },
+              durationMs: Date.now() - startTime,
+              model: runnerOptions?.model,
               skippedFiles: skippedFiles.length > 0 ? skippedFiles : undefined,
             },
             failOn,
@@ -346,6 +361,7 @@ export async function runSkillTask(
             durationMs: fileDurationMs,
             failedHunks: result.failedHunks,
             failedExtractions: result.failedExtractions,
+            hunkFailures: result.hunkFailures,
             auxiliaryUsage: result.auxiliaryUsage,
           };
         };
@@ -356,7 +372,7 @@ export async function runSkillTask(
           if (localState) localState.status = 'skipped';
           const filename = preparedFiles[index]?.filename ?? 'unknown';
           callbacks.onFileUpdate(name, filename, { status: 'skipped' });
-          return { findings: [], durationMs: 0, failedHunks: 0, failedExtractions: 0 };
+          return { findings: [], durationMs: 0, failedHunks: 0, failedExtractions: 0, hunkFailures: [] };
         };
 
         // Process files with sliding-window concurrency pool
@@ -398,6 +414,69 @@ export async function runSkillTask(
         const allAuxEntries = allResults.flatMap((r) => r.auxiliaryUsage ?? []);
         const totalFailedHunks = allResults.reduce((sum, r) => sum + r.failedHunks, 0);
         const totalFailedExtractions = allResults.reduce((sum, r) => sum + r.failedExtractions, 0);
+        const allHunkFailures: HunkFailure[] = allResults.flatMap((r) => r.hunkFailures);
+        const totalHunks = preparedFiles.reduce((sum, f) => sum + f.hunks.length, 0);
+        // Each hunk contributes to at most one of failedHunks / failedExtractions
+        // (mutually exclusive in analyzeFile), so summing them gives the total
+        // failed-hunk count. Counting only analysis failures would miss the
+        // scenario where every hunk's SDK call succeeded but every extraction
+        // failed — a silent zero-findings run otherwise.
+        const totalAttemptFailures = totalFailedHunks + totalFailedExtractions;
+
+        if (totalHunks > 0 && totalAttemptFailures === totalHunks && allFindings.length === 0) {
+          const auxUsage = aggregateAuxiliaryUsage(allAuxEntries);
+          const errorMessage =
+            `All ${totalHunks} chunk${totalHunks === 1 ? '' : 's'} failed to analyze. ` +
+            `This usually indicates an authentication problem. ` +
+            `Verify WARDEN_ANTHROPIC_API_KEY is set correctly, or run 'claude login' if using Claude Code subscription.`;
+          const errorReport: SkillReport = {
+            skill: skill.name,
+            summary: `${skill.name}: all chunks failed`,
+            findings: [],
+            usage: aggregateUsage(allUsage),
+            durationMs: duration,
+            model: runnerOptions?.model,
+            // Preserve per-file metadata (timing, partial usage, attempted
+            // filenames) on failure runs too — `warden logs` and JSONL
+            // consumers iterate this array to count attempted files. Without
+            // it, a failed run shows totalFiles: 0.
+            files: preparedFiles.map((file, i) => {
+              const r = allResults[i];
+              return {
+                filename: file.filename,
+                findings: r?.findings.length ?? 0,
+                durationMs: r?.durationMs,
+                usage: r?.usage,
+              };
+            }),
+            failedHunks: totalFailedHunks,
+            hunkFailures: allHunkFailures,
+            error: {
+              code: 'all_hunks_failed',
+              message: errorMessage,
+              timestamp: new Date().toISOString(),
+            },
+          };
+          if (totalFailedExtractions > 0) errorReport.failedExtractions = totalFailedExtractions;
+          if (skippedFiles.length > 0) errorReport.skippedFiles = skippedFiles;
+          if (auxUsage) errorReport.auxiliaryUsage = auxUsage;
+          callbacks.onSkillError(name, errorMessage);
+          // Mirror the success path: emit a final completion event with the
+          // (errored) report so terminal renderers print the per-skill
+          // summary line. Without this, console mode shows the error string
+          // alone with no breakdown of timing, cost, or attempted files.
+          callbacks.onSkillUpdate(name, {
+            status: 'error',
+            durationMs: duration,
+            findings: [],
+          });
+          callbacks.onSkillComplete(name, errorReport);
+          // Carry a typed error alongside the report so consumers that re-throw
+          // (action executor, Sentry.captureException) preserve the ErrorCode.
+          const runnerError = new SkillRunnerError(errorMessage, { code: 'all_hunks_failed' });
+          return { name, report: errorReport, error: runnerError, failOn, minConfidence };
+        }
+
         const uniqueFindings = deduplicateFindings(allFindings);
         emitDedupMetrics(skill.name, allFindings.length, uniqueFindings.length);
 
@@ -447,7 +526,7 @@ export async function runSkillTask(
             const r = allResults[i];
             return {
               filename: file.filename,
-              findingCount: r?.findings.length ?? 0,
+              findings: r?.findings.length ?? 0,
               durationMs: r?.durationMs,
               usage: r?.usage,
             };
@@ -461,6 +540,9 @@ export async function runSkillTask(
         }
         if (totalFailedExtractions > 0) {
           report.failedExtractions = totalFailedExtractions;
+        }
+        if (allHunkFailures.length > 0) {
+          report.hunkFailures = allHunkFailures;
         }
         const auxUsage = aggregateAuxiliaryUsage(allAuxEntries);
         if (auxUsage) {
@@ -485,9 +567,31 @@ export async function runSkillTask(
 
         return { name, report, failOn, minConfidence };
       } catch (err) {
-        const errorMessage = err instanceof Error ? err.message : String(err);
-        callbacks.onSkillError(name, errorMessage);
-        return { name, error: err, failOn, minConfidence };
+        const { code, message } = classifyError(err);
+        callbacks.onSkillError(name, message);
+        // Use the resolved skill name when available so JSONL output matches
+        // the success path's identifier. Falls back to the trigger name only
+        // when resolveSkill itself threw.
+        const skillName = resolvedSkillName ?? name;
+        const errorReport: SkillReport = {
+          skill: skillName,
+          summary: `${skillName}: failed (${code})`,
+          findings: [],
+          durationMs: Date.now() - startTime,
+          model: runnerOptions?.model,
+          error: { code, message, timestamp: new Date().toISOString() },
+        };
+        // Mirror the success / all-hunks-fail paths: emit a final completion
+        // event so non-TTY (log-mode) renderers print a per-skill summary
+        // line for the failure. Without this, log mode shows only the
+        // bare error string with no timing or duration.
+        callbacks.onSkillUpdate(name, {
+          status: 'error',
+          durationMs: errorReport.durationMs,
+          findings: [],
+        });
+        callbacks.onSkillComplete(name, errorReport);
+        return { name, report: errorReport, error: err, failOn, minConfidence };
       }
     },
   );
@@ -540,6 +644,20 @@ export function createDefaultCallbacks(
     onSkillComplete: (name, report) => {
       if (verbosity === Verbosity.Quiet) return;
       const displayName = displayNameFor(name);
+
+      // Errored runs render as failures, not as misleading "completed -
+      // 0 findings" lines with a green checkmark. onSkillError already
+      // printed the error message; this line carries timing only.
+      if (report.error) {
+        if (mode.isTTY) {
+          const duration = report.durationMs !== undefined ? ` ${chalk.dim(`[${formatDuration(report.durationMs)}]`)}` : '';
+          console.error(`${chalk.red('✗')} ${displayName}${duration} ${chalk.red(`(${report.error.code})`)}`);
+        } else {
+          const duration = report.durationMs !== undefined ? formatDuration(report.durationMs) : '?';
+          logPlain(`${displayName} failed in ${duration} (${report.error.code})`);
+        }
+        return;
+      }
 
       if (mode.isTTY) {
         const duration = report.durationMs !== undefined ? ` ${chalk.dim(`[${formatDuration(report.durationMs)}]`)}` : '';

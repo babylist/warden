@@ -1,10 +1,15 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createDefaultCallbacks, runSkillTasks } from './tasks.js';
+import { createDefaultCallbacks, runSkillTask, runSkillTasks, type SkillProgressCallbacks } from './tasks.js';
 import { Verbosity } from './verbosity.js';
 import type { OutputMode } from './tty.js';
-import type { SkillReport, Finding } from '../../types/index.js';
+import type { SkillReport, Finding, HunkFailure } from '../../types/index.js';
 import type { SkillTaskOptions } from './tasks.js';
+import type { FileAnalysisResult } from '../../sdk/types.js';
+import type { HunkWithContext } from '../../diff/index.js';
+import type { SkillDefinition } from '../../config/schema.js';
 import { Semaphore, runPool } from '../../utils/index.js';
+import { SkillRunnerError, WardenAuthenticationError } from '../../sdk/errors.js';
+import * as sdkRunner from '../../sdk/runner.js';
 
 function makeFinding(overrides: Partial<Finding> = {}): Finding {
   return {
@@ -627,6 +632,211 @@ describe('runSkillTasks', () => {
 
     expect(results).toHaveLength(0);
     expect(resolveSkill).not.toHaveBeenCalled();
+  });
+});
+
+describe('runSkillTask all-hunks-fail synthesis', () => {
+  function noopCallbacks(): SkillProgressCallbacks {
+    return {
+      onSkillStart: () => undefined,
+      onSkillUpdate: () => undefined,
+      onFileUpdate: () => undefined,
+      onSkillComplete: () => undefined,
+      onSkillSkipped: () => undefined,
+      onSkillError: () => undefined,
+    };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('synthesizes a report with error.code=all_hunks_failed when every hunk fails', async () => {
+    const fakeHunk = {
+      hunk: { newStart: 1, newCount: 10 },
+    } as unknown as HunkWithContext;
+    const hunkFailures: HunkFailure[] = [
+      { type: 'analysis', filename: 'a.ts', lineRange: '1-10', code: 'auth_failed', message: 'bad key' },
+    ];
+
+    vi.spyOn(sdkRunner, 'prepareFiles').mockReturnValue({
+      files: [{ filename: 'a.ts', hunks: [fakeHunk] }],
+      skippedFiles: [],
+    });
+
+    const failedFileResult: FileAnalysisResult = {
+      filename: 'a.ts',
+      findings: [],
+      usage: { inputTokens: 0, outputTokens: 0, costUSD: 0 },
+      failedHunks: 1,
+      failedExtractions: 0,
+      hunkFailures,
+    };
+    vi.spyOn(sdkRunner, 'analyzeFile').mockResolvedValue(failedFileResult);
+
+    const options: SkillTaskOptions = {
+      name: 'all-fail-skill',
+      resolveSkill: async () =>
+        ({ name: 'all-fail-skill', definition: '', files: [] } as unknown as SkillDefinition),
+      context: {
+        eventType: 'pull_request',
+        repository: { owner: 'o', name: 'n', fullName: 'o/n', defaultBranch: 'main' },
+        repoPath: '/tmp',
+        pullRequest: { number: 1, title: 't', body: '', headSha: 'abc', baseSha: 'def', files: [] },
+      } as unknown as SkillTaskOptions['context'],
+    };
+
+    const onSkillError = vi.fn();
+    const result = await runSkillTask(options, 1, { ...noopCallbacks(), onSkillError });
+
+    expect(result.report).toBeDefined();
+    expect(result.report!.error?.code).toBe('all_hunks_failed');
+    expect(result.report!.findings).toEqual([]);
+    expect(result.report!.failedHunks).toBe(1);
+    expect(result.report!.hunkFailures).toEqual(hunkFailures);
+    expect(onSkillError).toHaveBeenCalledTimes(1);
+    // A typed error must travel alongside the report so consumers that
+    // re-throw (action executor, Sentry) preserve the ErrorCode. A missing
+    // error here produces a plain Error downstream and loses classification.
+    expect(result.error).toBeInstanceOf(SkillRunnerError);
+    expect((result.error as SkillRunnerError).code).toBe('all_hunks_failed');
+    // Per-file metadata must be present even on failure runs — `warden logs`
+    // and JSONL consumers count attempted files via report.files. Empty
+    // files would show totalFiles: 0 for an all-hunks-failed run.
+    expect(result.report!.files).toHaveLength(1);
+    expect(result.report!.files![0]!.filename).toBe('a.ts');
+  });
+
+  it('triggers all_hunks_failed when every hunk succeeded at SDK level but extraction failed for all', async () => {
+    // Regression test for the if/else mutual-exclusion change: each hunk
+    // contributes to either failedHunks OR failedExtractions, not both.
+    // If every hunk fails extraction (SDK call succeeds, parsing fails)
+    // then failedHunks is 0 — naive `failedHunks === totalHunks` checks
+    // would silently produce a "0 findings" run. Detection must sum both.
+    const fakeHunk = {
+      hunk: { newStart: 1, newCount: 10 },
+    } as unknown as HunkWithContext;
+    const hunkFailures: HunkFailure[] = [
+      {
+        type: 'extraction',
+        filename: 'a.ts',
+        lineRange: '1-10',
+        code: 'extraction_invalid_json',
+        message: 'invalid_json',
+      },
+    ];
+
+    vi.spyOn(sdkRunner, 'prepareFiles').mockReturnValue({
+      files: [{ filename: 'a.ts', hunks: [fakeHunk] }],
+      skippedFiles: [],
+    });
+
+    const failedFileResult: FileAnalysisResult = {
+      filename: 'a.ts',
+      findings: [],
+      usage: { inputTokens: 0, outputTokens: 0, costUSD: 0 },
+      failedHunks: 0,
+      failedExtractions: 1,
+      hunkFailures,
+    };
+    vi.spyOn(sdkRunner, 'analyzeFile').mockResolvedValue(failedFileResult);
+
+    const options: SkillTaskOptions = {
+      name: 'extraction-fail-skill',
+      resolveSkill: async () =>
+        ({ name: 'extraction-fail-skill', definition: '', files: [] } as unknown as SkillDefinition),
+      context: {
+        eventType: 'pull_request',
+        repository: { owner: 'o', name: 'n', fullName: 'o/n', defaultBranch: 'main' },
+        repoPath: '/tmp',
+        pullRequest: { number: 1, title: 't', body: '', headSha: 'abc', baseSha: 'def', files: [] },
+      } as unknown as SkillTaskOptions['context'],
+    };
+
+    const result = await runSkillTask(options, 1, noopCallbacks());
+
+    expect(result.report).toBeDefined();
+    expect(result.report!.error?.code).toBe('all_hunks_failed');
+    expect(result.report!.failedExtractions).toBe(1);
+    expect(result.report!.findings).toEqual([]);
+  });
+});
+
+describe('runSkillTask error capture', () => {
+  function noopCallbacks(): SkillProgressCallbacks {
+    return {
+      onSkillStart: () => undefined,
+      onSkillUpdate: () => undefined,
+      onFileUpdate: () => undefined,
+      onSkillComplete: () => undefined,
+      onSkillSkipped: () => undefined,
+      onSkillError: () => undefined,
+    };
+  }
+
+  function makeContext(): SkillTaskOptions['context'] {
+    return {
+      eventType: 'pull_request',
+      repository: { owner: 'o', name: 'n', fullName: 'o/n', defaultBranch: 'main' },
+      repoPath: '/tmp',
+    } as SkillTaskOptions['context'];
+  }
+
+  it('returns a report with error when resolveSkill throws WardenAuthenticationError', async () => {
+    const options: SkillTaskOptions = {
+      name: 'auth-skill',
+      resolveSkill: async () => {
+        throw new WardenAuthenticationError('missing API key');
+      },
+      context: makeContext(),
+    };
+
+    const onSkillError = vi.fn();
+    const result = await runSkillTask(options, 1, { ...noopCallbacks(), onSkillError });
+
+    expect(result.name).toBe('auth-skill');
+    expect(result.report).toBeDefined();
+    expect(result.report!.error).toBeDefined();
+    expect(result.report!.error!.code).toBe('auth_failed');
+    expect(result.report!.error!.message).toContain('missing API key');
+    expect(result.report!.findings).toEqual([]);
+    expect(onSkillError).toHaveBeenCalledTimes(1);
+    // raw error is still exposed for in-process consumers
+    expect(result.error).toBeInstanceOf(WardenAuthenticationError);
+  });
+
+  it('returns a report with skill_resolution_failed when resolveSkill throws a generic error', async () => {
+    const options: SkillTaskOptions = {
+      name: 'missing-skill',
+      resolveSkill: async () => {
+        throw new Error('skill not found: foo');
+      },
+      context: makeContext(),
+    };
+
+    const result = await runSkillTask(options, 1, noopCallbacks());
+
+    expect(result.report).toBeDefined();
+    expect(result.report!.error?.code).toBe('skill_resolution_failed');
+    expect(result.report!.error?.message).toContain('skill not found: foo');
+    expect(result.report!.summary).toContain('skill_resolution_failed');
+  });
+
+  it('preserves failOn/minConfidence on error result', async () => {
+    const options: SkillTaskOptions = {
+      name: 'fail-skill',
+      failOn: 'high',
+      minConfidence: 'medium',
+      resolveSkill: async () => {
+        throw new Error('boom');
+      },
+      context: makeContext(),
+    };
+
+    const result = await runSkillTask(options, 1, noopCallbacks());
+
+    expect(result.failOn).toBe('high');
+    expect(result.minConfidence).toBe('medium');
   });
 });
 

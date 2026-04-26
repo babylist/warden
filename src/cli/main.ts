@@ -6,7 +6,7 @@ import { loadWardenConfig, resolveSkillConfigs } from '../config/loader.js';
 import { verifyAuth, type WardenAuthenticationError, type SkillRunnerOptions } from '../sdk/runner.js';
 import { resolveSkillAsync } from '../skills/loader.js';
 import { matchTrigger, filterContextByPaths, shouldFail, countFindingsAtOrAbove } from '../triggers/matcher.js';
-import type { SkillReport, ConfidenceThreshold } from '../types/index.js';
+import type { SkillReport, ConfidenceThreshold, SkillError } from '../types/index.js';
 import { filterFindings } from '../types/index.js';
 import { DEFAULT_CONCURRENCY, getAnthropicApiKey } from '../utils/index.js';
 import { parseCliArgs, showHelp, showVersion, classifyTargets, type CLIOptions } from './args.js';
@@ -97,38 +97,53 @@ function resolveConfigPath(options: CLIOptions, repoPath: string): string {
 }
 
 /**
- * Write a minimal JSONL log (summary-only, 0 findings) for early-exit paths.
- * Returns the rendered content and the log file path. The content is always
- * available even if the file write fails, so callers can use it for --json
- * output without reading back from disk.
+ * Emit a minimal JSONL log (summary-only, 0 findings) for early-exit paths.
+ *
+ * Behavior:
+ * - `--json`: writes to stdout (the API contract for piping consumers).
+ * - `--output <path>`: writes to that explicit path (CI artifacts).
+ * - Default `.warden/logs/`: written only when `error` is set. Real
+ *   failures (auth, config load, etc.) belong in the on-disk audit trail;
+ *   pure no-ops (no files, no skills) would just clutter it.
  */
-function writeEmptyRunLog(
+function emitEmptyRunLog(
   repoPath: string,
-  opts?: { traceId?: string; outputPath?: string },
-): { logPath: string; content: string } {
+  options: CLIOptions,
+  error?: SkillError,
+): void {
   const runId = generateRunId();
   const timestamp = new Date();
-  const logPath = getRepoLogPath(repoPath, runId, timestamp);
   let headSha: string | undefined;
   try {
     headSha = getHeadSha(repoPath);
   } catch {
     // Not in a git repo or HEAD is unborn
   }
-  const content = renderJsonlString([], 0, { runId, traceId: opts?.traceId, timestamp, headSha });
-  try {
-    writeJsonlContent(logPath, content);
-  } catch (err) {
-    console.warn(`Warning: Failed to write run log: ${err instanceof Error ? err.message : String(err)}`);
-  }
-  if (opts?.outputPath) {
+  const content = renderJsonlString([], 0, {
+    runId,
+    traceId: getTraceId(),
+    timestamp,
+    headSha,
+    error,
+  });
+  if (error) {
+    const logPath = getRepoLogPath(repoPath, runId, timestamp);
     try {
-      writeJsonlContent(opts.outputPath, content);
+      writeJsonlContent(logPath, content);
+    } catch (err) {
+      console.warn(`Warning: Failed to write run log: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+  if (options.output) {
+    try {
+      writeJsonlContent(options.output, content);
     } catch (err) {
       console.warn(`Warning: Failed to write output file: ${err instanceof Error ? err.message : String(err)}`);
     }
   }
-  return { logPath, content };
+  if (options.json) {
+    process.stdout.write(content);
+  }
 }
 
 /**
@@ -149,8 +164,9 @@ interface ProcessedResults {
 
 /**
  * Process skill task results into reports and check for failures.
+ * Exported for testing; callers inside main.ts use it directly.
  */
-function processTaskResults(
+export function processTaskResults(
   results: Awaited<ReturnType<typeof runSkillTasks>>,
   reportOn: CLIOptions['reportOn'],
   minConfidence?: ConfidenceThreshold
@@ -160,18 +176,25 @@ function processTaskResults(
   const failureReasons: string[] = [];
 
   for (const result of results) {
-    if (result.report) {
-      reports.push(result.report);
-      // Apply confidence filtering before failOn evaluation so low-confidence findings
-      // don't cause exit code 1. Per-result minConfidence (from trigger config) takes
-      // precedence over the global default.
-      const effectiveConfidence = result.minConfidence ?? minConfidence;
-      const reportForFail = { ...result.report, findings: filterFindings(result.report.findings, undefined, effectiveConfidence) };
-      if (result.failOn && shouldFail(reportForFail, result.failOn)) {
-        hasFailure = true;
-        const count = countFindingsAtOrAbove(reportForFail, result.failOn);
-        failureReasons.push(`${result.name}: ${count} ${result.failOn}+ severity ${pluralize(count, 'issue')}`);
-      }
+    if (!result.report) continue;
+    reports.push(result.report);
+
+    // Skill-level errors always fail the run, independent of failOn thresholds.
+    if (result.report.error) {
+      hasFailure = true;
+      failureReasons.push(`${result.name}: ${result.report.error.code}: ${result.report.error.message}`);
+      continue;
+    }
+
+    // Apply confidence filtering before failOn evaluation so low-confidence findings
+    // don't cause exit code 1. Per-result minConfidence (from trigger config) takes
+    // precedence over the global default.
+    const effectiveConfidence = result.minConfidence ?? minConfidence;
+    const reportForFail = { ...result.report, findings: filterFindings(result.report.findings, undefined, effectiveConfidence) };
+    if (result.failOn && shouldFail(reportForFail, result.failOn)) {
+      hasFailure = true;
+      const count = countFindingsAtOrAbove(reportForFail, result.failOn);
+      failureReasons.push(`${result.name}: ${count} ${result.failOn}+ severity ${pluralize(count, 'issue')}`);
     }
   }
 
@@ -324,14 +347,13 @@ async function runSkills(
   try {
     verifyAuth({ apiKey });
   } catch (error: unknown) {
-    reporter.error((error as WardenAuthenticationError).message);
-    const effectiveRepo = repoPath ?? cwd;
-    if (options.json) {
-      const { content } = writeEmptyRunLog(effectiveRepo, { traceId: getTraceId(), outputPath: options.output });
-      process.stdout.write(content);
-    } else {
-      writeEmptyRunLog(effectiveRepo, { traceId: getTraceId(), outputPath: options.output });
-    }
+    const message = (error as WardenAuthenticationError).message;
+    reporter.error(message);
+    emitEmptyRunLog(repoPath ?? cwd, options, {
+      code: 'auth_failed',
+      message,
+      timestamp: new Date().toISOString(),
+    });
     return 1;
   }
 
@@ -384,12 +406,8 @@ async function runSkills(
 
   // Handle case where no skills to run
   if (skillsToRun.length === 0) {
-    const effectiveRepo = repoPath ?? cwd;
-    if (options.json) {
-      const { content } = writeEmptyRunLog(effectiveRepo, { traceId: getTraceId(), outputPath: options.output });
-      process.stdout.write(content);
-    } else {
-      writeEmptyRunLog(effectiveRepo, { traceId: getTraceId(), outputPath: options.output });
+    emitEmptyRunLog(repoPath ?? cwd, options);
+    if (!options.json) {
       reporter.warning('No triggers matched for the changed files');
       reporter.tip('Specify a skill explicitly: warden <target> --skill <name>');
     }
@@ -462,11 +480,8 @@ async function runFileMode(filePatterns: string[], options: CLIOptions, reporter
   }
 
   if (pullRequest.files.length === 0) {
-    if (options.json) {
-      const { content } = writeEmptyRunLog(cwd, { traceId: getTraceId(), outputPath: options.output });
-      process.stdout.write(content);
-    } else {
-      writeEmptyRunLog(cwd, { traceId: getTraceId(), outputPath: options.output });
+    emitEmptyRunLog(cwd, options);
+    if (!options.json) {
       reporter.blank();
       reporter.warning('No files matched the given patterns');
     }
@@ -546,11 +561,8 @@ async function runGitRefMode(gitRef: string, options: CLIOptions, reporter: Repo
   }
 
   if (pullRequest.files.length === 0) {
-    if (options.json) {
-      const { content } = writeEmptyRunLog(repoPath, { traceId: getTraceId(), outputPath: options.output });
-      process.stdout.write(content);
-    } else {
-      writeEmptyRunLog(repoPath, { traceId: getTraceId(), outputPath: options.output });
+    emitEmptyRunLog(repoPath, options);
+    if (!options.json) {
       reporter.renderEmptyState('No changes found');
       reporter.blank();
     }
@@ -607,11 +619,8 @@ async function runConfigMode(options: CLIOptions, reporter: Reporter): Promise<n
   }
 
   if (pullRequest.files.length === 0) {
-    if (options.json) {
-      const { content } = writeEmptyRunLog(repoPath, { traceId: getTraceId(), outputPath: options.output });
-      process.stdout.write(content);
-    } else {
-      writeEmptyRunLog(repoPath, { traceId: getTraceId(), outputPath: options.output });
+    emitEmptyRunLog(repoPath, options);
+    if (!options.json) {
       if (options.staged) {
         reporter.renderEmptyState('No staged changes found');
       } else {
@@ -651,11 +660,8 @@ async function runConfigMode(options: CLIOptions, reporter: Reporter): Promise<n
   const triggersToRun = [...seen.values()];
 
   if (triggersToRun.length === 0) {
-    if (options.json) {
-      const { content } = writeEmptyRunLog(repoPath, { traceId: getTraceId(), outputPath: options.output });
-      process.stdout.write(content);
-    } else {
-      writeEmptyRunLog(repoPath, { traceId: getTraceId(), outputPath: options.output });
+    emitEmptyRunLog(repoPath, options);
+    if (!options.json) {
       reporter.blank();
       if (options.skill) {
         reporter.warning(`No triggers matched for skill: ${options.skill}`);
@@ -683,13 +689,13 @@ async function runConfigMode(options: CLIOptions, reporter: Reporter): Promise<n
   try {
     verifyAuth({ apiKey });
   } catch (error: unknown) {
-    reporter.error((error as WardenAuthenticationError).message);
-    if (options.json) {
-      const { content } = writeEmptyRunLog(repoPath, { traceId: getTraceId(), outputPath: options.output });
-      process.stdout.write(content);
-    } else {
-      writeEmptyRunLog(repoPath, { traceId: getTraceId(), outputPath: options.output });
-    }
+    const message = (error as WardenAuthenticationError).message;
+    reporter.error(message);
+    emitEmptyRunLog(repoPath, options, {
+      code: 'auth_failed',
+      message,
+      timestamp: new Date().toISOString(),
+    });
     return 1;
   }
 
@@ -773,11 +779,8 @@ async function runDirectSkillMode(options: CLIOptions, reporter: Reporter): Prom
   }
 
   if (pullRequest.files.length === 0) {
-    if (options.json) {
-      const { content } = writeEmptyRunLog(repoPath, { traceId: getTraceId(), outputPath: options.output });
-      process.stdout.write(content);
-    } else {
-      writeEmptyRunLog(repoPath, { traceId: getTraceId(), outputPath: options.output });
+    emitEmptyRunLog(repoPath, options);
+    if (!options.json) {
       if (options.staged) {
         reporter.renderEmptyState('No staged changes found');
       } else {

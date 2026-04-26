@@ -161,7 +161,7 @@ Fields: `filename`, `hunkNum`, `totalHunks`, `lineRange`
 
 #### 8. `skill_complete`
 
-Fields: `name`, `durationMs`, `findingCount`, `usage?`
+Fields: `name`, `durationMs`, `findings` (count), `usage?`
 
 **TTY:** Skill moves from spinner to checkmark in the dynamic area: `checkmark security-review [4.2s]` (green checkmark, duration dimmed). After all skills finish and Ink unmounts, the full per-skill + per-file breakdown prints to stderr.
 
@@ -204,7 +204,7 @@ Fields: `name`, `error`
 [2026-02-08T14:30:48.600Z] warden: ERROR: security-review - API timeout after 30s
 ```
 
-**JSONL:** --
+**JSONL:** A skill record with `findings: []` and an `error` object (`code`, `message`, `timestamp`). Partial results (e.g. `hunkFailures`) may also be populated when an all-chunks-failed path produced them.
 
 ---
 
@@ -533,6 +533,8 @@ Each line in a JSONL file is one of three record types, discriminated by the pre
 | `files` | `FileRecord[]` | no | Per-file breakdown |
 | `failedHunks` | `number` | no | Number of chunks that failed to analyze. Present only when > 0. |
 | `failedExtractions` | `number` | no | Number of finding extractions that failed. Present only when > 0. |
+| `hunkFailures` | `HunkFailure[]` | no | Per-hunk failure details in execution order. Present only when hunks failed. |
+| `error` | `SkillError` | no | Top-level skill failure (auth, resolution, all-hunks-failed). Present only when the skill could not complete normally. |
 
 ### Summary Record
 
@@ -545,6 +547,9 @@ Each line in a JSONL file is one of three record types, discriminated by the pre
 | `usage` | `UsageStats` | no | Aggregate usage across skills |
 | `totalSkippedFiles` | `integer` | no | Total files skipped across all skills. Present only when > 0. |
 | `auxiliaryUsage` | `Record<string, UsageStats>` | no | Merged auxiliary usage. Present only when auxiliary calls occurred. |
+| `failedSkills` | `string[]` | no | Names of skills whose run errored at the top level. Present only when any skill errored. |
+| `totalFailedHunks` | `integer` | no | Aggregate failed-hunk count across all skills. Present only when > 0. |
+| `totalFailedExtractions` | `integer` | no | Aggregate failed-extraction count across all skills. Present only when > 0. |
 
 ### Fix Evaluation Record
 
@@ -576,7 +581,13 @@ Each line in a JSONL file is one of three record types, discriminated by the pre
 
 **FileRecord**: `{ filename: string, findings: int, durationMs?: number, usage?: UsageStats }`
 
-**BySeverity**: `{ critical: int, high: int, medium: int, low: int, info: int }`
+**SkillError**: `{ code: ErrorCode, message: string, timestamp?: string }`
+
+**HunkFailure**: `{ type: "analysis" | "extraction", filename: string, lineRange: string, code: ErrorCode, message: string, preview?: string, attempts?: int }`
+
+**ErrorCode**: one of `"auth_failed"`, `"sdk_error"`, `"subprocess_failure"`, `"max_turns"`, `"aborted"`, `"all_hunks_failed"`, `"skill_resolution_failed"`, `"extraction_invalid_json"`, `"extraction_unbalanced_json"`, `"extraction_no_findings_json"`, `"extraction_missing_findings_key"`, `"extraction_findings_not_array"`, `"extraction_llm_failed"`, `"extraction_llm_timeout"`, `"extraction_no_api_key"`, `"unknown"`. Stable public contract.
+
+**BySeverity**: `{ high: int, medium: int, low: int }`. Legacy 5-level keys (`critical`, `info`) are still accepted on read for backward compatibility with older logs and normalized to `high`/`low`; new output is strictly 3-level.
 
 **FixEvalDetail**: `{ path: string, line: int, findingId?: string, verdict: "not_attempted" | "attempted_failed" | "resolved" | "re_detected", reasoning?: string, durationMs: number, usage: UsageStats }`
 
@@ -615,7 +626,7 @@ All reporters use shared formatters from `src/cli/output/formatters.ts`.
 | `formatSeverityBadge(severity)` | `Severity` | Colored dot + text | `. (high)` |
 | `formatSeverityPlain(severity)` | `Severity` | Bracketed | `[high]` |
 | `formatConfidenceBadge(confidence?)` | `Confidence \| undefined` | Colored bracketed (empty if undefined) | `[high confidence]` |
-| `countBySeverity(findings)` | `Finding[]` | `Record<Severity, number>` | `{ critical: 0, high: 1, ... }` |
+| `countBySeverity(findings)` | `Finding[]` | `Record<Severity, number>` | `{ high: 1, medium: 0, low: 0 }` |
 | `pluralize(count, singular, plural?)` | `number, string` | Pluralized word | `file` / `files` |
 
 ---
@@ -803,7 +814,6 @@ If a previous Warden review exists on the PR: `[...] warden: Previous Warden rev
 Written to `GITHUB_OUTPUT` via `setOutput()`:
 ```
 findings-count=5
-critical-count=1
 high-count=2
 summary=Warden found 5 issues across 2 skills
 ```
