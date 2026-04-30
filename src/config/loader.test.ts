@@ -1,5 +1,15 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { resolveSkillConfigs } from './loader.js';
+import {
+  mergeWardenConfigs,
+  ConfigLoadError,
+  resolveSkillConfigs,
+  resolveLayeredSkillConfigs,
+  buildSkillRootsByName,
+  loadLayeredWardenConfig,
+} from './loader.js';
 import { WardenConfigSchema, type SkillConfig, type WardenConfig } from './schema.js';
 
 describe('resolveSkillConfigs', () => {
@@ -446,6 +456,260 @@ describe('resolveSkillConfigs', () => {
       const [resolved] = resolveSkillConfigs(baseConfig);
       expect(resolved?.minConfidence).toBeUndefined();
     });
+  });
+});
+
+describe('mergeWardenConfigs', () => {
+  it('merges org defaults with repo overrides and appends skills', () => {
+    const baseConfig: WardenConfig = {
+      version: 1,
+      defaults: {
+        failOn: 'high',
+        ignorePaths: ['dist/**'],
+        chunking: {
+          filePatterns: [{ pattern: '**/*.lock', mode: 'skip' }],
+          coalesce: { enabled: true, maxGapLines: 20, maxChunkSize: 4000 },
+          maxContextFiles: 25,
+        },
+      },
+      skills: [{
+        name: 'org-skill',
+        triggers: [{ type: 'pull_request', actions: ['opened'] }],
+      }],
+    };
+
+    const repoConfig: WardenConfig = {
+      version: 1,
+      defaults: {
+        reportOn: 'medium',
+        ignorePaths: ['coverage/**'],
+        chunking: {
+          filePatterns: [{ pattern: '**/*.snap', mode: 'skip' }],
+          coalesce: { maxGapLines: 5, maxChunkSize: 2000, enabled: true },
+          maxContextFiles: 10,
+        },
+      },
+      skills: [{
+        name: 'repo-skill',
+        triggers: [{ type: 'pull_request', actions: ['opened'] }],
+      }],
+    };
+
+    const merged = mergeWardenConfigs(baseConfig, repoConfig);
+
+    expect(merged.defaults).toEqual({
+      failOn: 'high',
+      reportOn: 'medium',
+      ignorePaths: ['dist/**', 'coverage/**'],
+      chunking: {
+        filePatterns: [
+          { pattern: '**/*.lock', mode: 'skip' },
+          { pattern: '**/*.snap', mode: 'skip' },
+        ],
+        coalesce: { enabled: true, maxGapLines: 5, maxChunkSize: 2000 },
+        maxContextFiles: 10,
+      },
+    });
+    expect(merged.skills.map((skill) => skill.name)).toEqual(['org-skill', 'repo-skill']);
+  });
+
+  it('rejects duplicate skill names across layers', () => {
+    const baseConfig: WardenConfig = {
+      version: 1,
+      skills: [{
+        name: 'shared-skill',
+        triggers: [{ type: 'pull_request', actions: ['opened'] }],
+      }],
+    };
+
+    const repoConfig: WardenConfig = {
+      version: 1,
+      skills: [{
+        name: 'shared-skill',
+        triggers: [{ type: 'pull_request', actions: ['opened'] }],
+      }],
+    };
+
+    expect(() => mergeWardenConfigs(baseConfig, repoConfig)).toThrow(ConfigLoadError);
+    expect(() => mergeWardenConfigs(baseConfig, repoConfig)).toThrow(
+      'Duplicate skill names: shared-skill'
+    );
+  });
+});
+
+describe('buildSkillRootsByName', () => {
+  it('does not require baseSkillRoot when the base config only uses remote skills', () => {
+    const layered = {
+      config: {
+        version: 1 as const,
+        skills: [{ name: 'org-skill', remote: 'owner/repo' }],
+      },
+      baseConfig: {
+        version: 1 as const,
+        skills: [{ name: 'org-skill', remote: 'owner/repo' }],
+      },
+    };
+
+    expect(buildSkillRootsByName('/repo', layered)).toBeUndefined();
+  });
+
+  it('requires baseSkillRoot when base config defines local skills', () => {
+    const layered = {
+      config: {
+        version: 1 as const,
+        skills: [{ name: 'org-skill' }],
+      },
+      baseConfig: {
+        version: 1 as const,
+        skills: [{ name: 'org-skill' }],
+      },
+    };
+
+    expect(() => buildSkillRootsByName('/repo', layered)).toThrow(ConfigLoadError);
+    expect(() => buildSkillRootsByName('/repo', layered)).toThrow(
+      'base-skill-root is required when the base config defines local skills'
+    );
+  });
+
+  it('keeps base and repo skill roots separate', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'warden-skill-roots-'));
+    const layered = {
+      config: {
+        version: 1 as const,
+        skills: [{ name: 'shared-skill' }],
+      },
+      baseConfig: {
+        version: 1 as const,
+        skills: [{ name: 'shared-skill' }],
+      },
+      repoConfig: {
+        version: 1 as const,
+        skills: [{ name: 'shared-skill' }],
+      },
+    };
+
+    try {
+      mkdirSync(join(tempDir, '.warden-org'));
+
+      const roots = buildSkillRootsByName(tempDir, layered, '.warden-org');
+
+      expect(roots).toEqual({
+        base: { 'shared-skill': join(tempDir, '.warden-org') },
+        repo: { 'shared-skill': tempDir },
+      });
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('resolveLayeredSkillConfigs', () => {
+  it('keeps base defaults attached to base skills when repo config adds its own defaults', () => {
+    const baseConfig: WardenConfig = {
+      version: 1,
+      defaults: {
+        failOn: 'high',
+        batchDelayMs: 1000,
+        auxiliaryMaxRetries: 7,
+        chunking: { maxContextFiles: 25 },
+      },
+      skills: [{
+        name: 'org-skill',
+        triggers: [{ type: 'pull_request', actions: ['opened'] }],
+      }],
+    };
+
+    const repoConfig: WardenConfig = {
+      version: 1,
+      defaults: {
+        failOn: 'low',
+        batchDelayMs: 10,
+        auxiliaryMaxRetries: 1,
+        chunking: { maxContextFiles: 5 },
+      },
+      skills: [{
+        name: 'repo-skill',
+        triggers: [{ type: 'pull_request', actions: ['opened'] }],
+      }],
+    };
+
+    const resolved = resolveLayeredSkillConfigs({
+      config: mergeWardenConfigs(baseConfig, repoConfig),
+      baseConfig,
+      repoConfig,
+    });
+
+    expect(resolved).toHaveLength(2);
+    expect(resolved[0]).toMatchObject({
+      name: 'org-skill',
+      failOn: 'high',
+      batchDelayMs: 1000,
+      auxiliaryMaxRetries: 7,
+      maxContextFiles: 25,
+    });
+    expect(resolved[1]).toMatchObject({
+      name: 'repo-skill',
+      failOn: 'low',
+      batchDelayMs: 10,
+      auxiliaryMaxRetries: 1,
+      maxContextFiles: 5,
+    });
+  });
+
+  it('uses layer-specific skill roots when both layers define the same skill name', () => {
+    const baseConfig: WardenConfig = {
+      version: 1,
+      skills: [{
+        name: 'shared-skill',
+        triggers: [{ type: 'pull_request', actions: ['opened'] }],
+      }],
+    };
+
+    const repoConfig: WardenConfig = {
+      version: 1,
+      skills: [{
+        name: 'shared-skill',
+        triggers: [{ type: 'pull_request', actions: ['opened'] }],
+      }],
+    };
+
+    const resolved = resolveLayeredSkillConfigs(
+      {
+        config: { version: 1, skills: [] },
+        baseConfig,
+        repoConfig,
+      },
+      undefined,
+      {
+        base: { 'shared-skill': '/repo/.warden-org' },
+        repo: { 'shared-skill': '/repo' },
+      }
+    );
+
+    expect(resolved).toHaveLength(2);
+    expect(resolved[0]?.skillRoot).toBe('/repo/.warden-org');
+    expect(resolved[1]?.skillRoot).toBe('/repo');
+  });
+});
+
+describe('loadLayeredWardenConfig', () => {
+  it('rejects using the same file for the base and repo config', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'warden-config-'));
+
+    try {
+      writeFileSync(join(tempDir, 'warden.toml'), 'version = 1\n');
+
+      expect(() => loadLayeredWardenConfig(tempDir, {
+        baseConfigPath: './warden.toml',
+        configPath: 'warden.toml',
+      })).toThrow(ConfigLoadError);
+      expect(() => loadLayeredWardenConfig(tempDir, {
+        baseConfigPath: './warden.toml',
+        configPath: 'warden.toml',
+      })).toThrow('base-config-path and config-path must point to different files');
+    } finally {
+      rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
 

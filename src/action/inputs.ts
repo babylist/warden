@@ -18,6 +18,11 @@ export interface ActionInputs {
   /** OAuth token for Claude Code (empty if using API key) */
   oauthToken: string;
   githubToken: string;
+  /** Optional org-wide base config that is loaded before the repo config */
+  baseConfigPath?: string;
+  /** Optional repo root containing org-shared local skills for the base config */
+  baseSkillRoot?: string;
+  /** Optional repo-local config that extends the base config in the same run */
   configPath: string;
   failOn?: SeverityThreshold;
   reportOn?: SeverityThreshold;
@@ -104,6 +109,8 @@ export function parseActionInputs(): ActionInputs {
     anthropicApiKey,
     oauthToken,
     githubToken: getInput('github-token') || process.env['GITHUB_TOKEN'] || '',
+    baseConfigPath: getInput('base-config-path') || undefined,
+    baseSkillRoot: getInput('base-skill-root') || undefined,
     configPath: getInput('config-path') || 'warden.toml',
     failOn,
     reportOn,
@@ -121,6 +128,9 @@ export function parseActionInputs(): ActionInputs {
 export function validateInputs(inputs: ActionInputs): void {
   if (!inputs.githubToken) {
     throw new Error('GitHub token is required');
+  }
+  if (inputs.baseSkillRoot && !inputs.baseConfigPath) {
+    throw new Error('base-skill-root requires base-config-path');
   }
 }
 

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { parseActionInputs, setupAuthEnv } from './inputs.js';
+import { parseActionInputs, setupAuthEnv, validateInputs } from './inputs.js';
 
 describe('parseActionInputs', () => {
   const originalEnv = { ...process.env };
@@ -114,6 +114,25 @@ describe('parseActionInputs', () => {
       expect(inputs.parallel).toBe(4);
     });
   });
+
+  describe('config path handling', () => {
+    it('parses base-config-path when provided', () => {
+      process.env['INPUT_BASE_CONFIG_PATH'] = '.warden-org/warden.toml';
+      const inputs = parseActionInputs();
+      expect(inputs.baseConfigPath).toBe('.warden-org/warden.toml');
+    });
+
+    it('parses base-skill-root when provided', () => {
+      process.env['INPUT_BASE_SKILL_ROOT'] = '.warden-org';
+      const inputs = parseActionInputs();
+      expect(inputs.baseSkillRoot).toBe('.warden-org');
+    });
+
+    it('leaves baseConfigPath undefined when not set', () => {
+      const inputs = parseActionInputs();
+      expect(inputs.baseConfigPath).toBeUndefined();
+    });
+  });
 });
 
 describe('setupAuthEnv', () => {
@@ -149,5 +168,19 @@ describe('setupAuthEnv', () => {
     expect(process.env['CLAUDE_CODE_OAUTH_TOKEN']).toBe('sk-ant-oat-oauth-token');
     expect(process.env['ANTHROPIC_API_KEY']).toBeUndefined();
     expect(process.env['WARDEN_ANTHROPIC_API_KEY']).toBeUndefined();
+  });
+});
+
+describe('validateInputs', () => {
+  it('requires base-config-path when base-skill-root is set', () => {
+    expect(() => validateInputs({
+      anthropicApiKey: 'sk-ant-api-key',
+      oauthToken: '',
+      githubToken: 'test',
+      baseSkillRoot: '.warden-org',
+      configPath: 'warden.toml',
+      maxFindings: 50,
+      parallel: 4,
+    })).toThrow('base-skill-root requires base-config-path');
   });
 });

@@ -1,10 +1,10 @@
 version = 1
 
 [defaults]
-auxiliaryMaxRetries = 3
+auxiliaryMaxRetries = 7
 
 [[skills]]
-name = "test-skill"
+name = "org-skill"
 paths = ["src/**/*.ts"]
 
 [[skills.triggers]]
