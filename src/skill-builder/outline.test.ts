@@ -1,7 +1,8 @@
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
+import { collectSkillImproveSource } from './outline.js';
 import {
   getBuildStatePath,
   readSkillBuildState,
@@ -77,7 +78,7 @@ describe('skill build state', () => {
         numTurns: 1,
       },
       artifact: {
-        version: 4,
+        version: 5,
         sourceHash: 'source-hash',
         outlineHash: 'outline-hash',
         buildVersion: '1',
@@ -92,7 +93,6 @@ describe('skill build state', () => {
           { path: 'references/auth-bypass.md', bytes: 512 },
         ],
         deterministicWarnings: [],
-        validationIssues: [],
         bytes: 1024,
         durationMs: 5000,
         usage: {
@@ -107,6 +107,7 @@ describe('skill build state', () => {
         },
         externalSources: [],
         missingInputs: [],
+        authoringWarnings: [],
         responseModel: 'claude-sonnet-4-5',
         numTurns: 2,
         generatedAt: '2026-05-01T00:00:00.000Z',
@@ -126,5 +127,37 @@ describe('skill build state', () => {
         buildVersion: '1',
       },
     });
+  });
+
+  it('collects improvement briefs with current generated artifacts', () => {
+    const tempDir = mkdtempSync(join(tmpdir(), 'warden-improve-source-'));
+    tempDirs.push(tempDir);
+    const rootDir = join(tempDir, '.warden', 'skills', 'security');
+    mkdirSync(join(rootDir, 'references'), { recursive: true });
+    writeFileSync(join(rootDir, 'warden.yaml'), `version: 1
+kind: generated-skill
+name: security
+prompt: Find security issues.
+`, 'utf-8');
+    writeFileSync(join(rootDir, 'SKILL.md'), '---\nname: security\n---\n', 'utf-8');
+    writeFileSync(join(rootDir, 'references', 'auth.md'), '# Auth\n', 'utf-8');
+    writeFileSync(join(rootDir, 'build-state.json'), '{"ignored":true}\n', 'utf-8');
+
+    const source = collectSkillImproveSource({
+      name: 'security',
+      description: 'Security skill',
+      prompt: 'Find security issues.',
+      rootDir,
+    }, 'Tighten auth guidance.');
+
+    expect(source.files.map((file) => file.path)).toEqual(expect.arrayContaining([
+      'warden.yaml',
+      'improvement-brief.md',
+      'current-artifacts/SKILL.md',
+      'current-artifacts/references/auth.md',
+    ]));
+    expect(source.files.find((file) => file.path === 'improvement-brief.md')?.content).toBe(
+      'Tighten auth guidance.',
+    );
   });
 });

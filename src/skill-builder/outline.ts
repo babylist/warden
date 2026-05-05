@@ -8,6 +8,7 @@ import { runStructuredSkillBuilderAgent, StructuredSkillBuilderAgentError } from
 import {
   GENERATED_SKILL_DEFINITION_FILE,
   loadGeneratedSkillDefinition,
+  readGeneratedSkillArtifactFiles,
 } from './definition.js';
 import {
   outlineHash,
@@ -50,6 +51,7 @@ export interface BuildSkillOutlineOptions {
   repairModel?: string;
   repairMaxRetries?: number;
   onStatus?: (message: string) => void;
+  source?: SkillBuildSource;
 }
 
 export class SkillBuildOutlineError extends Error {
@@ -69,25 +71,55 @@ function sourceBlocks(source: SkillBuildSource): string {
     .join('\n\n---\n\n');
 }
 
-export function collectSkillBuildSource(skill: SkillDefinition): SkillBuildSource {
-  const files: SkillBuildSourceFile[] = [];
-
-  if (skill.rootDir) {
-    const { content } = loadGeneratedSkillDefinition(skill.rootDir);
-    files.push({ path: GENERATED_SKILL_DEFINITION_FILE, content });
-  } else {
-    files.push({
-      path: GENERATED_SKILL_DEFINITION_FILE,
-      content: `version: 1\nkind: generated-skill\nname: ${skill.name}\nprompt: ${JSON.stringify(skill.prompt)}\n`,
-    });
-  }
-
+function buildSkillSource(skillName: string, files: SkillBuildSourceFile[]): SkillBuildSource {
   const hash = sha256(JSON.stringify({
-    skill: skill.name,
+    skill: skillName,
     files,
   }));
 
   return { hash, files };
+}
+
+function generatedSkillDefinitionSourceFile(skill: SkillDefinition): SkillBuildSourceFile {
+  if (skill.rootDir) {
+    const { content } = loadGeneratedSkillDefinition(skill.rootDir);
+    return { path: GENERATED_SKILL_DEFINITION_FILE, content };
+  }
+
+  return {
+    path: GENERATED_SKILL_DEFINITION_FILE,
+    content: `version: 1\nkind: generated-skill\nname: ${skill.name}\nprompt: ${JSON.stringify(skill.prompt)}\n`,
+  };
+}
+
+export function collectSkillBuildSource(skill: SkillDefinition): SkillBuildSource {
+  const files: SkillBuildSourceFile[] = [];
+
+  files.push(generatedSkillDefinitionSourceFile(skill));
+
+  return buildSkillSource(skill.name, files);
+}
+
+/** Collect the improvement brief and current artifacts as source material. */
+export function collectSkillImproveSource(skill: SkillDefinition, improvementPrompt: string): SkillBuildSource {
+  const files: SkillBuildSourceFile[] = [
+    generatedSkillDefinitionSourceFile(skill),
+    {
+      path: 'improvement-brief.md',
+      content: improvementPrompt.trim(),
+    },
+  ];
+
+  if (skill.rootDir) {
+    files.push(
+      ...readGeneratedSkillArtifactFiles(skill.rootDir).map((file) => ({
+        path: `current-artifacts/${file.path}`,
+        content: file.content,
+      })),
+    );
+  }
+
+  return buildSkillSource(skill.name, files);
 }
 
 function validateOutlineIdentity(outline: SkillBuildOutline, skillName: string, sourceHash: string): void {
@@ -200,7 +232,7 @@ JSON shape:
   "buildVersion": "${SKILL_BUILD_VERSION}",
   "scopeProfile": {
     "kind": "repository",
-    "subject": "Security review for this repo's CLI and runtime surfaces",
+    "subject": "Code review for this repo's CLI and runtime surfaces",
     "localContextUsed": true,
     "observedContext": [
       "Node.js and TypeScript runtime",
@@ -260,9 +292,9 @@ ${sourceBlocks(source)}`;
 function buildOutlineSystemPrompt(): string {
   return `You build the internal outline for one generated Warden skill.
 
-Use Read, Grep, and Glob to inspect relevant repository source before deciding how to decompose the skill when local context is needed. Use WebSearch or WebFetch for public prior art and current external documentation when framework, runtime, vulnerability, or ecosystem behavior affects the outline.
+Use Read, Grep, and Glob to inspect relevant repository source before deciding how to decompose the skill when local context is needed. Use WebSearch or WebFetch for public prior art and current external documentation when framework, runtime, risk class, or ecosystem behavior affects the outline.
 
-Do not send repository code, secrets, private file paths, or proprietary details to web tools. Use public framework, package, API, vulnerability class, and documentation names only.
+Do not send repository code, secrets, private file paths, or proprietary details to web tools. Use public framework, package, API, risk class, and documentation names only.
 
 Return only the strict JSON object requested by the user prompt. Never return prose or follow-up questions.`;
 }
@@ -292,7 +324,7 @@ export async function buildSkillOutline(
 ): Promise<SkillBuildOutlineResult> {
   const { skill, apiKey, model, maxRetries, regenerate = false } = options;
   const runtime = options.runtime ?? getRuntime(options.runtimeName ?? 'claude');
-  const source = collectSkillBuildSource(skill);
+  const source = options.source ?? collectSkillBuildSource(skill);
   const rootDir = skill.rootDir;
   if (!rootDir) {
     throw new SkillBuildOutlineError(`Generated skill ${skill.name} is missing a root directory`);

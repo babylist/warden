@@ -51,8 +51,11 @@ import { runAdd } from './commands/add.js';
 import { runSetupApp } from './commands/setup-app.js';
 import { runSync } from './commands/sync.js';
 import { runRuns } from './commands/runs.js';
-import { runBuild } from './commands/build.js';
-import { generatedSkillDefinitionExists } from '../skill-builder/definition.js';
+import { runBuild, runImprove } from './commands/build.js';
+import {
+  generatedSkillDefinitionRootExists,
+  resolveGeneratedSkillTarget,
+} from '../skill-builder/definition.js';
 
 /**
  * Global abort controller for graceful shutdown on SIGINT.
@@ -565,7 +568,7 @@ async function createDirectSkillTask(args: {
     if (
       error instanceof SkillLoaderError &&
       repoPath &&
-      generatedSkillDefinitionExists(repoPath, spec.skill)
+      generatedSkillDefinitionRootExists(resolveGeneratedSkillTarget(repoPath, spec.skill).rootDir)
     ) {
       throw new Error(
         `Generated skill ${spec.skill} is missing generated artifacts. Run "warden build ${spec.skill}" first.`,
@@ -1508,6 +1511,8 @@ export async function main(): Promise<void> {
           return runRuns(runsOptions, options, reporter);
         case 'build':
           return runBuild(options, reporter, { abortController, interrupted });
+        case 'improve':
+          return runImprove(options, reporter, { abortController, interrupted });
         default:
           return runCommand(options, reporter);
       }

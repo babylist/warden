@@ -3,11 +3,17 @@ import { join } from 'node:path';
 import { parse as parseYaml } from 'yaml';
 import { z } from 'zod';
 import type { SkillDefinition } from '../config/schema.js';
+import { isPathLike, resolvePathTarget } from '../utils/path.js';
 
 export const GENERATED_SKILLS_DIR = '.warden/skills';
 export const GENERATED_SKILL_DEFINITION_FILE = 'warden.yaml';
 export const BUILD_STATE_FILE = 'build-state.json';
 const DESCRIPTION_MAX_LENGTH = 88;
+const EXISTING_GENERATED_SKILL_DIRS = [
+  GENERATED_SKILLS_DIR,
+  '.agents/skills',
+  '.claude/skills',
+] as const;
 
 export const GeneratedSkillDefinitionSchema = z.object({
   version: z.literal(1),
@@ -19,6 +25,19 @@ export const GeneratedSkillDefinitionSchema = z.object({
 }).passthrough();
 
 export type GeneratedSkillDefinition = z.infer<typeof GeneratedSkillDefinitionSchema>;
+
+/** A generated skill target resolved from a CLI name or filesystem path. */
+export interface GeneratedSkillTarget {
+  displayName: string;
+  isPath: boolean;
+  rootDir: string;
+}
+
+export interface GeneratedSkillArtifactFile {
+  path: string;
+  content: string;
+  bytes: number;
+}
 
 function safePathSegment(value: string): string {
   return value.replace(/[^a-zA-Z0-9._-]/g, '-');
@@ -71,8 +90,36 @@ export function getGeneratedSkillRoot(repoRoot: string, skillName: string): stri
   return join(getGeneratedSkillsRoot(repoRoot), safePathSegment(skillName));
 }
 
-export function generatedSkillDefinitionExists(repoRoot: string, skillName: string): boolean {
-  return existsSync(join(getGeneratedSkillRoot(repoRoot, skillName), GENERATED_SKILL_DEFINITION_FILE));
+export function generatedSkillDefinitionRootExists(rootDir: string): boolean {
+  return existsSync(join(rootDir, GENERATED_SKILL_DEFINITION_FILE));
+}
+
+/** Resolve a generated skill CLI target using the shared name and path semantics. */
+export function resolveGeneratedSkillTarget(repoRoot: string, target: string): GeneratedSkillTarget {
+  if (isPathLike(target)) {
+    return {
+      displayName: target,
+      isPath: true,
+      rootDir: resolvePathTarget(target, repoRoot),
+    };
+  }
+
+  return {
+    displayName: target,
+    isPath: false,
+    rootDir: resolveGeneratedSkillRoot(repoRoot, target),
+  };
+}
+
+export function resolveGeneratedSkillRoot(repoRoot: string, skillName: string): string {
+  const safeName = safePathSegment(skillName);
+  for (const dir of EXISTING_GENERATED_SKILL_DIRS) {
+    const rootDir = join(repoRoot, dir, safeName);
+    if (generatedSkillDefinitionRootExists(rootDir)) {
+      return rootDir;
+    }
+  }
+  return getGeneratedSkillRoot(repoRoot, skillName);
 }
 
 export function loadGeneratedSkillDefinition(rootDir: string): {
@@ -132,9 +179,43 @@ export function clearGeneratedSkillArtifacts(rootDir: string): void {
     return;
   }
   for (const entry of readdirSync(rootDir, { withFileTypes: true })) {
-    if (entry.name === GENERATED_SKILL_DEFINITION_FILE) {
+    if (entry.name === GENERATED_SKILL_DEFINITION_FILE || entry.name === BUILD_STATE_FILE) {
       continue;
     }
     rmSync(join(rootDir, entry.name), { recursive: true, force: true });
   }
+}
+
+/** Read generated runtime artifacts while excluding Warden-owned metadata files. */
+export function readGeneratedSkillArtifactFiles(rootDir: string): GeneratedSkillArtifactFile[] {
+  if (!existsSync(rootDir)) {
+    return [];
+  }
+
+  const files: GeneratedSkillArtifactFile[] = [];
+
+  function visit(relativeDir: string): void {
+    for (const entry of readdirSync(join(rootDir, relativeDir), { withFileTypes: true })) {
+      const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
+      if (!relativeDir && (entry.name === GENERATED_SKILL_DEFINITION_FILE || entry.name === BUILD_STATE_FILE)) {
+        continue;
+      }
+      if (entry.isDirectory()) {
+        visit(relativePath);
+        continue;
+      }
+      if (!entry.isFile()) {
+        continue;
+      }
+      const content = readFileSync(join(rootDir, relativePath), 'utf-8');
+      files.push({
+        path: relativePath,
+        content,
+        bytes: Buffer.byteLength(content, 'utf-8'),
+      });
+    }
+  }
+
+  visit('');
+  return files.sort((a, b) => a.path.localeCompare(b.path));
 }

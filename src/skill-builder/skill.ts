@@ -1,12 +1,12 @@
-import { dirname, join } from 'node:path';
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { existsSync } from 'node:fs';
 import { performance } from 'node:perf_hooks';
 import { parse as parseYaml } from 'yaml';
 import { aggregateUsage } from '../sdk/usage.js';
 import type { Runtime } from '../sdk/runtimes/index.js';
 import { runStructuredSkillBuilderAgent, StructuredSkillBuilderAgentError } from './agentic.js';
 import type { UsageStats } from '../types/index.js';
-import { clearGeneratedSkillArtifacts } from './definition.js';
+import { clearGeneratedSkillArtifacts, readGeneratedSkillArtifactFiles } from './definition.js';
 import { resolveAuthoringProvider } from './authoring-provider.js';
 import {
   type SkillBuildOutline,
@@ -20,66 +20,53 @@ import {
 } from './outline-state.js';
 import {
   GeneratedSkillAuthoringPlanSchema,
+  type GeneratedSkillAuthoringMode,
   GeneratedSkillBuildError,
-  GeneratedSkillFileMapSchema,
-  GeneratedSkillValidationResultSchema,
+  GeneratedSkillWriterResultSchema,
+  GeneratedSkillReviewResultSchema,
   type GeneratedSkillArtifact,
-  type GeneratedSkillFileMap,
-  type GeneratedSkillValidationResult,
+  type GeneratedSkillReviewResult,
+  type GeneratedSkillWriterResult,
   type SkillBuildAuthoringProvider,
+  type SkillBuildExternalSource,
 } from './skill-contract.js';
 export { GeneratedSkillBuildError } from './skill-contract.js';
 import {
   authoringSystemPrompt,
   buildAuthoringImplementationPrompt,
   buildAuthoringPlanPrompt,
+  buildAuthoringRevisionPrompt,
   buildAuthoringValidationPrompt,
   defaultBuildMaxTurns,
   defaultValidationMaxTurns,
 } from './skill-prompts.js';
 
-const GENERATED_SKILL_ARTIFACT_SCHEMA_VERSION = 4;
-const LONG_REFERENCE_LINE_LIMIT = 100;
+const GENERATED_SKILL_ARTIFACT_SCHEMA_VERSION = 5;
+const MAX_SKILL_REVIEW_REVISIONS = 3;
+const SKILL_FRONTMATTER_PATTERN = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 
-function artifactFiles(rootDir: string): {
+interface SkillBuilderStepMetrics {
+  usage: UsageStats;
+  responseModel?: string;
+  numTurns?: number;
+}
+
+interface SkillBuilderReviewResult extends SkillBuilderStepMetrics {
+  data: GeneratedSkillReviewResult;
+}
+
+interface GeneratedSkillArtifactFile {
   path: string;
   content: string;
-  bytes: number;
-}[] {
-  if (!existsSync(rootDir)) {
-    return [];
-  }
+  bytes?: number;
+}
 
-  const files: {
-    path: string;
-    content: string;
-    bytes: number;
-  }[] = [];
-
-  function visit(relativeDir: string): void {
-    for (const entry of readdirSync(join(rootDir, relativeDir), { withFileTypes: true })) {
-      const relativePath = relativeDir ? `${relativeDir}/${entry.name}` : entry.name;
-      if (entry.name === 'warden.yaml' || entry.name === 'build-state.json') {
-        continue;
-      }
-      if (entry.isDirectory()) {
-        visit(relativePath);
-        continue;
-      }
-      if (!entry.isFile()) {
-        continue;
-      }
-      const content = readFileSync(join(rootDir, relativePath), 'utf-8');
-      files.push({
-        path: relativePath,
-        content,
-        bytes: Buffer.byteLength(content, 'utf-8'),
-      });
-    }
-  }
-
-  visit('');
-  return files.sort((a, b) => a.path.localeCompare(b.path));
+interface GeneratedSkillArtifactSnapshot {
+  summary: string;
+  files: GeneratedSkillArtifactFile[];
+  validationNotes: string[];
+  missingInputs: string[];
+  externalSources: SkillBuildExternalSource[];
 }
 
 function filesByteLength(files: { content: string }[]): number {
@@ -96,19 +83,12 @@ function fileManifest(files: { path: string; content: string }[]): {
   })).sort((a, b) => a.path.localeCompare(b.path));
 }
 
-function normalizeFileContent(content: string): string {
-  return content.endsWith('\n') ? content : `${content}\n`;
-}
-
 function skillFrontmatter(content: string): Record<string, unknown> | undefined {
-  if (!content.startsWith('---\n')) {
+  const match = content.match(SKILL_FRONTMATTER_PATTERN);
+  const frontmatter = match?.[1];
+  if (!frontmatter) {
     return undefined;
   }
-  const end = content.indexOf('\n---', 4);
-  if (end < 0) {
-    return undefined;
-  }
-  const frontmatter = content.slice(4, end);
   try {
     const parsed = parseYaml(frontmatter);
     return parsed && typeof parsed === 'object'
@@ -119,20 +99,46 @@ function skillFrontmatter(content: string): Record<string, unknown> | undefined 
   }
 }
 
+function referencedSkillPaths(content: string): string[] {
+  const paths = new Set<string>();
+  for (const match of content.matchAll(/references\/[a-zA-Z0-9][a-zA-Z0-9._/-]*/g)) {
+    const path = match[0].replace(/[.,;:!?]+$/g, '');
+    if (/[a-zA-Z0-9]$/.test(path)) {
+      paths.add(path);
+    }
+  }
+  return [...paths].sort();
+}
+
+function referencedArtifactPaths(content: string): string[] {
+  const paths = new Set<string>();
+  for (const match of content.matchAll(/\b(?:SPEC|SOURCES|EVAL)\.md\b/g)) {
+    paths.add(match[0]);
+  }
+  return [...paths].sort();
+}
+
 function deterministicValidation(args: {
-  fileMap: GeneratedSkillFileMap;
+  files: {
+    path: string;
+    content: string;
+  }[];
   targetName: string;
 }): {
   errors: string[];
   warnings: string[];
 } {
+  // Deterministic validation is intentionally mechanical. It protects the
+  // filesystem and catches non-runnable local references; depth, segmentation,
+  // source adequacy, and skill-writer compliance belong to the qualitative
+  // reviewer.
   const errors: string[] = [];
   const warnings: string[] = [];
-  const files = new Map(args.fileMap.files.map((file) => [file.path, file.content]));
+  const files = new Map(args.files.map((file) => [file.path, file.content]));
   const skillMd = files.get('SKILL.md');
 
   if (!skillMd) {
-    errors.push('Generated artifact file map must include SKILL.md');
+    errors.push('Generated skill artifacts must include SKILL.md');
     return { errors, warnings };
   }
 
@@ -148,31 +154,26 @@ function deterministicValidation(args: {
     }
   }
 
-  if (/Generated Warden skill for outline/i.test(skillMd)) {
-    warnings.push('SKILL.md contains generated-template boilerplate');
+  const referenceFiles = args.files.filter((file) => file.path.startsWith('references/'));
+  const routedReferenceFiles = referenceFiles.filter((file) => skillMd.includes(file.path));
+  const routeDocuments = [
+    skillMd,
+    ...routedReferenceFiles.map((file) => file.content),
+  ];
+  for (const path of [...new Set(routeDocuments.flatMap(referencedSkillPaths))].sort()) {
+    if (!files.has(path)) {
+      warnings.push(`SKILL.md routes ${path} but the generated artifacts do not include it`);
+    }
   }
-
-  const referenceFiles = args.fileMap.files.filter((file) => file.path.startsWith('references/'));
+  for (const path of referencedArtifactPaths(skillMd)) {
+    if (!files.has(path)) {
+      warnings.push(`SKILL.md references ${path} but the generated artifacts do not include it`);
+    }
+  }
   for (const reference of referenceFiles) {
-    if (!skillMd.includes(reference.path)) {
-      errors.push(`SKILL.md must directly route runtime reference ${reference.path}`);
+    if (!routeDocuments.some((content) => content.includes(reference.path))) {
+      warnings.push(`SKILL.md does not route runtime reference ${reference.path}`);
     }
-    const lineCount = reference.content.split('\n').length;
-    if (lineCount > LONG_REFERENCE_LINE_LIMIT && !/^## Contents$/m.test(reference.content)) {
-      warnings.push(
-        `${reference.path} is ${lineCount} lines; add ## Contents or split by lookup need`,
-      );
-    }
-  }
-
-  const hasRuntimeReferences = referenceFiles.length > 0;
-  const sources = files.get('SOURCES.md');
-  if (
-    hasRuntimeReferences &&
-    sources &&
-    /\b(deferred|future passes|next pass|not covered in this pass)\b/i.test(sources)
-  ) {
-    warnings.push('SOURCES.md appears to contain stale deferred-work language while references exist');
   }
 
   return { errors, warnings };
@@ -188,26 +189,101 @@ function formatDeterministicIssues(validation: {
   ];
 }
 
-function applyValidationResult(args: {
-  original: GeneratedSkillFileMap;
-  validation: GeneratedSkillValidationResult;
-}): GeneratedSkillFileMap {
-  if (!args.validation.files || args.validation.files.length === 0) {
-    return args.original;
+function hasMissingGeneratedFileWarning(validation: {
+  warnings: string[];
+}): boolean {
+  return validation.warnings.some((warning) =>
+    warning.includes('generated artifacts do not include it'),
+  );
+}
+
+function reviewNeedsRevision(review: GeneratedSkillReviewResult): boolean {
+  return !review.valid || review.issues.length > 0;
+}
+
+function formatReviewIssue(issue: GeneratedSkillReviewResult['issues'][number]): string {
+  const location = issue.path ? `${issue.path}: ` : '';
+  const fix = issue.suggestedFix ? ` Suggested fix: ${issue.suggestedFix}` : '';
+  return `${location}${issue.message}${fix}`;
+}
+
+function finalMechanicalBlockingIssues(deterministic: {
+  errors: string[];
+  warnings: string[];
+}): string[] {
+  // Only mechanical runnability blocks the final write. Qualitative reviewer
+  // feedback is handled by the bounded review loop and recorded as warnings if
+  // the reviewer still wants changes after the cap.
+  const issues: string[] = [];
+  issues.push(...deterministic.errors);
+  if (hasMissingGeneratedFileWarning(deterministic)) {
+    issues.push(...deterministic.warnings.filter((warning) =>
+      warning.includes('generated artifacts do not include it')
+    ));
   }
-  return {
-    ...args.original,
-    files: args.validation.files,
-    validationNotes: [
-      ...args.original.validationNotes,
-      args.validation.summary,
-      ...args.validation.issues.map((issue) => `${issue.severity}: ${issue.message}`),
-    ],
-    missingInputs: [
-      ...args.original.missingInputs,
-      ...args.validation.missingInputs,
-    ],
+  return uniqueStrings(issues);
+}
+
+function throwIfMechanicalValidationFailed(args: {
+  targetName: string;
+  deterministic: {
+    errors: string[];
+    warnings: string[];
   };
+}): void {
+  const issues = finalMechanicalBlockingIssues(args.deterministic);
+  if (issues.length === 0) {
+    return;
+  }
+  throw new GeneratedSkillBuildError(
+    `Generated skill failed mechanical validation for ${args.targetName}:\n` +
+    issues.map((issue) => `- ${issue}`).join('\n'),
+  );
+}
+
+function boundedReviewWarnings(args: {
+  review?: GeneratedSkillReviewResult;
+  maxRevisions: number;
+}): string[] {
+  if (!args.review || !reviewNeedsRevision(args.review)) {
+    return [];
+  }
+
+  const plural = args.maxRevisions === 1 ? 'revision pass' : 'revision passes';
+  const warnings = [
+    `Authoring reviewer still requested changes after ${args.maxRevisions} ${plural}; using the latest writer draft.`,
+  ];
+  const issues = args.review.issues.length === 0
+    ? ['Authoring reviewer marked the generated skill invalid without issue details']
+    : args.review.issues.map(formatReviewIssue);
+  warnings.push(...issues.slice(0, 5).map((issue) => `Reviewer: ${issue}`));
+  if (issues.length > 5) {
+    warnings.push(`Reviewer: ${issues.length - 5} more issues omitted from summary`);
+  }
+  return warnings;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values)].filter((value) => value.trim().length > 0);
+}
+
+function isExternalSourceUrl(url: string): boolean {
+  return /^https?:\/\//i.test(url);
+}
+
+function mergeExternalSources(
+  ...sourceSets: SkillBuildExternalSource[][]
+): SkillBuildExternalSource[] {
+  const sources = new Map<string, SkillBuildExternalSource>();
+  for (const sourceSet of sourceSets) {
+    for (const source of sourceSet) {
+      if (!isExternalSourceUrl(source.url)) {
+        continue;
+      }
+      sources.set(`${source.title}\n${source.url}`, source);
+    }
+  }
+  return [...sources.values()];
 }
 
 function summarizeResponseModel(models: (string | undefined)[]): string | undefined {
@@ -229,6 +305,43 @@ function summarizeTurns(turns: (number | undefined)[]): number | undefined {
   return values.reduce((sum, value) => sum + value, 0);
 }
 
+function zeroUsage(): UsageStats {
+  return { inputTokens: 0, outputTokens: 0, costUSD: 0 };
+}
+
+function loadExistingArtifact(args: {
+  rootDir: string;
+  files: {
+    path: string;
+    content: string;
+  }[];
+  name: string;
+}): GeneratedSkillArtifact | undefined {
+  const validation = deterministicValidation({
+    files: args.files,
+    targetName: args.name,
+  });
+  if (
+    validation.errors.length > 0 ||
+    hasMissingGeneratedFileWarning(validation)
+  ) {
+    return undefined;
+  }
+
+  return {
+    kind: 'generated-skill',
+    source: 'cache',
+    name: args.name,
+    path: args.rootDir,
+    bytes: filesByteLength(args.files),
+    durationMs: 0,
+    usage: zeroUsage(),
+    externalSources: [],
+    missingInputs: [],
+    warnings: [],
+  };
+}
+
 function loadCachedArtifact(args: {
   rootDir: string;
   outline: SkillBuildOutline;
@@ -239,13 +352,17 @@ function loadCachedArtifact(args: {
     return undefined;
   }
 
+  const files = readGeneratedSkillArtifactFiles(args.rootDir);
   const state = readSkillBuildState(getBuildStatePath(args.rootDir));
   const metadata = state?.artifact;
   if (!metadata) {
-    return undefined;
+    return loadExistingArtifact({
+      rootDir: args.rootDir,
+      files,
+      name: args.outline.skill,
+    });
   }
 
-  const files = artifactFiles(args.rootDir);
   const manifest = fileManifest(files);
   const bytes = filesByteLength(files);
   if (
@@ -260,6 +377,17 @@ function loadCachedArtifact(args: {
     return undefined;
   }
 
+  const validation = deterministicValidation({
+    files,
+    targetName: metadata.name,
+  });
+  if (
+    validation.errors.length > 0 ||
+    hasMissingGeneratedFileWarning(validation)
+  ) {
+    return undefined;
+  }
+
   return {
     kind: 'generated-skill',
     source: 'cache',
@@ -270,55 +398,50 @@ function loadCachedArtifact(args: {
     usage: metadata.usage,
     externalSources: metadata.externalSources,
     missingInputs: metadata.missingInputs,
+    warnings: metadata.authoringWarnings,
     responseModel: metadata.responseModel,
     numTurns: metadata.numTurns,
   };
 }
 
-function writeGeneratedArtifact(args: {
+function readArtifactSnapshot(args: {
   rootDir: string;
-  fileMap: GeneratedSkillFileMap;
+  writer: GeneratedSkillWriterResult;
+}): GeneratedSkillArtifactSnapshot {
+  return {
+    summary: args.writer.summary,
+    files: readGeneratedSkillArtifactFiles(args.rootDir),
+    validationNotes: args.writer.validationNotes,
+    missingInputs: args.writer.missingInputs,
+    externalSources: args.writer.externalSources,
+  };
+}
+
+function artifactFromDisk(args: {
+  rootDir: string;
+  name: string;
   durationMs: number;
   usage: UsageStats;
+  externalSources: SkillBuildExternalSource[];
+  missingInputs: string[];
+  warnings: string[];
   responseModel?: string;
   numTurns?: number;
 }): GeneratedSkillArtifact {
-  clearGeneratedSkillArtifacts(args.rootDir);
-
-  const files = args.fileMap.files.map((file) => ({
-    path: file.path,
-    content: normalizeFileContent(file.content),
-  }));
-  for (const file of files) {
-    const path = join(args.rootDir, file.path);
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, file.content, 'utf-8');
-  }
-
+  const files = readGeneratedSkillArtifactFiles(args.rootDir);
   return {
     kind: 'generated-skill',
     source: 'generated',
-    name: args.fileMap.name,
+    name: args.name,
     path: args.rootDir,
     bytes: filesByteLength(files),
     durationMs: args.durationMs,
     usage: args.usage,
-    externalSources: args.fileMap.externalSources,
-    missingInputs: args.fileMap.missingInputs,
+    externalSources: args.externalSources,
+    missingInputs: args.missingInputs,
+    warnings: args.warnings,
     responseModel: args.responseModel,
     numTurns: args.numTurns,
-  };
-}
-
-function normalizeGeneratedFileMap(fileMap: GeneratedSkillFileMap): GeneratedSkillFileMap {
-  return {
-    ...fileMap,
-    files: [...fileMap.files]
-      .map((file) => ({
-        path: file.path,
-        content: normalizeFileContent(file.content),
-      }))
-      .sort((a, b) => a.path.localeCompare(b.path)),
   };
 }
 
@@ -328,6 +451,8 @@ export async function buildGeneratedSkill(args: {
   rootDir: string;
   runtime: Runtime;
   repoPath: string;
+  mode?: GeneratedSkillAuthoringMode;
+  improvementPrompt?: string;
   model?: string;
   maxTurns?: number;
   abortController?: AbortController;
@@ -340,12 +465,13 @@ export async function buildGeneratedSkill(args: {
 }): Promise<GeneratedSkillArtifact> {
   const startedAt = performance.now();
   const statePath = getBuildStatePath(args.rootDir);
+  const mode = args.mode ?? 'build';
   const authoringProvider = resolveAuthoringProvider({
     authoringSkillRoot: args.authoringSkillRoot,
   });
 
   try {
-    if (!args.regenerate) {
+    if (mode === 'build' && !args.regenerate) {
       const cached = loadCachedArtifact({
         rootDir: args.rootDir,
         outline: args.outline,
@@ -363,8 +489,13 @@ export async function buildGeneratedSkill(args: {
         `Missing generated skill outline state for ${args.outline.skill}`,
       );
     }
+    if (mode === 'improve' && !args.improvementPrompt?.trim()) {
+      throw new GeneratedSkillBuildError(
+        `Missing improvement brief for ${args.outline.skill}`,
+      );
+    }
 
-    const maxTurns = args.maxTurns ?? defaultBuildMaxTurns(args.outline);
+    const maxTurns = args.maxTurns ?? defaultBuildMaxTurns();
     const repair = {
       apiKey: args.apiKey,
       model: args.repairModel,
@@ -383,6 +514,8 @@ export async function buildGeneratedSkill(args: {
         authoringSkillRoot: authoringProvider.rootDir,
         targetName: args.outline.skill,
         targetRootDir: args.rootDir,
+        mode,
+        improvementPrompt: args.improvementPrompt,
       }),
       schema: GeneratedSkillAuthoringPlanSchema,
       model: args.model,
@@ -391,10 +524,14 @@ export async function buildGeneratedSkill(args: {
       repair,
     });
 
-    args.onStatus?.('Writing skill artifacts');
+    if (mode === 'build') {
+      clearGeneratedSkillArtifacts(args.rootDir);
+    }
+
+    args.onStatus?.(mode === 'improve' ? 'Improving skill artifacts' : 'Writing skill artifacts');
     const implementation = await runStructuredSkillBuilderAgent({
       runtime: args.runtime,
-      repoPath: args.repoPath,
+      repoPath: args.rootDir,
       skillName: `${args.outline.skill}:authoring-implementation`,
       systemPrompt: authoringSystemPrompt(),
       userPrompt: buildAuthoringImplementationPrompt({
@@ -404,101 +541,181 @@ export async function buildGeneratedSkill(args: {
         targetName: args.outline.skill,
         targetRootDir: args.rootDir,
         plan: plan.data,
+        mode,
+        improvementPrompt: args.improvementPrompt,
       }),
-      schema: GeneratedSkillFileMapSchema,
+      schema: GeneratedSkillWriterResultSchema,
       model: args.model,
       maxTurns,
+      writeAccess: true,
       abortController: args.abortController,
       repair,
     });
 
-    if (implementation.data.name !== args.outline.skill) {
-      throw new GeneratedSkillBuildError(
-        `Generated skill identity mismatch: expected ${args.outline.skill}, got ${implementation.data.name}`,
-      );
-    }
-
-    const initialFileMap = normalizeGeneratedFileMap(implementation.data);
-    const initialDeterministic = deterministicValidation({
-      fileMap: initialFileMap,
-      targetName: args.outline.skill,
+    let workingArtifact = readArtifactSnapshot({
+      rootDir: args.rootDir,
+      writer: implementation.data,
     });
 
-    args.onStatus?.('Validating generated skill');
-    const validation = await runStructuredSkillBuilderAgent({
-      runtime: args.runtime,
-      repoPath: args.repoPath,
-      skillName: `${args.outline.skill}:authoring-validation`,
-      systemPrompt: authoringSystemPrompt(),
-      userPrompt: buildAuthoringValidationPrompt({
-        outline: args.outline,
-        source: args.source,
-        authoringSkillRoot: authoringProvider.rootDir,
+    const reviewResults: SkillBuilderReviewResult[] = [];
+    const revisionResults: SkillBuilderStepMetrics[] = [];
+
+    let latestReview: GeneratedSkillReviewResult | undefined;
+    let reviewHitRevisionLimit = false;
+    for (let reviewRound = 0; ; reviewRound += 1) {
+      const deterministic = deterministicValidation({
+        files: workingArtifact.files,
         targetName: args.outline.skill,
-        targetRootDir: args.rootDir,
-        plan: plan.data,
-        fileMap: initialFileMap,
-        deterministicIssues: formatDeterministicIssues(initialDeterministic),
-      }),
-      schema: GeneratedSkillValidationResultSchema,
-      model: args.model,
-      maxTurns: Math.min(maxTurns, defaultValidationMaxTurns()),
-      abortController: args.abortController,
-      repair,
-    });
+      });
 
-    const fileMap = normalizeGeneratedFileMap(applyValidationResult({
-      original: initialFileMap,
-      validation: validation.data,
-    }));
+      // The reviewer is the quality gate: it judges whether the generated skill
+      // satisfies skill-writer, the source-depth plan, and Warden's runtime bar.
+      // The deterministic notes below are only rough mechanical signals.
+      args.onStatus?.(reviewRound === 0
+        ? 'Reviewing generated skill'
+        : 'Reviewing revised skill');
+      const review = await runStructuredSkillBuilderAgent({
+        runtime: args.runtime,
+        repoPath: args.rootDir,
+        skillName: `${args.outline.skill}:authoring-validation`,
+        systemPrompt: authoringSystemPrompt(),
+        userPrompt: buildAuthoringValidationPrompt({
+          outline: args.outline,
+          source: args.source,
+          authoringSkillRoot: authoringProvider.rootDir,
+          targetName: args.outline.skill,
+          targetRootDir: args.rootDir,
+          plan: plan.data,
+          artifact: workingArtifact,
+          deterministicIssues: formatDeterministicIssues(deterministic),
+          mode,
+          improvementPrompt: args.improvementPrompt,
+        }),
+        schema: GeneratedSkillReviewResultSchema,
+        model: args.model,
+        maxTurns: Math.min(maxTurns, defaultValidationMaxTurns()),
+        abortController: args.abortController,
+        repair,
+      });
+      reviewResults.push(review);
+      latestReview = review.data;
+
+      if (
+        !reviewNeedsRevision(review.data) ||
+        revisionResults.length >= MAX_SKILL_REVIEW_REVISIONS
+      ) {
+        reviewHitRevisionLimit = reviewNeedsRevision(review.data) &&
+          revisionResults.length >= MAX_SKILL_REVIEW_REVISIONS;
+        break;
+      }
+
+      args.onStatus?.(`Revising generated skill (${revisionResults.length + 1}/${MAX_SKILL_REVIEW_REVISIONS})`);
+      const revision = await runStructuredSkillBuilderAgent({
+        runtime: args.runtime,
+        repoPath: args.rootDir,
+        skillName: `${args.outline.skill}:authoring-revision`,
+        systemPrompt: authoringSystemPrompt(),
+        userPrompt: buildAuthoringRevisionPrompt({
+          outline: args.outline,
+          source: args.source,
+          authoringSkillRoot: authoringProvider.rootDir,
+          targetName: args.outline.skill,
+          targetRootDir: args.rootDir,
+          plan: plan.data,
+          artifact: workingArtifact,
+          review: review.data,
+          deterministicIssues: formatDeterministicIssues(deterministic),
+          mode,
+          improvementPrompt: args.improvementPrompt,
+        }),
+        schema: GeneratedSkillWriterResultSchema,
+        model: args.model,
+        maxTurns,
+        writeAccess: true,
+        abortController: args.abortController,
+        repair,
+      });
+      revisionResults.push(revision);
+      workingArtifact = readArtifactSnapshot({
+        rootDir: args.rootDir,
+        writer: revision.data,
+      });
+    }
+
+    const previousArtifactExternalSources = mode === 'improve'
+      ? previousState.artifact?.externalSources ?? []
+      : [];
+    const previousArtifactMissingInputs = mode === 'improve'
+      ? previousState.artifact?.missingInputs ?? []
+      : [];
+    const finalExternalSources = mergeExternalSources(
+      previousArtifactExternalSources,
+      args.outline.build.externalSources ?? [],
+      plan.data.externalSources,
+      workingArtifact.externalSources,
+    );
+    const finalMissingInputs = uniqueStrings([
+      ...previousArtifactMissingInputs,
+      ...plan.data.missingInputs,
+      ...workingArtifact.missingInputs,
+      ...reviewResults.flatMap((result) => result.data.missingInputs),
+    ]);
+    const finalWarnings = uniqueStrings([
+      ...boundedReviewWarnings({
+        review: reviewHitRevisionLimit ? latestReview : undefined,
+        maxRevisions: MAX_SKILL_REVIEW_REVISIONS,
+      }),
+    ]);
+    workingArtifact = {
+      ...workingArtifact,
+      externalSources: finalExternalSources,
+      missingInputs: finalMissingInputs,
+    };
     const finalDeterministic = deterministicValidation({
-      fileMap,
+      files: workingArtifact.files,
       targetName: args.outline.skill,
     });
-    if (finalDeterministic.errors.length > 0) {
+    if (!workingArtifact.files.some((file) => file.path === 'SKILL.md')) {
       throw new GeneratedSkillBuildError(
-        `Generated skill failed validation for ${args.outline.skill}:\n` +
-        finalDeterministic.errors.map((error) => `- ${error}`).join('\n'),
+        `Generated skill build did not produce SKILL.md for ${args.outline.skill}`,
       );
     }
-    const providerErrors = validation.data.issues.filter((issue) => issue.severity === 'error');
-    if (!validation.data.valid || providerErrors.length > 0) {
-      const issueLines = validation.data.issues.length > 0
-        ? validation.data.issues.map((issue) => {
-          const path = issue.path ? `${issue.path}: ` : '';
-          return `- ${issue.severity}: ${path}${issue.message}`;
-        }).join('\n')
-        : '- error: Authoring provider marked the generated skill invalid';
-      throw new GeneratedSkillBuildError(
-        `Generated skill failed provider validation for ${args.outline.skill}:\n${issueLines}`,
-      );
-    }
+    throwIfMechanicalValidationFailed({
+      targetName: args.outline.skill,
+      deterministic: finalDeterministic,
+    });
 
     const usage = aggregateUsage([
       plan.usage,
       implementation.usage,
-      validation.usage,
+      ...reviewResults.map((result) => result.usage),
+      ...revisionResults.map((result) => result.usage),
     ]);
     const responseModel = summarizeResponseModel([
       plan.responseModel,
       implementation.responseModel,
-      validation.responseModel,
+      ...reviewResults.map((result) => result.responseModel),
+      ...revisionResults.map((result) => result.responseModel),
     ]);
     const numTurns = summarizeTurns([
       plan.numTurns,
       implementation.numTurns,
-      validation.numTurns,
+      ...reviewResults.map((result) => result.numTurns),
+      ...revisionResults.map((result) => result.numTurns),
     ]);
 
-    const artifact = writeGeneratedArtifact({
+    const artifact = artifactFromDisk({
       rootDir: args.rootDir,
-      fileMap,
+      name: args.outline.skill,
       durationMs: performance.now() - startedAt,
       usage,
+      externalSources: finalExternalSources,
+      missingInputs: finalMissingInputs,
+      warnings: finalWarnings,
       responseModel,
       numTurns,
     });
-    const writtenFiles = artifactFiles(args.rootDir);
+    const writtenFiles = readGeneratedSkillArtifactFiles(args.rootDir);
     writeSkillBuildState(statePath, {
       ...previousState,
       artifact: {
@@ -509,17 +726,13 @@ export async function buildGeneratedSkill(args: {
         authoringProvider,
         name: artifact.name,
         fileManifest: fileManifest(writtenFiles),
-        deterministicWarnings: finalDeterministic.warnings,
-        validationIssues: validation.data.issues,
+        deterministicWarnings: formatDeterministicIssues(finalDeterministic),
         bytes: artifact.bytes,
         durationMs: artifact.durationMs,
         usage: artifact.usage,
         externalSources: artifact.externalSources,
-        missingInputs: [
-          ...plan.data.missingInputs,
-          ...artifact.missingInputs,
-          ...validation.data.missingInputs,
-        ],
+        missingInputs: finalMissingInputs,
+        authoringWarnings: finalWarnings,
         responseModel: artifact.responseModel,
         numTurns: artifact.numTurns,
         generatedAt: new Date().toISOString(),
@@ -529,25 +742,23 @@ export async function buildGeneratedSkill(args: {
 
     return {
       ...artifact,
-      missingInputs: [
-        ...plan.data.missingInputs,
-        ...artifact.missingInputs,
-        ...validation.data.missingInputs,
-      ],
+      missingInputs: finalMissingInputs,
+      warnings: finalWarnings,
     };
   } catch (error) {
     if (error instanceof GeneratedSkillBuildError) {
       throw error;
     }
+    const operation = mode === 'improve' ? 'improvement' : 'build';
     if (error instanceof StructuredSkillBuilderAgentError) {
       throw new GeneratedSkillBuildError(
-        `Generated skill build failed for ${args.outline.skill}: ${error.message}`,
+        `Generated skill ${operation} failed for ${args.outline.skill}: ${error.message}`,
         { cause: error },
       );
     }
     if (error instanceof Error) {
       throw new GeneratedSkillBuildError(
-        `Generated skill build failed for ${args.outline.skill}: ${error.message}`,
+        `Generated skill ${operation} failed for ${args.outline.skill}: ${error.message}`,
         { cause: error },
       );
     }
