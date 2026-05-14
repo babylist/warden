@@ -5,6 +5,7 @@ import { Sentry, flushSentry, setRepositoryScope, emitRunMetric, getTraceId } fr
 import { emptyToUndefined, loadWardenConfig, resolveSkillConfigs } from '../config/loader.js';
 import type { SkillDefinition, WardenConfig } from '../config/schema.js';
 import { verifyAuth, type WardenAuthenticationError, type SkillRunnerOptions, type ChunkAnalysisResult } from '../sdk/runner.js';
+import { isPiModelSelector } from '../sdk/runtimes/model-selectors.js';
 import { mapExtractionErrorCode } from '../sdk/errors.js';
 import { mergeAuxiliaryUsage } from '../sdk/usage.js';
 import { resolveSkillAsync, SkillLoaderError } from '../skills/loader.js';
@@ -578,6 +579,86 @@ export function mergeSkillRunnerOptions(
   return merged;
 }
 
+function needsClaudeAuth(items: { runtime?: SkillRunnerOptions['runtime'] }[]): boolean {
+  return items.some((item) => (item.runtime ?? 'pi') === 'claude');
+}
+
+interface InvalidPiModelSelector {
+  specName: string;
+  option: 'model' | 'auxiliaryModel' | 'synthesisModel';
+  model: string;
+}
+
+/**
+ * Find the first Pi runner option using a model ID that is not provider/model.
+ */
+export function findInvalidPiModelSelector(
+  specs: Pick<RunSkillSpec, 'name' | 'runnerOptions'>[]
+): InvalidPiModelSelector | undefined {
+  for (const spec of specs) {
+    const runtimeName = spec.runnerOptions.runtime ?? 'pi';
+    if (runtimeName !== 'pi') {
+      continue;
+    }
+
+    for (const option of ['model', 'auxiliaryModel', 'synthesisModel'] as const) {
+      const model = spec.runnerOptions[option];
+      if (model && !isPiModelSelector(model)) {
+        return { specName: spec.name, option, model };
+      }
+    }
+  }
+
+  return undefined;
+}
+
+function reportInvalidPiModelSelector(reporter: Reporter, invalid: InvalidPiModelSelector): void {
+  reporter.error(invalidPiModelSelectorMessage(invalid));
+  reporter.tip('Set a Pi model selector such as anthropic/claude-sonnet-4-6.');
+}
+
+function invalidPiModelSelectorMessage(invalid: InvalidPiModelSelector): string {
+  return `Pi runtime ${invalid.option} for ${invalid.specName} must use provider/model format: ${invalid.model}`;
+}
+
+function emitInvalidPiModelSelectorRunLog(
+  repoPath: string,
+  options: CLIOptions,
+  invalid: InvalidPiModelSelector
+): void {
+  emitEmptyRunLog(repoPath, options, {
+    code: 'unknown',
+    message: invalidPiModelSelectorMessage(invalid),
+    timestamp: new Date().toISOString(),
+  });
+}
+
+function verifyClaudeAuthForRun(args: {
+  apiKey?: string;
+  reporter: Reporter;
+  repoPath: string;
+  options: CLIOptions;
+}): boolean {
+  const { apiKey, reporter, repoPath, options } = args;
+  if (!apiKey) {
+    reporter.debug('No API key found. Using Claude Code local auth.');
+  }
+
+  try {
+    verifyAuth({ apiKey });
+    return true;
+  } catch (error: unknown) {
+    const message = (error as WardenAuthenticationError).message;
+    reporter.error(message);
+    emitEmptyRunLog(repoPath, options, {
+      code: 'auth_failed',
+      message,
+      timestamp: new Date().toISOString(),
+    });
+    return false;
+  }
+}
+
 function renderSkillRunHeader(args: {
   reporter: Reporter;
   skill: SkillDefinition;
@@ -628,7 +709,7 @@ async function createDirectSkillTask(args: {
       reporter,
       skill,
       repoPath,
-      runtimeName: spec.runnerOptions.runtime ?? 'claude',
+      runtimeName: spec.runnerOptions.runtime ?? 'pi',
       model: spec.runnerOptions.model,
     });
   }
@@ -853,11 +934,8 @@ export async function runSkills(
   const cwd = process.cwd();
   const startTime = Date.now();
 
-  // Get API key (optional - SDK can use Claude Code subscription auth)
+  // Claude runtime can fall back to local Claude Code auth.
   const apiKey = getAnthropicApiKey();
-  if (!apiKey) {
-    reporter.debug('No API key found. Using Claude Code subscription auth.');
-  }
 
   // Try to find repo root for config loading
   let repoPath: string | undefined;
@@ -865,20 +943,6 @@ export async function runSkills(
     repoPath = getRepoRoot(cwd);
   } catch {
     // Not in a git repo - that's fine for file mode
-  }
-
-  // Pre-flight: verify auth will work before starting analysis
-  try {
-    verifyAuth({ apiKey });
-  } catch (error: unknown) {
-    const message = (error as WardenAuthenticationError).message;
-    reporter.error(message);
-    emitEmptyRunLog(repoPath ?? cwd, options, {
-      code: 'auth_failed',
-      message,
-      timestamp: new Date().toISOString(),
-    });
-    return 1;
   }
 
   // Resolve config path
@@ -915,7 +979,7 @@ export async function runSkills(
       filters: match?.filters ?? fallbackFilters,
       model: match?.model ?? defaultModel,
       maxTurns: match?.maxTurns ?? config?.defaults?.agent?.maxTurns ?? config?.defaults?.maxTurns,
-      runtime: match?.runtime ?? config?.defaults?.runtime ?? 'claude',
+      runtime: match?.runtime ?? config?.defaults?.runtime ?? 'pi',
       auxiliaryModel: match?.auxiliaryModel ?? defaultAuxiliaryModel,
       synthesisModel: match?.synthesisModel ?? defaultSynthesisModel,
       auxiliaryMaxRetries:
@@ -966,6 +1030,15 @@ export async function runSkills(
     return 0;
   }
 
+  if (needsClaudeAuth(skillsToRun) && !verifyClaudeAuthForRun({
+    apiKey,
+    reporter,
+    repoPath: repoPath ?? cwd,
+    options,
+  })) {
+    return 1;
+  }
+
   // Build skill tasks
   // Model precedence: defaults.agent.model > defaults.model > CLI flag > WARDEN_MODEL env var > SDK default
   // sdkModel is undefined when no model is explicitly configured (lets SDK use its default).
@@ -975,7 +1048,7 @@ export async function runSkills(
   const runnerOptions: SkillRunnerOptions = {
     apiKey,
     model: sdkModel,
-    runtime: config?.defaults?.runtime ?? 'claude',
+    runtime: config?.defaults?.runtime ?? 'pi',
     auxiliaryModel: defaultAuxiliaryModel,
     synthesisModel: defaultSynthesisModel,
     abortController,
@@ -995,6 +1068,12 @@ export async function runSkills(
     context: filterContextByPaths(context, filters),
     runnerOptions: mergeSkillRunnerOptions(runnerOptions, skillOptions),
   }));
+  const invalidModelSelector = findInvalidPiModelSelector(specs);
+  if (invalidModelSelector) {
+    reportInvalidPiModelSelector(reporter, invalidModelSelector);
+    emitInvalidPiModelSelectorRunLog(repoPath ?? cwd, options, invalidModelSelector);
+    return 1;
+  }
   let tasks: SkillTaskOptions[];
   const concurrency = options.parallel ?? DEFAULT_CONCURRENCY;
   try {
@@ -1275,22 +1354,15 @@ async function runConfigMode(options: CLIOptions, reporter: Reporter): Promise<n
     triggersToRun.map((t) => ({ name: t.name, skill: t.skill }))
   );
 
-  // Get API key (optional - SDK can use Claude Code subscription auth)
+  // Claude runtime can fall back to local Claude Code auth.
   const apiKey = getAnthropicApiKey();
-  if (!apiKey) {
-    reporter.debug('No API key found. Using Claude Code subscription auth.');
-  }
 
-  try {
-    verifyAuth({ apiKey });
-  } catch (error: unknown) {
-    const message = (error as WardenAuthenticationError).message;
-    reporter.error(message);
-    emitEmptyRunLog(repoPath, options, {
-      code: 'auth_failed',
-      message,
-      timestamp: new Date().toISOString(),
-    });
+  if (needsClaudeAuth(triggersToRun) && !verifyClaudeAuthForRun({
+    apiKey,
+    reporter,
+    repoPath,
+    options,
+  })) {
     return 1;
   }
 
@@ -1318,6 +1390,12 @@ async function runConfigMode(options: CLIOptions, reporter: Reporter): Promise<n
       verifyFindings: trigger.verifyFindings,
     },
   }));
+  const invalidModelSelector = findInvalidPiModelSelector(specs);
+  if (invalidModelSelector) {
+    reportInvalidPiModelSelector(reporter, invalidModelSelector);
+    emitInvalidPiModelSelectorRunLog(repoPath, options, invalidModelSelector);
+    return 1;
+  }
   let tasks: SkillTaskOptions[];
   const concurrency = options.parallel ?? config.runner?.concurrency ?? DEFAULT_CONCURRENCY;
   try {

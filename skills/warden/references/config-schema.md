@@ -25,7 +25,8 @@ version = 1                    # Required, must be 1
 
 ```toml
 [defaults]
-model = "claude-sonnet-4-5"           # Legacy default analysis model
+runtime = "pi"                        # Default runtime
+model = "openai/gpt-5.5"              # Legacy default analysis model
 maxTurns = 50                         # Legacy default analysis turns
 defaultBranch = "main"                # Base branch for comparisons
 failOn = "high"                       # Exit 1 if findings >= this severity
@@ -35,15 +36,15 @@ reportOnSuccess = false               # Post report even with no findings
 ignorePaths = ["*.test.ts"]           # Exclude matching files
 
 [defaults.agent]
-model = "claude-sonnet-4-5"           # Default repo-aware analysis model
+model = "openai/gpt-5.5"              # Default repo-aware analysis model
 maxTurns = 50                         # Max agentic turns per hunk
 
 [defaults.auxiliary]
-model = "claude-haiku-4-5"            # Helper model for extraction and fix gates
+model = "anthropic/claude-haiku-4-5"  # Helper model for extraction and fix gates
 maxRetries = 5                        # Retries for auxiliary structured calls
 
 [defaults.synthesis]
-model = "claude-opus-4-5"             # Consolidation and generated-skill build model
+model = "anthropic/claude-opus-4-5"   # Consolidation and generated-skill build model
 
 [defaults.chunking]
 enabled = true                 # Enable hunk-based chunking
@@ -70,7 +71,7 @@ paths = ["src/**"]             # Include only matching files
 ignorePaths = ["**/*.test.ts"] # Exclude matching files
 
 # Optional overrides (inherit from defaults if not set)
-model = "claude-opus-4-5"
+model = "anthropic/claude-opus-4-5"
 maxTurns = 100
 failOn = "high"
 reportOn = "medium"
@@ -121,8 +122,9 @@ Always skipped (cannot be overridden):
 
 | Variable | Purpose |
 |----------|---------|
-| `WARDEN_ANTHROPIC_API_KEY` | Claude API key (required) |
 | `WARDEN_MODEL` | Default model (lowest priority) |
+| `WARDEN_OPENAI_API_KEY` | OpenAI API key for OpenAI Pi models |
+| `WARDEN_ANTHROPIC_API_KEY` | Anthropic API key for Anthropic Pi models or Claude runtime |
 | `WARDEN_STATE_DIR` | Override cache location (default: `~/.local/warden`) |
 | `WARDEN_SKILL_CACHE_TTL` | Cache TTL in seconds for unpinned remotes (default: 86400) |
 

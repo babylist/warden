@@ -39,6 +39,7 @@ import type { TriggerResult } from '../triggers/executor.js';
 import { postTriggerReview } from '../review/poster.js';
 import { shouldResolveStaleComments } from '../review/coordination.js';
 import type { RuntimeName } from '../../sdk/runtimes/index.js';
+import { canUseRuntimeAuth } from '../../sdk/extract.js';
 import { ProviderFailureCircuitBreaker } from '../../sdk/circuit-breaker.js';
 import {
   createCoreCheck,
@@ -100,7 +101,7 @@ function resolveWorkflowAuxiliaryOptions(layered: LoadedLayeredConfig): Auxiliar
     // These workflow-scoped auxiliary calls are not tied to an individual
     // trigger, so the org base config remains the enforced baseline and the
     // repo layer only fills fields the base omits.
-    runtime: baseDefaults?.runtime ?? repoDefaults?.runtime ?? 'claude',
+    runtime: baseDefaults?.runtime ?? repoDefaults?.runtime ?? 'pi',
     model:
       emptyToUndefined(baseDefaults?.auxiliary?.model) ??
       emptyToUndefined(repoDefaults?.auxiliary?.model),
@@ -182,7 +183,7 @@ async function initializeWorkflow(
   logGroupEnd();
 
   let runnerConcurrency: number | undefined;
-  let auxiliaryOptions: AuxiliaryWorkflowOptions = { runtime: 'claude' };
+  let auxiliaryOptions: AuxiliaryWorkflowOptions = { runtime: 'pi' };
   let skillRootsByName: LayeredSkillRootsByName | undefined;
   try {
     const layered = loadLayeredWardenConfig(repoPath, {
@@ -312,7 +313,7 @@ async function executeAllTriggers(
   inputs: ActionInputs
 ): Promise<TriggerResult[]> {
   const concurrency = runnerConcurrency ?? inputs.parallel;
-  const usesClaudeRuntime = matchedTriggers.some((trigger) => (trigger.runtime ?? 'claude') === 'claude');
+  const usesClaudeRuntime = matchedTriggers.some((trigger) => (trigger.runtime ?? 'pi') === 'claude');
   if (usesClaudeRuntime) {
     ensureClaudeAuth(inputs);
   }
@@ -457,13 +458,18 @@ async function evaluateFixesAndResolveStale(
   const commentsForFixEvaluation = wardenComments.filter(
     (c) => !activeWardenCommentIds.has(c.id)
   );
+  const fixEvaluationRuntime = auxiliaryOptions.runtime ?? 'pi';
+  const canUseFixEvaluationRuntime = canUseRuntimeAuth({
+    apiKey: anthropicApiKey,
+    runtime: fixEvaluationRuntime,
+  });
 
   // Evaluate follow-up commit fix attempts
   if (
     context.pullRequest &&
     commentsForFixEvaluation.length > 0 &&
     canResolveStale &&
-    anthropicApiKey
+    canUseFixEvaluationRuntime
   ) {
     try {
       logGroup('Fix evaluation');
@@ -483,7 +489,7 @@ async function evaluateFixesAndResolveStale(
         },
         allFindings,
         anthropicApiKey,
-        auxiliaryOptions
+        { ...auxiliaryOptions, runtime: fixEvaluationRuntime }
       );
 
       // Log per-evaluation details
@@ -703,7 +709,7 @@ async function cleanupOrphanedComments(
     return;
   }
 
-  if ((auxiliaryOptions.runtime ?? 'claude') === 'claude') {
+  if ((auxiliaryOptions.runtime ?? 'pi') === 'claude') {
     ensureClaudeAuth(inputs);
   }
 

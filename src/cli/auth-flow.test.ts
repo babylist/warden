@@ -68,7 +68,7 @@ describe('runSkills auth flow', () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it('checks auth before returning success for no matching skills', async () => {
+  it('does not check Claude auth when no skills will run', async () => {
     verifyAuthMock.mockImplementation(() => {
       throw new Error('bad auth');
     });
@@ -79,7 +79,38 @@ describe('runSkills auth flow', () => {
       new Reporter({ isTTY: false, supportsColor: false, columns: 80 }, Verbosity.Quiet)
     );
 
+    expect(exitCode).toBe(0);
+    expect(verifyAuthMock).not.toHaveBeenCalled();
+  });
+
+  it('emits a JSONL error when Pi model validation fails', async () => {
+    const writes: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString('utf-8'));
+      return true;
+    });
+
+    const exitCode = await runSkills(
+      makeContext(tempDir),
+      CLIOptionsSchema.parse({
+        targets: ['src/example.ts'],
+        skill: 'security-review',
+        model: 'claude-sonnet-4-5',
+        json: true,
+        quiet: true,
+      }),
+      new Reporter({ isTTY: false, supportsColor: false, columns: 80 }, Verbosity.Quiet)
+    );
+
+    const [summaryLine] = writes.join('').trim().split('\n');
+    const summary = JSON.parse(summaryLine ?? '{}') as { error?: { code?: string; message?: string } };
+
     expect(exitCode).toBe(1);
-    expect(verifyAuthMock).toHaveBeenCalledWith({ apiKey: undefined });
+    expect(stdoutSpy).toHaveBeenCalled();
+    expect(summary.error).toMatchObject({
+      code: 'unknown',
+      message: 'Pi runtime model for security-review must use provider/model format: claude-sonnet-4-5',
+    });
+    expect(verifyAuthMock).not.toHaveBeenCalled();
   });
 });

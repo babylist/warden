@@ -23,7 +23,7 @@ describe('setGenAiResponseAttrs', () => {
     expect(span.setAttribute).toHaveBeenCalledWith('gen_ai.usage.input_tokens.cache_write', 3);
     expect(span.setAttribute).toHaveBeenCalledWith('gen_ai.usage.total_tokens', 38);
     expect(span.setAttribute).toHaveBeenCalledWith('gen_ai.response.finish_reasons', ['end_turn']);
-    expect(span._attrs.has('gen_ai.response.text')).toBe(false);
+    expect(span._attrs.has('gen_ai.output.messages')).toBe(false);
   });
 
   it('handles missing cache fields as zero', () => {
@@ -35,16 +35,20 @@ describe('setGenAiResponseAttrs', () => {
     expect(span.setAttribute).toHaveBeenCalledWith('gen_ai.usage.total_tokens', 30);
   });
 
-  it('sets gen_ai.response.text when responseText is provided', () => {
+  it('sets gen_ai.output.messages when responseText is provided', () => {
     const span = makeSpan();
     setGenAiResponseAttrs(span as never, { input_tokens: 5, output_tokens: 15 }, 'end_turn', 'hello world');
-    expect(span.setAttribute).toHaveBeenCalledWith('gen_ai.response.text', JSON.stringify(['hello world']));
+    expect(span.setAttribute).toHaveBeenCalledWith('gen_ai.output.messages', JSON.stringify([{
+      role: 'assistant',
+      parts: [{ type: 'text', content: 'hello world' }],
+      finish_reason: 'end_turn',
+    }]));
   });
 
-  it('omits gen_ai.response.text when responseText is undefined', () => {
+  it('omits gen_ai.output.messages when responseText is undefined', () => {
     const span = makeSpan();
     setGenAiResponseAttrs(span as never, { input_tokens: 5, output_tokens: 15 }, 'end_turn');
-    expect(span._attrs.has('gen_ai.response.text')).toBe(false);
+    expect(span._attrs.has('gen_ai.output.messages')).toBe(false);
   });
 });
 

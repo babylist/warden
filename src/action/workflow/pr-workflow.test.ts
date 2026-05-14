@@ -14,6 +14,7 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const FIXTURES_DIR = join(__dirname, '__fixtures__');
 const BASE_ONLY_FIXTURES_DIR = join(FIXTURES_DIR, 'base-only');
 const NO_MATCH_FIXTURES_DIR = join(FIXTURES_DIR, 'no-match');
+const NO_MATCH_RUNTIME_CLAUDE_FIXTURES_DIR = join(FIXTURES_DIR, 'no-match-runtime-claude');
 const NO_CONFIG_FIXTURES_DIR = join(FIXTURES_DIR, 'no-config');
 const RUNTIME_CLAUDE_FIXTURES_DIR = join(FIXTURES_DIR, 'runtime-claude');
 const EMPTY_AUXILIARY_MODEL_FIXTURES_DIR = join(FIXTURES_DIR, 'empty-auxiliary-model');
@@ -83,7 +84,7 @@ vi.mock('./base.js', async () => {
       }
       mockedSetFailed(
         'Authentication not found. Provide an API key via anthropic-api-key input, ' +
-          'ANTHROPIC_API_KEY env var, or OAuth token via CLAUDE_CODE_OAUTH_TOKEN env var.'
+          'WARDEN_ANTHROPIC_API_KEY env var, or OAuth token via CLAUDE_CODE_OAUTH_TOKEN env var.'
       );
     }),
     findClaudeCodeExecutable: vi.fn(() => '/usr/local/bin/claude'),
@@ -765,7 +766,42 @@ describe('runPRWorkflow', () => {
         }),
         expect.any(Array),
         'test-api-key',
-        expect.objectContaining({ runtime: 'claude' })
+        expect.objectContaining({ runtime: 'pi' })
+      );
+    });
+
+    it('runs Pi fix evaluation without a legacy Anthropic API key', async () => {
+      mockFetchExistingComments.mockResolvedValue([
+        {
+          id: 1,
+          path: 'src/test.ts',
+          line: 10,
+          title: 'SQL injection',
+          description: 'User input in query',
+          contentHash: 'abc',
+          isWarden: true,
+          isResolved: false,
+          threadId: 'thread-1',
+        },
+      ]);
+
+      mockRunSkillTask.mockResolvedValue({ name: 'test-trigger', report: createSkillReport() });
+
+      await runPRWorkflow(
+        mockOctokit,
+        createDefaultInputs({ anthropicApiKey: '', oauthToken: '' }),
+        'pull_request',
+        EVENT_PAYLOAD_PATH,
+        FIXTURES_DIR
+      );
+
+      expect(mockEvaluateFixAttempts).toHaveBeenCalledWith(
+        mockOctokit,
+        expect.arrayContaining([expect.objectContaining({ isWarden: true })]),
+        expect.any(Object),
+        expect.any(Array),
+        '',
+        expect.objectContaining({ runtime: 'pi' })
       );
     });
 
@@ -809,7 +845,7 @@ describe('runPRWorkflow', () => {
         expect.any(Array),
         'test-api-key',
         expect.objectContaining({
-          runtime: 'claude',
+          runtime: 'pi',
           model: 'org-aux-model',
           maxRetries: 7,
         })
@@ -896,7 +932,7 @@ describe('runPRWorkflow', () => {
           createDefaultInputs({ anthropicApiKey: '', oauthToken: '' }),
           'pull_request',
           EVENT_PAYLOAD_PATH,
-          NO_MATCH_FIXTURES_DIR
+          NO_MATCH_RUNTIME_CLAUDE_FIXTURES_DIR
         )
       ).rejects.toThrow('setFailed');
 
@@ -944,7 +980,7 @@ describe('runPRWorkflow', () => {
         }),
         [],
         'test-api-key',
-        expect.objectContaining({ runtime: 'claude' })
+        expect.objectContaining({ runtime: 'pi' })
       );
 
       // Should NOT run skill tasks (no triggers matched)

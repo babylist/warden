@@ -57,13 +57,14 @@ export function setFailed(message: string): never {
   throw new ActionFailedError(message);
 }
 
+/** Validate Claude runtime auth before invoking the Claude Code SDK. */
 export function ensureClaudeAuth(inputs: ActionInputs): void {
   if (inputs.anthropicApiKey || inputs.oauthToken) {
     return;
   }
   setFailed(
     'Authentication not found. Provide an API key via anthropic-api-key input, ' +
-      'ANTHROPIC_API_KEY env var, or OAuth token via CLAUDE_CODE_OAUTH_TOKEN env var.'
+      'WARDEN_ANTHROPIC_API_KEY env var, or OAuth token via CLAUDE_CODE_OAUTH_TOKEN env var.'
   );
 }
 

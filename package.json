@@ -1,7 +1,7 @@
 {
   "name": "@sentry/warden",
   "version": "0.28.0",
-  "description": "Event-driven agent that reacts to GitHub events and executes skills via Claude Code SDK",
+  "description": "Event-driven agent that reacts to GitHub events and executes code-review skills",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -13,7 +13,7 @@
     "cli": "tsx src/cli/index.ts",
     "clean:dist": "rm -rf dist",
     "build": "pnpm run clean:dist && tsc -p tsconfig.build.json",
-    "build:action": "ncc build src/action/main.ts -o dist/action --no-source-map-register --license licenses.txt",
+    "build:action": "rm -rf dist/action && ncc build src/action/main.ts -o dist/action --no-source-map-register --license licenses.txt",
     "dev": "tsc --watch",
     "lint": "oxlint src",
     "lint:fix": "oxlint --fix src",
@@ -56,6 +56,8 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.2.22",
     "@anthropic-ai/sdk": "^0.72.1",
+    "@earendil-works/pi-ai": "^0.74.0",
+    "@earendil-works/pi-coding-agent": "^0.74.0",
     "@inquirer/select": "^5.0.4",
     "@octokit/rest": "^22.0.1",
     "@sentry/dotagents-lib": "^1.16.1",
