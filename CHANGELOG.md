@@ -1,4 +1,10 @@
 # Changelog
+## 0.33.1
+
+### Bug Fixes 🐛
+
+- (cli) Avoid abort listener fanout by @dcramer in [#336](https://github.com/getsentry/warden/pull/336)
+
 ## 0.33.0
 
 - No documented changes.
