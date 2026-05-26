@@ -1,4 +1,35 @@
 # Changelog
+## 0.34.0
+
+### Bug Fixes 🐛
+
+- (action) Report skipped PR trigger checks by @dcramer in [#353](https://github.com/getsentry/warden/pull/353)
+- (docs) Remove stray sentryAgentMarkdown from shikiConfig by @sentry-junior in [#350](https://github.com/getsentry/warden/pull/350)
+
+### Documentation 📚
+
+- (config) Document model runtime selection by @dcramer in [#338](https://github.com/getsentry/warden/pull/338)
+- Use tabbed install with dotagents as default by @sentry-junior in [#342](https://github.com/getsentry/warden/pull/342)
+- Add architecture flow guide by @dcramer in [#339](https://github.com/getsentry/warden/pull/339)
+- Migrate site docs to Starlight by @dcramer in [#337](https://github.com/getsentry/warden/pull/337)
+
+### Internal Changes 🔧
+
+#### Docs
+
+- Bump @sentry/starlight-theme to 0.7.0 by @sentry-junior in [#352](https://github.com/getsentry/warden/pull/352)
+- Bump @sentry/starlight-theme to ^0.5.0 by @sentry-junior in [#345](https://github.com/getsentry/warden/pull/345)
+- Bump @sentry/starlight-theme to ^0.4.0 by @sentry-junior in [#343](https://github.com/getsentry/warden/pull/343)
+- Update @sentry/starlight-theme to ^0.3.0 by @sentry-junior in [#341](https://github.com/getsentry/warden/pull/341)
+- Bump starlight theme to 0.2.0, adopt key/value lists by @sentry-junior in [#340](https://github.com/getsentry/warden/pull/340)
+
+#### Other
+
+- (deps) Bump @sentry/starlight-theme to 0.6.0 and add sentryAgentMarkdown plugin by @sentry-junior in [#348](https://github.com/getsentry/warden/pull/348)
+- (evals) Only trigger on eval path changes by @dcramer in [#347](https://github.com/getsentry/warden/pull/347)
+- Update workspace dependencies by @dcramer in [#354](https://github.com/getsentry/warden/pull/354)
+- Add docs build verification workflow by @dcramer in [#346](https://github.com/getsentry/warden/pull/346)
+
 ## 0.33.1
 
 ### Bug Fixes 🐛
