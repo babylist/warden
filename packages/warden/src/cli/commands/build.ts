@@ -9,6 +9,7 @@ import type { Reporter } from '../output/reporter.js';
 import { formatBytes, formatCost, formatDuration, formatTokens } from '../output/formatters.js';
 import { runWithLiveStatus } from '../output/live-status.js';
 import { getAnthropicApiKey } from '../../utils/index.js';
+import { resolveConfigInput } from '../../utils/path.js';
 import { promptLine, promptMultiline } from '../input.js';
 import { getRepoRoot } from '../git.js';
 import {
@@ -305,13 +306,13 @@ async function runGeneratedSkillCommand(
     return 1;
   }
 
-  const configPath = options.config
-    ? resolve(process.cwd(), options.config)
+  const configPath = options.configPath
+    ? resolveConfigInput(options.configPath)
     : resolve(repoRoot, 'warden.toml');
   let config: WardenConfig | undefined;
   if (existsSync(configPath)) {
     config = loadWardenConfigFile(configPath);
-  } else if (options.config) {
+  } else if (options.configPath) {
     reporter.error(`Configuration file not found: ${configPath}`);
     return 1;
   }

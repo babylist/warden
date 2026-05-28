@@ -1,8 +1,8 @@
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { dirname, join, relative, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { config as dotenvConfig } from 'dotenv';
 import { Sentry, flushSentry, setRepositoryScope, emitRunMetric, getTraceId } from '../sentry.js';
-import { emptyToUndefined, loadWardenConfig, resolveSkillConfigs } from '../config/loader.js';
+import { emptyToUndefined, loadWardenConfigFile, resolveSkillConfigs } from '../config/loader.js';
 import type { SkillDefinition, WardenConfig } from '../config/schema.js';
 import { verifyAuth, type WardenAuthenticationError, type SkillRunnerOptions, type ChunkAnalysisResult } from '../sdk/runner.js';
 import {
@@ -17,7 +17,7 @@ import { matchTrigger, filterContextByPaths, shouldFail, countFindingsAtOrAbove 
 import type { SkillReport, SeverityThreshold, ConfidenceThreshold, SkillError, Finding } from '../types/index.js';
 import { filterFindings } from '../types/index.js';
 import { DEFAULT_CONCURRENCY, getAnthropicApiKey } from '../utils/index.js';
-import { isRepoRelativePath, normalizePath } from '../utils/path.js';
+import { isRepoRelativePath, normalizePath, resolveConfigInput } from '../utils/path.js';
 import { parseCliArgs, showVersion, classifyTargets, expandTargetFileReferences, type CLIOptions } from './args.js';
 import { showHelp } from './help.js';
 import { buildLocalEventContext, buildFileEventContext } from './context.js';
@@ -112,8 +112,7 @@ export function resolveInvocationCwd(baseCwd: string, cliCwd: string | undefined
 }
 
 function resolveConfigPath(options: CLIOptions, repoPath: string): string {
-  const cwd = process.cwd();
-  return options.config ? resolve(cwd, options.config) : resolve(repoPath, 'warden.toml');
+  return options.configPath ? resolveConfigInput(options.configPath) : resolve(repoPath, 'warden.toml');
 }
 
 function resolveLocalReviewBase(configDefaultBranch: string | undefined, repoPath: string): {
@@ -936,15 +935,15 @@ export async function runSkills(
 
   // Resolve config path
   let configPath: string | null = null;
-  if (options.config) {
-    configPath = resolve(cwd, options.config);
+  if (options.configPath) {
+    configPath = resolveConfigInput(options.configPath);
   } else if (repoPath) {
     configPath = resolve(repoPath, 'warden.toml');
   }
 
   // Load config if available
   const config = configPath && existsSync(configPath)
-    ? loadWardenConfig(dirname(configPath))
+    ? loadWardenConfigFile(configPath)
     : null;
   const defaultModel = resolveCliDefaultModel(config, options.model);
   const defaultAuxiliaryModel = resolveCliDefaultAuxiliaryModel(config);
@@ -1205,7 +1204,7 @@ async function runGitRefMode(gitRef: string, options: CLIOptions, reporter: Repo
 
   // Load config to get defaultBranch if available
   const configPath = resolveConfigPath(options, repoPath);
-  const config = existsSync(configPath) ? loadWardenConfig(dirname(configPath)) : null;
+  const config = existsSync(configPath) ? loadWardenConfigFile(configPath) : null;
 
   // Build context from local git
   reporter.startContext(`Analyzing changes from ${gitRef}...`);
@@ -1259,7 +1258,7 @@ async function runConfigMode(options: CLIOptions, reporter: Reporter): Promise<n
   }
 
   // Load config
-  const config = loadWardenConfig(dirname(configPath));
+  const config = loadWardenConfigFile(configPath);
 
   // Build context from local git. By default, mirror PR-style analysis:
   // compare the configured/default branch merge base to HEAD.
@@ -1467,7 +1466,7 @@ async function runDirectSkillMode(options: CLIOptions, reporter: Reporter): Prom
 
   // Load config to get defaultBranch if available
   const configPath = resolveConfigPath(options, repoPath);
-  const config = existsSync(configPath) ? loadWardenConfig(dirname(configPath)) : null;
+  const config = existsSync(configPath) ? loadWardenConfigFile(configPath) : null;
 
   // Build context from local git. By default, mirror PR-style analysis:
   // compare the configured/default branch merge base to HEAD.
@@ -1659,7 +1658,7 @@ export async function main(): Promise<void> {
       cleanupRoot = cwd;
     }
     const cfgPath = resolve(cleanupRoot, 'warden.toml');
-    const cfg = existsSync(cfgPath) ? loadWardenConfig(dirname(cfgPath)) : undefined;
+    const cfg = existsSync(cfgPath) ? loadWardenConfigFile(cfgPath) : undefined;
     await cleanupArtifacts({
       dir: join(cleanupRoot, '.warden', 'logs'),
       retentionDays: cfg?.logs?.retentionDays ?? 30,
