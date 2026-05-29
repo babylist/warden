@@ -1,4 +1,42 @@
 # Changelog
+## 0.35.0
+
+### New Features ✨
+
+#### Triggers
+
+- Add pull request label gating by @dcramer in [#359](https://github.com/getsentry/warden/pull/359)
+- Support non-draft pull request filters by @dcramer in [#355](https://github.com/getsentry/warden/pull/355)
+
+#### Other
+
+- (config) Add agent reasoning effort option by @tmustier in [#373](https://github.com/getsentry/warden/pull/373)
+- (warden) Emit reporting observations by @dcramer in [#362](https://github.com/getsentry/warden/pull/362)
+- (workflow) Nightly model pricing update PR by @dcramer in [#361](https://github.com/getsentry/warden/pull/361)
+
+### Bug Fixes 🐛
+
+#### Sdk
+
+- Runtime-aware auth errors and provider credential docs by @sentry-junior in [#369](https://github.com/getsentry/warden/pull/369)
+- Allow Pi model IDs with slashes by @Destreyf in [#368](https://github.com/getsentry/warden/pull/368)
+
+#### Workflow
+
+- Stop impersonating release bot by @dcramer in [#376](https://github.com/getsentry/warden/pull/376)
+- Use app token for pricing push by @dcramer in [#374](https://github.com/getsentry/warden/pull/374)
+
+#### Other
+
+- (cli) Rename --config to --config-path; handle directory input by @sentry-junior in [#365](https://github.com/getsentry/warden/pull/365)
+- (fix-eval) Anchor fix evaluation to original comment commit by @sentry-junior in [#370](https://github.com/getsentry/warden/pull/370)
+
+### Internal Changes 🔧
+
+- (evals) Add real-world code review fixtures by @dcramer in [#363](https://github.com/getsentry/warden/pull/363)
+- (monorepo) Move Warden into workspace package by @dcramer in [#357](https://github.com/getsentry/warden/pull/357)
+- Update model pricing by @sentry-release-bot in [#375](https://github.com/getsentry/warden/pull/375)
+
 ## 0.34.0
 
 ### Bug Fixes 🐛
