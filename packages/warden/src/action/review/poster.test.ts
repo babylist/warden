@@ -33,6 +33,7 @@ describe('postTriggerReview', () => {
     vi.mocked(consolidateBatchFindings).mockImplementation(async (findings) => ({
       findings,
       removedCount: 0,
+      removedFindings: [],
     }));
   });
 
@@ -137,6 +138,55 @@ describe('postTriggerReview', () => {
     expect(mockOctokit.pulls.createReview).not.toHaveBeenCalled();
   });
 
+  it('does not emit posting observations for threshold-suppressed findings', async () => {
+    const finding = createFinding({ severity: 'low' });
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      report: {
+        skill: 'test-skill',
+        summary: 'Found 1 issue',
+        findings: [finding],
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: createRenderResult(),
+      reportOn: 'medium',
+    };
+
+    const postResult = await postTriggerReview({ result, existingComments: [], apiKey: 'test-key' }, mockDeps);
+
+    expect(postResult.findingObservations).toEqual([]);
+  });
+
+  it('does not emit a public skipped reason when no review render result exists', async () => {
+    const finding = createFinding();
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      report: {
+        skill: 'test-skill',
+        summary: 'Found 1 issue',
+        findings: [finding],
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: undefined,
+      reportOn: 'low',
+    };
+
+    const ctx: ReviewPostingContext = {
+      result,
+      existingComments: [],
+      apiKey: 'test-key',
+    };
+
+    const postResult = await postTriggerReview(ctx, mockDeps);
+
+    expect(postResult.posted).toBe(false);
+    expect(mockOctokit.pulls.createReview).not.toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith(
+      '::warning::Trigger test-trigger produced reportable findings without a render result'
+    );
+    expect(postResult.findingObservations).toEqual([]);
+  });
+
   it('posts a review with findings', async () => {
     const finding = createFinding();
     const result: TriggerResult = {
@@ -201,12 +251,16 @@ describe('postTriggerReview', () => {
       reportOn: 'low',
     };
 
-    const existingComment = createExistingComment({ isWarden: false });
+    const existingComment = createExistingComment({
+      isWarden: false,
+      actor: 'coderabbitai',
+      threadId: 'thread-1',
+    });
 
     // Mock that the finding is a duplicate
     vi.mocked(deduplicateFindings).mockResolvedValue({
       newFindings: [],
-      duplicateActions: [{ type: 'react_external', finding, existingComment, matchType: 'hash' }],
+      duplicateActions: [{ type: 'react_external', originalFindingId: finding.id, finding, existingComment, matchType: 'hash' }],
     });
     vi.mocked(processDuplicateActions).mockResolvedValue({ updated: 0, reacted: 1, skipped: 0, failed: 0 });
 
@@ -225,12 +279,152 @@ describe('postTriggerReview', () => {
     });
     expect(processDuplicateActions).toHaveBeenCalledWith(
       mockOctokit, 'test-owner', 'test-repo',
-      [{ type: 'react_external', finding, existingComment, matchType: 'hash' }],
+      [{ type: 'react_external', originalFindingId: finding.id, finding, existingComment, matchType: 'hash' }],
       'test-skill'
     );
     // Since all findings were duplicates and failOn not triggered, nothing new to post
     expect(postResult.posted).toBe(false);
     expect(postResult.activeWardenCommentIds.size).toBe(0);
+    expect(postResult.findingObservations).toEqual([
+      expect.objectContaining({
+        outcome: 'deduped',
+        finding,
+        skill: 'test-skill',
+        dedupe: expect.objectContaining({
+          source: 'external',
+          matchType: 'hash',
+          existingCommentId: 1,
+          existingThreadId: 'thread-1',
+          actor: 'coderabbitai',
+        }),
+      }),
+    ]);
+  });
+
+  it('omits sentinel comment IDs from dedupe observations', async () => {
+    const finding = createFinding();
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      report: {
+        skill: 'test-skill',
+        summary: 'Found 1 issue',
+        findings: [finding],
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: createRenderResult({
+        review: {
+          event: 'COMMENT',
+          body: 'Test review',
+          comments: [{ path: 'test.ts', line: 10, body: 'Test comment' }],
+        },
+      }),
+      reportOn: 'low',
+    };
+
+    const existingComment = createExistingComment({
+      id: -1,
+      isWarden: true,
+      findingId: finding.id,
+    });
+
+    vi.mocked(deduplicateFindings).mockResolvedValue({
+      newFindings: [],
+      duplicateActions: [{ type: 'update_warden', originalFindingId: finding.id, finding, existingComment, matchType: 'hash' }],
+    });
+    vi.mocked(processDuplicateActions).mockResolvedValue({ updated: 0, reacted: 0, skipped: 1, failed: 0 });
+
+    const ctx: ReviewPostingContext = {
+      result,
+      existingComments: [existingComment],
+      apiKey: 'test-key',
+    };
+
+    const postResult = await postTriggerReview(ctx, mockDeps);
+    const [observation] = postResult.findingObservations;
+
+    expect(observation).toEqual(
+      expect.objectContaining({
+        outcome: 'deduped',
+        finding,
+        skill: 'test-skill',
+        dedupe: expect.objectContaining({
+          source: 'warden',
+          matchType: 'hash',
+          existingFindingId: finding.id,
+        }),
+      })
+    );
+    if (observation?.outcome !== 'deduped') {
+      throw new Error('Expected deduped observation');
+    }
+    expect(observation.dedupe).not.toHaveProperty('existingCommentId');
+    expect(postResult.activeWardenCommentIds.size).toBe(0);
+  });
+
+  it('does not mark deduped findings as failed when later duplicate handling errors', async () => {
+    const duplicateFinding = createFinding({ id: 'duplicate-finding' });
+    const newFinding = createFinding({ id: 'new-finding', location: { path: 'test.ts', startLine: 20 } });
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      report: {
+        skill: 'test-skill',
+        summary: 'Found 2 issues',
+        findings: [duplicateFinding, newFinding],
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: createRenderResult({
+        review: {
+          event: 'COMMENT',
+          body: 'Test review',
+          comments: [
+            { path: 'test.ts', line: 10, body: 'Duplicate comment' },
+            { path: 'test.ts', line: 20, body: 'New comment' },
+          ],
+        },
+      }),
+      reportOn: 'low',
+    };
+
+    const existingComment = createExistingComment({
+      isWarden: false,
+      actor: 'coderabbitai',
+      threadId: 'thread-1',
+    });
+    const duplicateAction = {
+      type: 'react_external' as const,
+      originalFindingId: duplicateFinding.id,
+      finding: duplicateFinding,
+      existingComment,
+      matchType: 'hash' as const,
+    };
+
+    vi.mocked(deduplicateFindings).mockResolvedValue({
+      newFindings: [newFinding],
+      duplicateActions: [duplicateAction],
+    });
+    vi.mocked(processDuplicateActions).mockRejectedValue(new Error('Duplicate action failed'));
+
+    const ctx: ReviewPostingContext = {
+      result,
+      existingComments: [existingComment],
+      apiKey: 'test-key',
+    };
+
+    const postResult = await postTriggerReview(ctx, mockDeps);
+
+    expect(postResult.posted).toBe(false);
+    expect(postResult.findingObservations).toEqual([
+      expect.objectContaining({
+        outcome: 'deduped',
+        finding: duplicateFinding,
+        skill: 'test-skill',
+      }),
+      {
+        outcome: 'failed',
+        finding: newFinding,
+        skill: 'test-skill',
+      },
+    ]);
   });
 
   it('posts REQUEST_CHANGES when all findings deduplicated but failOn threshold met', async () => {
@@ -255,12 +449,13 @@ describe('postTriggerReview', () => {
       requestChanges: true,
     };
 
-    const existingComment = createExistingComment({ isWarden: true });
+    const existingComment = createExistingComment({ isWarden: true, findingId: 'WRZ-XPL' });
+    const recenteredFinding = { ...finding, id: 'WRZ-XPL' };
 
     // Mock that the finding is a duplicate (already posted in previous run)
     vi.mocked(deduplicateFindings).mockResolvedValue({
       newFindings: [],
-      duplicateActions: [{ type: 'update_warden', finding, existingComment, matchType: 'hash' }],
+      duplicateActions: [{ type: 'update_warden', originalFindingId: finding.id, finding: recenteredFinding, existingComment, matchType: 'hash' }],
     });
     vi.mocked(processDuplicateActions).mockResolvedValue({ updated: 1, reacted: 0, skipped: 0, failed: 0 });
 
@@ -289,12 +484,24 @@ describe('postTriggerReview', () => {
     });
     expect(processDuplicateActions).toHaveBeenCalledWith(
       mockOctokit, 'test-owner', 'test-repo',
-      [{ type: 'update_warden', finding, existingComment, matchType: 'hash' }],
+      [{ type: 'update_warden', originalFindingId: finding.id, finding: recenteredFinding, existingComment, matchType: 'hash' }],
       'test-skill'
     );
     // Even though all findings were deduplicated, REQUEST_CHANGES should still be posted
     expect(postResult.posted).toBe(true);
     expect([...postResult.activeWardenCommentIds]).toEqual([1]);
+    expect(result.report?.findings[0]?.id).toBe('WRZ-XPL');
+    expect(postResult.findingObservations).toEqual([
+      expect.objectContaining({
+        outcome: 'deduped',
+        finding: recenteredFinding,
+        skill: 'test-skill',
+        dedupe: expect.objectContaining({
+          source: 'warden',
+          existingFindingId: 'WRZ-XPL',
+        }),
+      }),
+    ]);
     expect(mockOctokit.pulls.createReview).toHaveBeenCalledWith(
       expect.objectContaining({
         event: 'REQUEST_CHANGES',
@@ -415,6 +622,55 @@ describe('postTriggerReview', () => {
     expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(1);
   });
 
+  it('preserves max findings skipped observations when posting fails', async () => {
+    const finding1 = createFinding({ id: 'f1' });
+    const finding2 = createFinding({ id: 'f2', location: { path: 'test.ts', startLine: 20 } });
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      report: {
+        skill: 'test-skill',
+        summary: 'Found 2 issues',
+        findings: [finding1, finding2],
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: createRenderResult({
+        review: {
+          event: 'COMMENT',
+          body: '',
+          comments: [
+            { path: 'test.ts', line: 10, body: 'Comment 1' },
+            { path: 'test.ts', line: 20, body: 'Comment 2' },
+          ],
+        },
+      }),
+      reportOn: 'low',
+      maxFindings: 1,
+    };
+
+    vi.mocked(mockOctokit.pulls.createReview).mockRejectedValueOnce(new Error('Resource not accessible by integration'));
+
+    const postResult = await postTriggerReview({
+      result,
+      existingComments: [],
+      apiKey: 'test-key',
+    }, mockDeps);
+
+    expect(postResult.posted).toBe(false);
+    expect(postResult.findingObservations).toEqual([
+      {
+        outcome: 'skipped',
+        finding: finding2,
+        skill: 'test-skill',
+        skippedReason: 'max_findings',
+      },
+      {
+        outcome: 'failed',
+        finding: finding1,
+        skill: 'test-skill',
+      },
+    ]);
+  });
+
   it('consolidates batch findings before dedup when multiple findings exist', async () => {
     const finding1 = createFinding({ id: 'f1', severity: 'high', title: 'Root cause' });
     const finding2 = createFinding({ id: 'f2', severity: 'medium', title: 'Same root cause, different framing' });
@@ -444,6 +700,7 @@ describe('postTriggerReview', () => {
     vi.mocked(consolidateBatchFindings).mockResolvedValue({
       findings: [finding1],
       removedCount: 1,
+      removedFindings: [finding2],
     });
 
     vi.mocked(findingToExistingComment).mockReturnValue(createExistingComment());
@@ -474,6 +731,19 @@ describe('postTriggerReview', () => {
     expect(postResult.posted).toBe(true);
     // Only the consolidated finding should be posted
     expect(postResult.newComments).toHaveLength(1);
+    expect(postResult.findingObservations).toEqual([
+      {
+        outcome: 'skipped',
+        finding: finding2,
+        skill: 'test-skill',
+        skippedReason: 'duplicate_in_batch',
+      },
+      {
+        outcome: 'posted',
+        finding: finding1,
+        skill: 'test-skill',
+      },
+    ]);
   });
 
   it('skips consolidation when only one finding exists', async () => {

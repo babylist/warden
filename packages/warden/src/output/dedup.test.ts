@@ -2,7 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { Octokit } from '@octokit/rest';
 import {
   generateContentHash,
+  generateFindingMetadata,
   generateMarker,
+  parseWardenFindingMetadata,
   parseMarker,
   parseWardenComment,
   parseWardenFindingId,
@@ -233,6 +235,7 @@ User input reaches a query.
                       path: 'src/db.ts',
                       line: 42,
                       originalLine: 40,
+                      author: { login: 'warden-bot' },
                     },
                   ],
                 },
@@ -259,6 +262,58 @@ User input reaches a query.
       isWarden: true,
       skills: ['security-review'],
       threadId: 'thread-1',
+      actor: 'warden-bot',
+    });
+  });
+
+  it('derives plain-text title and description for external review comments', async () => {
+    const graphql = vi.fn().mockResolvedValue({
+      repository: {
+        pullRequest: {
+          reviewThreads: {
+            pageInfo: { hasNextPage: false, endCursor: null },
+            nodes: [
+              {
+                id: 'thread-1',
+                isResolved: true,
+                comments: {
+                  nodes: [
+                    {
+                      id: 'comment-node-1',
+                      databaseId: 456,
+                      body: `<!-- metadata -->
+<details><summary>Trace</summary>Hidden marker</details>
+
+**Needs guard**
+
+Use \`Number.isFinite\` before saving [the value](https://example.com).`,
+                      path: 'src/db.ts',
+                      line: 42,
+                      originalLine: 40,
+                      author: { login: 'reviewer' },
+                    },
+                  ],
+                },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const comments = await fetchExistingComments(
+      { graphql } as unknown as Octokit,
+      'getsentry',
+      'warden',
+      123
+    );
+
+    expect(comments).toHaveLength(1);
+    expect(comments[0]).toMatchObject({
+      id: 456,
+      isWarden: false,
+      title: 'Needs guard Use Number.isFinite before saving the value.',
+      description: 'Needs guard Use Number.isFinite before saving the value.',
     });
   });
 });
@@ -310,6 +365,7 @@ describe('deduplicateFindings', () => {
         description: 'User input passed to query',
         contentHash: generateContentHash('SQL Injection', 'User input passed to query'),
         isWarden: true,
+        findingId: 'WRZ-XPL',
       },
     ];
 
@@ -318,6 +374,7 @@ describe('deduplicateFindings', () => {
     expect(result.duplicateActions).toHaveLength(1);
     expect(result.duplicateActions[0]!.type).toBe('update_warden');
     expect(result.duplicateActions[0]!.matchType).toBe('hash');
+    expect(result.duplicateActions[0]!.finding.id).toBe('WRZ-XPL');
   });
 
   it('keeps findings with different content', async () => {
@@ -688,6 +745,7 @@ describe('findingToExistingComment', () => {
       contentHash: generateContentHash('SQL Injection', 'User input passed to query'),
       isWarden: true,
       skills: [],
+      severity: 'high',
     });
   });
 
@@ -759,6 +817,18 @@ ${marker}`;
   });
 });
 
+describe('finding metadata', () => {
+  it('round-trips severity and confidence from hidden metadata', () => {
+    const metadata = generateFindingMetadata({ severity: 'high', confidence: 'medium' });
+    const body = `**Issue**\n\nDetails\n${metadata}`;
+
+    expect(parseWardenFindingMetadata(body)).toEqual({
+      severity: 'high',
+      confidence: 'medium',
+    });
+  });
+});
+
 describe('consolidateBatchFindings', () => {
   beforeEach(() => {
     vi.spyOn(console, 'log').mockImplementation(() => undefined);
@@ -782,12 +852,14 @@ describe('consolidateBatchFindings', () => {
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]).toBe(finding);
     expect(result.removedCount).toBe(0);
+    expect(result.removedFindings).toEqual([]);
   });
 
   it('returns empty array unchanged', async () => {
     const result = await consolidateBatchFindings([]);
     expect(result.findings).toHaveLength(0);
     expect(result.removedCount).toBe(0);
+    expect(result.removedFindings).toEqual([]);
   });
 
   it('removes exact hash duplicates within batch', async () => {
@@ -811,6 +883,7 @@ describe('consolidateBatchFindings', () => {
     expect(result.findings).toHaveLength(1);
     expect(result.findings[0]).toBe(finding1);
     expect(result.removedCount).toBe(1);
+    expect(result.removedFindings).toEqual([finding2]);
   });
 
   it('keeps findings with different hashes at same location in hashOnly mode', async () => {

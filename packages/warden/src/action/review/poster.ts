@@ -23,6 +23,7 @@ import { canUseRuntimeAuth } from '../../sdk/extract.js';
 import type { RuntimeName } from '../../sdk/runtimes/index.js';
 import type { TriggerResult } from '../triggers/executor.js';
 import { logAction, warnAction } from '../../cli/output/tty.js';
+import type { FindingObservation } from '../reporting/outcomes.js';
 
 // -----------------------------------------------------------------------------
 // Types
@@ -50,6 +51,8 @@ export interface ReviewPostResult {
   newComments: ExistingComment[];
   /** Existing Warden comment IDs matched by current findings */
   activeWardenCommentIds: Set<number>;
+  /** Structured finding outcomes produced while posting this review */
+  findingObservations: FindingObservation[];
   /** Whether this trigger should cause the action to fail */
   shouldFail: boolean;
   /** Reason for failure, if any */
@@ -62,6 +65,55 @@ export interface ReviewPostResult {
 export interface ReviewPosterDeps {
   octokit: Octokit;
   context: EventContext;
+}
+
+function emptyReviewPostResult(
+  newComments: ExistingComment[],
+  activeWardenCommentIds: Set<number>,
+  findingObservations: FindingObservation[] = []
+): ReviewPostResult {
+  return { posted: false, newComments, activeWardenCommentIds, findingObservations, shouldFail: false };
+}
+
+function buildDedupeObservations(
+  actions: DeduplicateResult['duplicateActions'],
+  skill: string
+): FindingObservation[] {
+  return actions.map((action) => ({
+    outcome: 'deduped',
+    finding: action.finding,
+    skill,
+    dedupe: {
+      source: action.existingComment.isWarden ? 'warden' : 'external',
+      matchType: action.matchType,
+      existingFindingId: action.existingComment.findingId,
+      ...(action.existingComment.id > 0 ? { existingCommentId: action.existingComment.id } : {}),
+      existingThreadId: action.existingComment.threadId,
+      existingResolved: action.existingComment.isResolved,
+      actor: action.existingComment.actor,
+    },
+  }));
+}
+
+function recenterReportFindingIds(reportFindings: Finding[], actions: DeduplicateResult['duplicateActions']): Finding[] {
+  if (actions.length === 0) {
+    return reportFindings;
+  }
+
+  const ids = new Map(
+    actions
+      .filter((action) => action.originalFindingId !== action.finding.id)
+      .map((action) => [action.originalFindingId, action.finding.id])
+  );
+
+  if (ids.size === 0) {
+    return reportFindings;
+  }
+
+  return reportFindings.map((finding) => {
+    const recenteredId = ids.get(finding.id);
+    return recenteredId ? { ...finding, id: recenteredId } : finding;
+  });
 }
 
 // -----------------------------------------------------------------------------
@@ -166,19 +218,33 @@ export async function postTriggerReview(
 
   const newComments: ExistingComment[] = [];
   const activeWardenCommentIds = new Set<number>();
+  const findingObservations: FindingObservation[] = [];
 
   if (!result.report) {
-    return { posted: false, newComments, activeWardenCommentIds, shouldFail: false };
+    return emptyReviewPostResult(newComments, activeWardenCommentIds);
   }
+  const skill = result.report.skill;
 
   // Filter findings by reportOn threshold and confidence
   const filteredFindings = filterFindings(result.report.findings, result.reportOn, result.minConfidence);
   const reportOnSuccess = result.reportOnSuccess ?? false;
 
-  // Skip if nothing to post
-  if (!result.renderResult || (filteredFindings.length === 0 && !reportOnSuccess)) {
-    return { posted: false, newComments, activeWardenCommentIds, shouldFail: false };
+  // Skip if review rendering is disabled. In the normal action path this is
+  // only possible when reportOn is "off", which leaves no filtered findings.
+  if (!result.renderResult) {
+    if (filteredFindings.length > 0) {
+      console.warn(
+        `::warning::Trigger ${result.triggerName} produced reportable findings without a render result`
+      );
+    }
+    return emptyReviewPostResult(newComments, activeWardenCommentIds, findingObservations);
   }
+
+  if (filteredFindings.length === 0 && !reportOnSuccess) {
+    return emptyReviewPostResult(newComments, activeWardenCommentIds, findingObservations);
+  }
+
+  let findingsToMarkFailed = filteredFindings;
 
   try {
     // Cross-location merging already happened in runSkillTask().
@@ -193,9 +259,18 @@ export async function postTriggerReview(
         model: ctx.model,
         hashOnly: !canUseAuxiliaryRuntime,
         maxRetries: ctx.maxRetries,
-        agentName: result.report.skill,
+        agentName: skill,
       });
       findingsToPost = consolidateResult.findings;
+      findingsToMarkFailed = findingsToPost;
+      for (const finding of consolidateResult.removedFindings ?? []) {
+        findingObservations.push({
+          outcome: 'skipped',
+          finding,
+          skill,
+          skippedReason: 'duplicate_in_batch',
+        });
+      }
 
       if (consolidateResult.usage) {
         const consolidateAux = { consolidate: consolidateResult.usage };
@@ -217,10 +292,13 @@ export async function postTriggerReview(
         apiKey,
         runtime: ctx.runtime,
         model: ctx.model,
-        currentSkill: result.report.skill,
+        currentSkill: skill,
         maxRetries: ctx.maxRetries,
       });
+      result.report.findings = recenterReportFindingIds(result.report.findings, dedupResult.duplicateActions);
       findingsToPost = dedupResult.newFindings;
+      findingsToMarkFailed = findingsToPost;
+      findingObservations.push(...buildDedupeObservations(dedupResult.duplicateActions, skill));
 
       // Merge dedup usage into the report's auxiliary usage
       if (dedupResult.dedupUsage) {
@@ -248,7 +326,7 @@ export async function postTriggerReview(
         context.repository.owner,
         context.repository.name,
         dedupResult.duplicateActions,
-        result.report.skill
+        skill
       );
 
       if (actionCounts.updated > 0) {
@@ -293,6 +371,19 @@ export async function postTriggerReview(
       const postedFindings = result.maxFindings
         ? findingsToPost.slice(0, result.maxFindings)
         : findingsToPost;
+      const skippedFindings = result.maxFindings
+        ? findingsToPost.slice(result.maxFindings)
+        : [];
+      // Only overflow-eligible findings should be marked failed if posting throws
+      findingsToMarkFailed = postedFindings;
+      for (const finding of skippedFindings) {
+        findingObservations.push({
+          outcome: 'skipped',
+          finding,
+          skill,
+          skippedReason: 'max_findings',
+        });
+      }
 
       try {
         await postReviewToGitHub(octokit, context, renderResultToPost);
@@ -301,22 +392,37 @@ export async function postTriggerReview(
           throw error;
         }
         warnAction(`Inline comments failed for ${result.triggerName}, posting findings in review body`);
-        const fallback = moveCommentsToBody(renderResultToPost, postedFindings, result.report.skill);
+        const fallback = moveCommentsToBody(renderResultToPost, postedFindings, skill);
         await postReviewToGitHub(octokit, context, fallback);
       }
       for (const finding of postedFindings) {
-        const comment = findingToExistingComment(finding, result.report.skill);
+        findingObservations.push({ outcome: 'posted', finding, skill });
+        const comment = findingToExistingComment(finding, skill);
         if (comment) {
           newComments.push(comment);
         }
       }
-
-      return { posted: true, newComments, activeWardenCommentIds, shouldFail: false };
+      return {
+        posted: true,
+        newComments,
+        activeWardenCommentIds,
+        findingObservations,
+        shouldFail: false,
+      };
     }
 
-    return { posted: false, newComments, activeWardenCommentIds, shouldFail: false };
+    return emptyReviewPostResult(newComments, activeWardenCommentIds, findingObservations);
   } catch (error) {
     warnAction(`Failed to post review for ${result.triggerName}: ${error}`);
-    return { posted: false, newComments, activeWardenCommentIds, shouldFail: false };
+    return {
+      posted: false,
+      newComments,
+      activeWardenCommentIds,
+      findingObservations: [
+        ...findingObservations,
+        ...findingsToMarkFailed.map((finding) => ({ outcome: 'failed' as const, finding, skill })),
+      ],
+      shouldFail: false,
+    };
   }
 }
