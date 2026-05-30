@@ -1,4 +1,10 @@
 # Changelog
+## 0.35.1
+
+### Internal Changes 🔧
+
+- (action) Validate release action layout by @dcramer in [#377](https://github.com/getsentry/warden/pull/377)
+
 ## 0.35.0
 
 ### New Features ✨
