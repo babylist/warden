@@ -17,6 +17,8 @@ export const CLIOptionsSchema = z.object({
   json: z.boolean().default(false),
   /** Write full run output to a JSONL file */
   output: z.string().optional(),
+  /** Include per-hunk runtime traces in structured run output */
+  traces: z.boolean().default(false),
   failOn: SeverityThresholdSchema.optional(),
   /** Only show findings at or above this severity in output */
   reportOn: SeverityThresholdSchema.optional(),
@@ -321,6 +323,7 @@ export function parseCliArgs(argv: string[] = process.argv.slice(2)): ParsedArgs
       runtime: { type: 'string' },
       json: { type: 'boolean', default: false },
       output: { type: 'string', short: 'o' },
+      traces: { type: 'boolean', default: false },
       'fail-on': { type: 'string' },
       'report-on': { type: 'string' },
       'min-confidence': { type: 'string' },
@@ -523,6 +526,7 @@ export function parseCliArgs(argv: string[] = process.argv.slice(2)): ParsedArgs
       runtime: typeof values.runtime === 'string' ? values.runtime : undefined,
       json: Boolean(values.json),
       output: typeof values.output === 'string' ? values.output : undefined,
+      traces: Boolean(values.traces),
       failOn: values['fail-on'] as SeverityThreshold | undefined,
       reportOn: values['report-on'] as SeverityThreshold | undefined,
       minConfidence: values['min-confidence'] as ConfidenceThreshold | undefined,
