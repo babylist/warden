@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { APIError } from '@anthropic-ai/sdk';
 import {
   classifyError,
+  humanizeProviderError,
   isSubprocessError,
   mapExtractionErrorCode,
   sanitizeErrorMessage,
@@ -119,6 +120,20 @@ describe('classifyError', () => {
     expect(classifyError(err).code).toBe('provider_unavailable');
   });
 
+  it('humanizes retryable API errors from their provider type', () => {
+    const err = new APIError(
+      529,
+      { error: { type: 'api_error', message: 'Rate limit exceeded' } },
+      'Rate limit exceeded',
+      undefined
+    );
+
+    expect(classifyError(err)).toEqual({
+      code: 'provider_unavailable',
+      message: 'Anthropic API error \u2014 try again later.',
+    });
+  });
+
   it('tags Claude Code process exits as provider_unavailable', () => {
     expect(classifyError(new Error('Claude Code process exited with code 1')).code).toBe('provider_unavailable');
   });
@@ -200,5 +215,17 @@ describe('mapExtractionErrorCode', () => {
   it('returns unknown for unfamiliar strings', () => {
     expect(mapExtractionErrorCode('something_new')).toBe('unknown');
     expect(mapExtractionErrorCode(undefined)).toBe('unknown');
+  });
+});
+
+describe('humanizeProviderError', () => {
+  it('falls back to error.message for unknown Anthropic error types', () => {
+    const raw = '{"type":"error","error":{"type":"some_new_error","message":"Something went wrong"}}';
+    expect(humanizeProviderError(raw)).toBe('Something went wrong');
+  });
+
+  it('strips JSON blob and returns text prefix for unrecognised JSON', () => {
+    const raw = 'Runtime execution failed: {"status":500,"body":"Internal error"}';
+    expect(humanizeProviderError(raw)).toBe('Runtime execution failed');
   });
 });

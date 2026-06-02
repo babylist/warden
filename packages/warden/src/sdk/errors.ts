@@ -172,7 +172,7 @@ export function classifyError(error: unknown): { code: ErrorCode; message: strin
     return { code: 'auth_failed', message };
   }
   if (isProviderUnavailableError(error)) {
-    return { code: 'provider_unavailable', message };
+    return { code: 'provider_unavailable', message: humanizeProviderError(error) };
   }
   if (error instanceof Error && error.name === 'AbortError') {
     return { code: 'aborted', message };
@@ -181,6 +181,58 @@ export function classifyError(error: unknown): { code: ErrorCode; message: strin
     return { code: 'aborted', message };
   }
   return { code: 'unknown', message };
+}
+
+/** Human-friendly messages for known Anthropic API error types. */
+const ANTHROPIC_ERROR_LABELS: Record<string, string> = {
+  overloaded_error: 'Anthropic is overloaded — try again later.',
+  rate_limit_error: 'Anthropic rate limit reached — try again later.',
+  api_error: 'Anthropic API error — try again later.',
+  authentication_error: 'Anthropic authentication error.',
+};
+
+interface ProviderErrorBody {
+  error?: unknown;
+  type?: unknown;
+  message?: unknown;
+}
+
+function humanizeProviderErrorPayload(payload: unknown): string | undefined {
+  const body = payload && typeof payload === 'object' ? payload as ProviderErrorBody : undefined;
+  const rawError = body?.error ?? body;
+  const error = rawError && typeof rawError === 'object' ? rawError as ProviderErrorBody : undefined;
+  const type = typeof error?.type === 'string' ? error.type : undefined;
+  const message = typeof error?.message === 'string' ? error.message : undefined;
+
+  return type ? ANTHROPIC_ERROR_LABELS[type] ?? message : message;
+}
+
+/**
+ * Extract a human-readable summary from a raw provider error.
+ *
+ * Structured Anthropic error bodies are preferred so summaries are based on the
+ * provider error type. String errors fall back to parsing embedded JSON
+ * before returning the text prefix or original message.
+ */
+export function humanizeProviderError(error: unknown): string {
+  const payload = error instanceof APIError
+    ? (error as APIError & { error?: unknown }).error
+    : error;
+  const structuredSummary = humanizeProviderErrorPayload(payload);
+  if (structuredSummary) return structuredSummary;
+
+  const message = error instanceof Error ? error.message : String(error);
+  const jsonStart = message.indexOf('{');
+  if (jsonStart < 0) return message;
+
+  try {
+    const jsonSummary = humanizeProviderErrorPayload(JSON.parse(message.slice(jsonStart)) as unknown);
+    if (jsonSummary) return jsonSummary;
+  } catch {
+    // Ignore malformed embedded JSON and fall back to the readable prefix.
+  }
+
+  return message.slice(0, jsonStart).replace(/[:\s]+$/, '').trim() || message;
 }
 
 /** Map an internal extract.ts error string to a stable public ErrorCode. */
