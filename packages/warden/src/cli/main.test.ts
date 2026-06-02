@@ -14,6 +14,7 @@ import {
   resolveCliDefaultSynthesisModel,
   resolveCliDefaultModel,
   resolveCliLogModel,
+  resolveCliEffort,
   type RunSkillSpec,
 } from './main.js';
 import { MODEL_DEFAULT_SENTINEL, Reporter, Verbosity } from './output/index.js';
@@ -241,7 +242,7 @@ describe('mergeSkillRunnerOptions', () => {
         auxiliaryModel: 'global-aux-model',
         synthesisModel: 'global-synth-model',
         maxTurns: 20,
-        reasoningEffort: 'medium',
+        effort: 'medium',
         auxiliaryMaxRetries: 4,
       },
       {
@@ -250,7 +251,7 @@ describe('mergeSkillRunnerOptions', () => {
         auxiliaryModel: undefined,
         synthesisModel: undefined,
         maxTurns: undefined,
-        reasoningEffort: undefined,
+        effort: undefined,
         auxiliaryMaxRetries: undefined,
       }
     );
@@ -262,7 +263,7 @@ describe('mergeSkillRunnerOptions', () => {
       auxiliaryModel: 'global-aux-model',
       synthesisModel: 'global-synth-model',
       maxTurns: 20,
-      reasoningEffort: 'medium',
+      effort: 'medium',
       auxiliaryMaxRetries: 4,
     });
   });
@@ -276,7 +277,7 @@ describe('mergeSkillRunnerOptions', () => {
         auxiliaryModel: 'global-aux-model',
         synthesisModel: 'global-synth-model',
         maxTurns: 20,
-        reasoningEffort: 'medium',
+        effort: 'medium',
         auxiliaryMaxRetries: 4,
       },
       {
@@ -284,7 +285,7 @@ describe('mergeSkillRunnerOptions', () => {
         auxiliaryModel: 'skill-aux-model',
         synthesisModel: 'skill-synth-model',
         maxTurns: 8,
-        reasoningEffort: 'low',
+        effort: 'low',
         auxiliaryMaxRetries: 2,
       }
     );
@@ -296,9 +297,27 @@ describe('mergeSkillRunnerOptions', () => {
       auxiliaryModel: 'skill-aux-model',
       synthesisModel: 'skill-synth-model',
       maxTurns: 8,
-      reasoningEffort: 'low',
+      effort: 'low',
       auxiliaryMaxRetries: 2,
     });
+  });
+});
+
+describe('resolveCliEffort', () => {
+  it('uses the CLI effort over config defaults', () => {
+    expect(resolveCliEffort({
+      defaults: {
+        agent: { effort: 'medium' },
+      },
+    }, 'high')).toBe('high');
+  });
+
+  it('uses config effort when no CLI override is provided', () => {
+    expect(resolveCliEffort({
+      defaults: {
+        agent: { effort: 'medium' },
+      },
+    })).toBe('medium');
   });
 });
 
