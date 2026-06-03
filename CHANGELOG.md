@@ -1,4 +1,10 @@
 # Changelog
+## 0.36.1
+
+### Bug Fixes 🐛
+
+- (sdk) Capture GenAI tool trace content by @dcramer in [#386](https://github.com/getsentry/warden/pull/386)
+
 ## 0.36.0
 
 ### New Features ✨
