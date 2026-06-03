@@ -58,7 +58,12 @@ export async function postProcessFindings(
     });
     currentFindings = verification.findings;
     if (verification.usage) {
-      auxiliaryUsage.push({ agent: 'verification', usage: verification.usage });
+      auxiliaryUsage.push({
+        agent: 'verification',
+        usage: verification.usage,
+        model: options.auxiliaryModel,
+        runtime: options.runtime,
+      });
     }
   }
 
@@ -73,7 +78,12 @@ export async function postProcessFindings(
   });
   currentFindings = mergeResult.findings;
   if (mergeResult.usage) {
-    auxiliaryUsage.push({ agent: 'merge', usage: mergeResult.usage });
+    auxiliaryUsage.push({
+      agent: 'merge',
+      usage: mergeResult.usage,
+      model: options.synthesisModel,
+      runtime: options.runtime,
+    });
   }
 
   return { findings: currentFindings, auxiliaryUsage };
