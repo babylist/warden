@@ -1,4 +1,29 @@
 # Changelog
+## 0.36.0
+
+### New Features ✨
+
+#### Cli
+
+- Add explicit Claude runtime selection by @dcramer in [#384](https://github.com/getsentry/warden/pull/384)
+- Add per-run effort option by @dcramer in [#383](https://github.com/getsentry/warden/pull/383)
+
+#### Other
+
+- (traces) Capture run traces in output by @dcramer in [#385](https://github.com/getsentry/warden/pull/385)
+
+### Bug Fixes 🐛
+
+- (circuit-breaker) Humanize provider error messages on circuit open by @sentry-junior in [#382](https://github.com/getsentry/warden/pull/382)
+
+### Internal Changes 🔧
+
+- (skills) Hoist warden skills to repo root ./skills/ by @sentry-junior in [#380](https://github.com/getsentry/warden/pull/380)
+
+### Other
+
+- Align GenAI telemetry with current OTel cache semantics by @dcramer in [#381](https://github.com/getsentry/warden/pull/381)
+
 ## 0.35.1
 
 ### Internal Changes 🔧
