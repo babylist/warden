@@ -48,14 +48,13 @@ function readFileLine(filePath: string, lineNumber: number): FileLineResult {
 }
 
 interface RenderOptions {
-  suppressFixDiffs?: boolean;
   verbosity?: Verbosity;
 }
 
 /**
  * Format a finding for TTY display.
  */
-function formatFindingTTY(finding: Finding, options?: RenderOptions): string[] {
+function formatFindingTTY(finding: Finding): string[] {
   const lines: string[] = [];
   const badge = formatSeverityBadge(finding.severity);
   const color = SEVERITY_COLORS[finding.severity];
@@ -109,23 +108,6 @@ function formatFindingTTY(finding: Finding, options?: RenderOptions): string[] {
     lines.push(`  ${formatConfidenceBadge(finding.confidence)}`);
   }
 
-  // Suggested fix diff if available (suppress when step-through will show it)
-  if (finding.suggestedFix?.diff && !options?.suppressFixDiffs) {
-    lines.push('');
-    lines.push(chalk.dim('  Suggested fix:'));
-    const diffLines = finding.suggestedFix.diff.split('\n').map((line) => {
-      if (line.startsWith('+') && !line.startsWith('+++')) {
-        return chalk.green(`  ${line}`);
-      } else if (line.startsWith('-') && !line.startsWith('---')) {
-        return chalk.red(`  ${line}`);
-      } else if (line.startsWith('@@')) {
-        return chalk.cyan(`  ${line}`);
-      }
-      return `  ${line}`;
-    });
-    lines.push(...diffLines);
-  }
-
   return lines;
 }
 
@@ -169,22 +151,13 @@ function formatFindingCI(finding: Finding): string[] {
   // Description
   lines.push(`  ${finding.description}`);
 
-  // Suggested fix diff (plain text, no color)
-  if (finding.suggestedFix?.diff) {
-    lines.push('');
-    lines.push('  Suggested fix:');
-    for (const line of finding.suggestedFix.diff.split('\n')) {
-      lines.push(`  ${line}`);
-    }
-  }
-
   return lines;
 }
 
 /**
  * Render a skill report as a box (TTY mode).
  */
-function renderSkillBoxTTY(report: SkillReport, mode: OutputMode, options?: RenderOptions): string[] {
+function renderSkillBoxTTY(report: SkillReport, mode: OutputMode): string[] {
   const counts = countBySeverity(report.findings);
   const durationStr = report.durationMs !== undefined ? formatDuration(report.durationMs) : undefined;
 
@@ -218,7 +191,7 @@ function renderSkillBoxTTY(report: SkillReport, mode: OutputMode, options?: Rend
     for (const [index, finding] of report.findings.entries()) {
       box.divider();
       box.blank();
-      const findingLines = formatFindingTTY(finding, options);
+      const findingLines = formatFindingTTY(finding);
       box.content(findingLines);
       // Only add blank after finding if not the last one
       if (index < report.findings.length - 1) {
@@ -295,7 +268,7 @@ export function renderTerminalReport(reports: SkillReport[], mode?: OutputMode, 
   if (outputMode.isTTY) {
     // TTY mode: use boxes
     for (const report of reports) {
-      lines.push(...renderSkillBoxTTY(report, outputMode, options));
+      lines.push(...renderSkillBoxTTY(report, outputMode));
       lines.push('');
     }
   } else {
