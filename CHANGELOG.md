@@ -1,4 +1,28 @@
 # Changelog
+## 0.37.0
+
+### New Features ✨
+
+- (jsonl) Add canonical usage breakdown accounting by @dcramer in [#388](https://github.com/getsentry/warden/pull/388)
+- Remove suggestedFix feature entirely by @sentry-junior in [#389](https://github.com/getsentry/warden/pull/389)
+
+### Bug Fixes 🐛
+
+- (sdk) Force short Claude prompt cache TTL by @dcramer in [#387](https://github.com/getsentry/warden/pull/387)
+- (warden) Capture runtime child spans in traces by @dcramer in [#393](https://github.com/getsentry/warden/pull/393)
+
+### Documentation 📚
+
+#### Benchmark
+
+- Publish Opus 4.8 high comparison by @dcramer in [#395](https://github.com/getsentry/warden/pull/395)
+- Publish Sonnet 4.6 runtime comparison by @dcramer in [#394](https://github.com/getsentry/warden/pull/394)
+
+#### Other
+
+- (benchmarking) Refresh Sentry corpus benchmark results by @dcramer in [#390](https://github.com/getsentry/warden/pull/390)
+- (benchmarks) Add Sentry corpus benchmark by @dcramer in [#366](https://github.com/getsentry/warden/pull/366)
+
 ## 0.36.1
 
 ### Bug Fixes 🐛
