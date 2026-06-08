@@ -36,66 +36,30 @@ runs remain in the result data but are hidden here.
 
 ## Reading Results
 
-Known found is the useful number. It counts corpus entries where an agent
-verified that Warden found the same bug in roughly the same location as an
-existing corpus finding. Exact wording, line numbers, and exploit framing can
-drift.
+- **Known found** is the headline score. It counts corpus entries where scoring
+  verified that Warden found the same bug in roughly the same location.
+- **Total findings** is review volume before scoring. More findings can mean
+  better recall, but it also means more human review.
+- Scoring is semantic. Same-file findings about different bugs do not count,
+  duplicate findings do not double-count, and one finding can cover multiple
+  corpus entries when it catches the same root bug.
+- Benchmark runs use Warden's post-analysis finding verifier unless a row opts
+  out. The verifier filters candidate findings during the run; benchmark
+  scoring happens later. Verifier calls add provider cost.
+- Treat cost and duration as operational measurements. **Recorded cost** is not
+  normalized model pricing or cost per finding. **P50** and **P90** are
+  per-analysis-chunk durations. **Total** includes verifier work, provider
+  latency, queueing, retries, and runtime overhead.
+- The stable matrix only shows clean comparison runs: 156 analysis chunks, zero
+  failed chunks, and per-chunk timing metadata. Partial and superseded rows stay
+  in the result data for audit history.
+- Trace and auxiliary usage fields depend on what the raw artifacts preserved.
+  When verifier usage is available, it appears under
+  `auxiliaryUsage.verification`.
 
-Scoring is a review judgment, not a deterministic formula. Same-file findings
-about different bugs do not count. One emitted finding can count for more than
-one corpus entry when it clearly covers multiple existing entries for the same
-bug, and duplicate emitted findings do not double-count the same corpus entry.
-Result JSON files with `scores` include the per-finding agent verification
-records used for that row.
+## Analysis
 
-Benchmark runs use Warden's post-analysis finding verifier unless the run
-explicitly opts out. That verifier is separate from benchmark scoring: it runs
-during Warden analysis to filter candidate findings, while scoring later checks
-whether each emitted finding semantically matches an existing corpus entry.
-Verifier calls add provider cost, and runs that produce more findings generally
-cost more because there is more verifier work to do.
-
-Total findings is the amount of review output Warden produced before scoring.
-A higher number can be good if it finds more real vulnerabilities, but it also
-means more human review.
-
-Recorded cost is the provider-reported cost persisted in the result metadata,
-not cost per finding. The cost table shows one recorded-cost column plus the
-persisted input and output token totals. Recorded cost can include Warden's
-post-analysis verifier and other auxiliary model calls, but those calls may use
-auxiliary or synthesis models rather than the model being benchmarked. Because
-of that, auxiliary cost is operational context, not a useful comparison
-dimension for this matrix. The raw JSONL logs are kept outside the docs until
-they have been reviewed for sensitive data. Current displayed runs scan the
-same 156 analysis chunks with zero failed chunks. Rows with failed chunks stay
-out of the stable matrix until they are rerun or explicitly recorded as partial.
-When the raw artifacts preserve verifier usage, it is included under
-`auxiliaryUsage.verification`; some run shapes only persist the final total or
-per-chunk analysis usage.
-
-Some run shapes persist only per-chunk analysis usage. The Opus 4.6 high-effort
-Pi run completed with no failed chunks, but its live CLI shard summaries showed
-approximately $38.43 total including auxiliary/post-processing work while the
-persisted JSONL artifacts contain $30.89 of scan cost. Until the artifact
-format preserves that auxiliary usage exactly, the table uses the persisted
-JSONL cost and the run note records the gap. Treat recorded cost as operational
-accounting for a row, not normalized model pricing.
-
-Treat duration as an operational measurement, not a stable model quality
-metric. P50 and P90 come from per-analysis-chunk `durationMs` records in the
-raw JSONL artifacts when those artifacts are available. Total is included as
-operational context, but it is flaky: it includes post-analysis work such as
-finding verification, upstream provider latency, queueing, retries, and
-transient service reliability. That matters most when comparing the same model
-across different runtimes.
-
-Treat cost the same way. It is useful for operating Warden, but it is not a
-normalized model-efficiency metric. Provider defaults, runtime defaults,
-explicit reasoning effort, cache behavior, output verbosity, retries, runtime
-accounting, and Warden's finding verifier can all move the total even when the
-corpus and target files are identical.
-
-## Sonnet 4.6: Claude SDK vs Pi
+### Sonnet 4.6: Claude SDK vs Pi
 
 The Sonnet 4.6 comparison is clean enough to compare directly. Both rows scan
 the same 156 analysis chunks, complete with zero failed chunks, use Warden's
@@ -145,7 +109,7 @@ but it did make the run materially more expensive.
 Pi runs without an explicit Warden `--effort` use Pi's default thinking level,
 which is currently medium.
 
-## Opus 4.8 High: Claude SDK vs Pi
+### Opus 4.8 High: Claude SDK vs Pi
 
 The Opus 4.8 high-effort comparison now has a fresh traced pair. Both rows scan
 the same 156 analysis chunks, complete with zero failed chunks, use Warden's
@@ -196,65 +160,80 @@ but each turn carries a much smaller input/cache footprint. Claude SDK's extra
 cost is mostly repeated context volume and verifier context volume, not
 additional tool fanout.
 
-### Why Opus 4.8 high scored below Sonnet 4.6
+### Opus 4.8 High vs Opus 4.6 High
 
-Opus 4.8 high is also cleanly comparable with the Sonnet 4.6 rows. All four
-runs scan the same 156 chunks, complete with zero failed chunks, use Warden's
-finding verifier, and have agent-verified scoring. The lower score is not a
-coverage problem.
+The traced Pi rows are the direct Opus comparison. Both rows scan the same 156
+chunks, complete with zero failed chunks, use Warden's finding verifier, and
+have agent-verified scoring. Opus 4.6 high found 23 of 86 known corpus entries.
+Opus 4.8 high found 21 of 86. Both emitted 24 total findings.
 
-The main difference is recall. On Pi, Sonnet 4.6 found 25 of 86 known corpus
-entries and emitted 32 findings. Opus 4.8 high found 21 of 86 and emitted 24
-findings. Through the Claude SDK, Sonnet 4.6 found 24 of 86 and emitted 32
-findings. Opus 4.8 high found 17 of 86 and emitted 17 findings.
+That means Opus 4.8 high did not score lower because it produced a smaller or
+noisier report. It emitted the same number of final findings and had slightly
+fewer findings without a known-corpus match: 4 versus 5. The issue is recall
+against this specific corpus.
 
-That is not because Opus 4.8 high was noisier. It emitted fewer findings that
-did not match the known corpus: 4 on Pi versus Sonnet's 7, and 2 through the
-Claude SDK versus Sonnet's 8. The tradeoff went the wrong way for this corpus:
-Opus 4.8 high produced a cleaner candidate set, but the set was too small.
+The traces explain the difference. Opus 4.6 high did much more investigation:
+981 turns, 1,101 tool executions, 13.6M scan input tokens, and $30.11 scan
+cost. Opus 4.8 high used 426 turns, 371 tool executions, 5.2M scan input tokens,
+and $17.39 scan cost. Average turns per chunk dropped from 6.29 to 2.73, and
+the maximum chunk dropped from 51 turns to 11.
 
-The traces support that read. Opus 4.8 high used fewer turns and produced less
-scan output than Sonnet 4.6 in both runtimes. On Pi, Opus 4.8 high used 426
-turns and 316k scan output tokens; Sonnet 4.6 used 628 turns and 365k scan
-output tokens. Through the Claude SDK, Opus 4.8 high used 375 turns and 308k
-scan output tokens; Sonnet 4.6 used 939 turns and 890k scan output tokens. The
-Claude SDK contrast is especially sharp: Opus 4.8 high ended 86 chunks in one
-turn, while Sonnet 4.6 did that on only 8 chunks.
+No-finding chunks show the same shape. Opus 4.6 high averaged 5.4 turns, 6.0
+tool executions, 73.4k scan input tokens, and $0.17 scan cost on chunks that
+ended without a finding. Opus 4.8 high averaged 2.3 turns, 1.8 tool executions,
+25.8k scan input tokens, and $0.09. Finding chunks were also shorter: 11.0
+turns on Opus 4.6 high versus 5.5 on Opus 4.8 high.
 
-The matched corpus IDs also do not point to one narrow vulnerability category.
-On Pi, Opus 4.8 high recovered 15 of Sonnet's 25 known matches and found 6
-different known issues. Through the Claude SDK, it recovered 10 of Sonnet's 24
-known matches and found 7 different known issues. Across both runtimes, Sonnet
-4.6 found 31 unique known corpus entries, Opus 4.8 high found 23, and only 17
-overlap. Sonnet-only coverage includes invite-token validation, release
-threshold project scoping, OAuth token lifetime and replay checks, webhook
-freshness checks, identity unlinking, and frontend URL handling. Opus-only
-coverage includes OAuth userinfo validation, replay delete scope, preprod
-size-analysis access, relocation retry state leakage, and GitHub Actions output
-injection.
+The matched corpus IDs shifted, not just shrank. The two rows overlap on 12
+known corpus entries. Opus 4.6 high has 11 unique matches that Opus 4.8 high
+missed, and Opus 4.8 high has 9 unique matches that Opus 4.6 high missed. Opus
+4.6 high is better on aggregate recall here, but it is not a strict superset of
+Opus 4.8 high.
 
-The best supported conclusion is that Opus 4.8 high is more selective under
-this Warden prompt and corpus. It scans every chunk, and it does not fail more
-often. It simply exits many investigations earlier and reports fewer candidate
-issues. That improves apparent precision but misses enough known vulnerabilities
-to trail Sonnet 4.6 on recall.
+The best supported conclusion is that Opus 4.8 high is more selective under the
+current Warden prompt and corpus. It scans every chunk and does not fail more
+often. It exits more investigations earlier, which lowers cost and tool fanout,
+but misses enough known vulnerabilities to trail Opus 4.6 high on this corpus.
 
-The older Opus 4.7 and default-medium Opus 4.8 Pi rows still have an unusual
-shape. They complete cleanly, but many no-finding chunks are very short. Treat
-that as historical context for default-runtime behavior, not as the current
-high-effort Opus 4.8 comparison.
+The Opus 4.6 high traced row also shows why benchmark runs now set
+`maxTurns = 100`. One heavy MS Teams chunk hit the default turn cap and was
+rerun cleanly with the higher cap. Without that, the row would measure a runner
+limit instead of model behavior.
 
-## Current Takeaway
+### DeepSeek V4 XHigh
 
-In the current clean, agent-verified rows, GPT 5.5 on Pi found 41 of 86 with
-explicit high effort and 28 of 86 with explicit low effort. Sonnet 4.6 found 25
-of 86 on Pi and 24 of 86 through the Claude SDK. Opus 4.6 on Pi with explicit
-high effort found 23 of 86. Opus 4.8 with explicit high effort found 21 of 86
-on Pi and 17 of 86 through the Claude SDK. Opus 4.8 found 18 of 86 on Pi at
-Pi's default level. Opus 4.7 on Pi found 6 of 86 at Pi's default level.
+The DeepSeek V4 rows use Pi through OpenRouter with explicit `--effort xhigh`.
+Both scan the same 156 chunks and use Warden's finding verifier. V4 Pro found
+23 of 86 known corpus entries and emitted 30 total findings. V4 Flash found 18
+of 86 known corpus entries and emitted 27 total findings.
 
-Use those numbers as a relative comparison for this corpus. They are not a
-general pass rate for Sentry.
+Flash is cheaper because the model price is lower, not because it does less
+work. V4 Pro used 3,019 turns and 3,502 tool executions across the corpus. V4
+Flash used 3,138 turns and 4,191 tool executions. V4 Flash also consumed more
+scan input tokens: 72.2M, compared to V4 Pro's 62.2M. Recorded scan cost was
+still lower for Flash at $3.44, versus $9.76 for V4 Pro. Total recorded cost
+was $10.11 for Flash and $18.70 for V4 Pro.
+
+The recall tradeoff is real. V4 Pro ties Opus 4.6 high on known matches and
+beats Opus 4.8 high on Pi by two. V4 Flash lands below Opus 4.8 high on Pi by
+three known matches, but still beats the Claude SDK Opus 4.8 high row by one.
+The DeepSeek rows overlap on 11 known corpus entries. V4 Pro has 12 unique
+matches that Flash missed; Flash has 7 unique matches that Pro missed.
+
+The closest Claude-family row to V4 Flash is Opus 4.8 on Pi at Pi's default
+medium effort: both found 18 of 86 known corpus entries. They got there in very
+different ways. Opus used 330 turns, 3.4M scan input tokens, and 172k scan
+output tokens. Flash used 3,138 turns, 72.2M scan input tokens, and 2.0M scan
+output tokens. Opus had an 11.9-second P50 chunk duration and a 51.7-second
+P90; Flash had a 2.9-minute P50 and an 18.5-minute P90.
+
+The span-complete Opus 4.8 high rows make the tool-call difference explicit.
+Opus 4.8 high on Pi found 21 of 86 with 426 turns and 371 tool executions.
+Opus 4.8 high through the Claude SDK found 17 of 86 with 375 turns and 219
+tool executions. Flash found 18 of 86 with 3,138 turns and 4,191 tool
+executions, mostly `read` and `grep` calls. The result is not just a cheaper
+Opus-shaped run. Flash explores far more context, loops through many more tool
+calls, and lands on a different set of known findings.
 
 ## Corpus
 
