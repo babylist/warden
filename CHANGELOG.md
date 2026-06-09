@@ -1,4 +1,21 @@
 # Changelog
+## 0.38.0
+
+### New Features ✨
+
+- (action) Split Warden PR workflow by @dcramer in [#403](https://github.com/getsentry/warden/pull/403)
+- (scan) Add global scan policy limits by @dcramer in [#400](https://github.com/getsentry/warden/pull/400)
+
+### Bug Fixes 🐛
+
+- (action) Replay report results by trigger identity by @dcramer in [#405](https://github.com/getsentry/warden/pull/405)
+- (sdk) Enable Pi provider retries by @dcramer in [#399](https://github.com/getsentry/warden/pull/399)
+
+### Documentation 📚
+
+- (benchmark) Publish traced benchmark comparisons by @dcramer in [#396](https://github.com/getsentry/warden/pull/396)
+- (benchmarking) Clarify table sorting by @dcramer in [#401](https://github.com/getsentry/warden/pull/401)
+
 ## 0.37.0
 
 ### New Features ✨
