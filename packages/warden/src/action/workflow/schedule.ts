@@ -186,6 +186,8 @@ async function runScheduleWorkflowInner(
       const context = await buildScheduleEventContext({
         patterns,
         ignorePatterns,
+        ignore: resolved.ignore,
+        scan: resolved.scan,
         repoPath,
         owner,
         name: repo,
@@ -218,6 +220,9 @@ async function runScheduleWorkflowInner(
         maxTurns: resolved.maxTurns,
         batchDelayMs: resolved.batchDelayMs,
         maxContextFiles: resolved.maxContextFiles,
+        ignore: resolved.ignore,
+        scan: resolved.scan,
+        chunking: resolved.chunking,
         auxiliaryMaxRetries: resolved.auxiliaryMaxRetries,
         verifyFindings: resolved.verifyFindings,
         telemetryTriggerName: resolved.name,

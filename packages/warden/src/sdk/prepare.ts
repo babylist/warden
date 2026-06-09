@@ -8,6 +8,14 @@ import {
   type HunkWithContext,
 } from '../diff/index.js';
 import type { PreparedFile, PrepareFilesOptions, PrepareFilesResult } from './types.js';
+import { applyScanPolicy } from './scan-policy.js';
+
+function matchingChunkingSkipPattern(
+  filename: string,
+  patterns: NonNullable<PrepareFilesOptions['chunking']>['filePatterns']
+): string | undefined {
+  return patterns?.find((pattern) => classifyFile(filename, [pattern]) === 'skip')?.pattern;
+}
 
 /**
  * Group hunks by filename into PreparedFile entries.
@@ -45,15 +53,21 @@ export function prepareFiles(
   const allHunks: HunkWithContext[] = [];
   const skippedFiles: SkippedFile[] = [];
 
-  for (const file of pr.files) {
-    if (!file.patch) continue;
+  const scanPolicy = applyScanPolicy(pr.files, {
+    repoPath: context.repoPath,
+    ignore: options.ignore,
+    scan: options.scan,
+    diffContextSource: context.diffContextSource,
+  });
+  skippedFiles.push(...scanPolicy.skippedFiles);
 
-    // Check if this file should be skipped based on chunking patterns
+  for (const file of scanPolicy.files) {
     const mode = classifyFile(file.filename, chunking?.filePatterns);
     if (mode === 'skip') {
       skippedFiles.push({
         filename: file.filename,
-        reason: 'builtin', // Could be enhanced to track which pattern matched
+        reason: 'pattern',
+        pattern: matchingChunkingSkipPattern(file.filename, chunking?.filePatterns),
       });
       continue;
     }

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { writeFileSync, mkdirSync, rmSync, symlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFileSync } from 'node:child_process';
@@ -71,6 +71,40 @@ describe('createSyntheticFileChange', () => {
     const change = createSyntheticFileChange(filePath, tempDir);
 
     expect(change.filename).toBe('src/utils/helper.ts');
+  });
+
+  it('does not read oversized files while creating synthetic file changes', () => {
+    const filePath = join(tempDir, 'large.ts');
+    writeFileSync(filePath, 'x'.repeat(20));
+
+    const change = createSyntheticFileChange(filePath, tempDir, {
+      scan: { maxFileBytes: 10 },
+    });
+
+    expect(change).toEqual({
+      filename: 'large.ts',
+      status: 'added',
+      additions: 0,
+      deletions: 0,
+      chunks: 0,
+    });
+  });
+
+  it('does not read ignored files while creating synthetic file changes', () => {
+    const filePath = join(tempDir, 'ignored.ts');
+    writeFileSync(filePath, 'const ignored = true;');
+
+    const change = createSyntheticFileChange(filePath, tempDir, {
+      ignore: { paths: ['ignored.ts'] },
+    });
+
+    expect(change).toEqual({
+      filename: 'ignored.ts',
+      status: 'added',
+      additions: 0,
+      deletions: 0,
+      chunks: 0,
+    });
   });
 });
 
@@ -270,6 +304,25 @@ describe('expandFileGlobs', () => {
       expect(files).toHaveLength(1);
       expect(files.some(f => f.endsWith('included.ts'))).toBe(true);
       expect(files.some(f => f.endsWith('anchored.ts'))).toBe(false);
+    });
+
+    it('applies gitignore rules to symlink paths instead of symlink targets', async () => {
+      initGitRepo(tempDir);
+      const outsideDir = join(tmpdir(), `warden-outside-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+      mkdirSync(outsideDir, { recursive: true });
+
+      try {
+        const outsideFile = join(outsideDir, 'target.ts');
+        writeFileSync(outsideFile, 'content');
+        writeFileSync(join(tempDir, '.gitignore'), 'ignored-link.ts\n');
+        symlinkSync(outsideFile, join(tempDir, 'ignored-link.ts'));
+
+        const files = await expandFileGlobs(['ignored-link.ts'], tempDir);
+
+        expect(files).toEqual([]);
+      } finally {
+        rmSync(outsideDir, { recursive: true, force: true });
+      }
     });
   });
 });

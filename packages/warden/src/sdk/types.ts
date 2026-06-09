@@ -1,6 +1,6 @@
 import type { Finding, UsageStats, SkippedFile, RetryConfig, ErrorCode, HunkFailure, HunkTrace } from '../types/index.js';
 import type { HunkWithContext } from '../diff/index.js';
-import type { ChunkingConfig, Effort } from '../config/schema.js';
+import type { ChunkingConfig, Effort, IgnoreConfig, ScanConfig } from '../config/schema.js';
 import type { RuntimeName } from './runtimes/index.js';
 import type { ProviderFailureCircuitBreaker } from './circuit-breaker.js';
 
@@ -132,6 +132,12 @@ export interface SkillRunnerOptions {
   verbose?: boolean;
   /** Max number of "other files" to list in hunk prompts for PR context (default: 50, 0 disables) */
   maxContextFiles?: number;
+  /** Global file ignore policy applied before scan limits and chunking. */
+  ignore?: IgnoreConfig;
+  /** Global scan limits applied after ignore filtering. */
+  scan?: ScanConfig;
+  /** Chunking configuration for file patterns and coalescing. */
+  chunking?: AnalysisChunkingConfig;
   /** Max retries for auxiliary structured model calls (extraction repair, merging, dedup, fix evaluation). Default: 5 */
   auxiliaryMaxRetries?: number;
   /** Verify candidate findings in a second read-only pass. Defaults to true. */
@@ -143,6 +149,8 @@ export interface SkillRunnerOptions {
   /** Capture per-hunk runtime traces in structured run output. Defaults to false. */
   captureTraces?: boolean;
 }
+
+export type AnalysisChunkingConfig = Pick<ChunkingConfig, 'filePatterns' | 'coalesce'>;
 
 /**
  * A file prepared for analysis with its hunks.
@@ -158,8 +166,12 @@ export interface PreparedFile {
 export interface PrepareFilesOptions {
   /** Lines of context to include around each hunk */
   contextLines?: number;
+  /** Global file ignore policy applied before scan limits and chunking */
+  ignore?: IgnoreConfig;
+  /** Global scan limits applied after ignore filtering */
+  scan?: ScanConfig;
   /** Chunking configuration for file patterns and coalescing */
-  chunking?: ChunkingConfig;
+  chunking?: AnalysisChunkingConfig;
 }
 
 /**
@@ -168,7 +180,7 @@ export interface PrepareFilesOptions {
 export interface PrepareFilesResult {
   /** Files prepared for analysis */
   files: PreparedFile[];
-  /** Files that were skipped due to chunking patterns */
+  /** Files skipped by scan policy, ignore policy, or chunking rules */
   skippedFiles: SkippedFile[];
 }
 
