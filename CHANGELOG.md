@@ -1,4 +1,14 @@
 # Changelog
+## 0.38.1
+
+### Bug Fixes 🐛
+
+- (ci) Use github-actions[bot] for pricing automation PR by @dcramer in [#407](https://github.com/getsentry/warden/pull/407)
+
+### Internal Changes 🔧
+
+- Update model pricing by @sentry-release-bot in [#406](https://github.com/getsentry/warden/pull/406)
+
 ## 0.38.0
 
 ### New Features ✨
