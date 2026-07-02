@@ -1,4 +1,18 @@
 # Changelog
+## 0.39.0
+
+### Bug Fixes 🐛
+
+- (docs) Correct apostrophe in 'It's Just Skills' heading by @rahulchhabria in [#413](https://github.com/getsentry/warden/pull/413)
+- (scan) Skip changed-line budget for explicit file scans by @dcramer in [#422](https://github.com/getsentry/warden/pull/422)
+
+### Documentation 📚
+
+#### Benchmarking
+
+- Tighten overview analysis by @dcramer in [#421](https://github.com/getsentry/warden/pull/421)
+- Add Sonnet 5 Pi benchmark by @dcramer in [#418](https://github.com/getsentry/warden/pull/418)
+
 ## 0.38.1
 
 ### Bug Fixes 🐛
