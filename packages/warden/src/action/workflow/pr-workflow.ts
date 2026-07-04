@@ -43,6 +43,8 @@ import { executeTrigger } from '../triggers/executor.js';
 import type { TriggerCheckReporter, TriggerResult } from '../triggers/executor.js';
 import { postTriggerReview } from '../review/poster.js';
 import { shouldResolveStaleComments } from '../review/coordination.js';
+import { ReviewFeedbackGate } from '../review/review-feedback-gate.js';
+import type { ReviewFeedbackWritability } from '../review/review-feedback-gate.js';
 import type { FindingObservation } from '../reporting/outcomes.js';
 import type { RuntimeName } from '../../sdk/runtimes/index.js';
 import { canUseRuntimeAuth } from '../../sdk/extract.js';
@@ -518,13 +520,17 @@ async function postReviewsAndTrackFailures(
   results: TriggerResult[],
   inputs: ActionInputs,
   auxiliaryOptions: AuxiliaryWorkflowOptions,
+  gate: ReviewFeedbackGate,
   options: { failOnPostError?: boolean } = {}
 ): Promise<ReviewPhaseResult> {
-  // Fetch existing comments for deduplication (only for PRs)
+  // Skip the comment fetch only when the head has definitively advanced; on an
+  // unverifiable head the fetch is a harmless read and keeps later phases able
+  // to resolve comments once the API recovers.
   // Keep original list separate for stale detection (modified list includes newly posted comments)
   let fetchedComments: ExistingComment[] = [];
   let existingComments: ExistingComment[] = [];
-  if (context.pullRequest) {
+  let writability = await gate.check();
+  if (writability !== 'blocked' && context.pullRequest) {
     try {
       fetchedComments = await fetchExistingComments(
         octokit,
@@ -557,24 +563,42 @@ async function postReviewsAndTrackFailures(
     if (result.report) {
       reports.push(result.report);
 
-      // Post review
-      const postResult = await postTriggerReview(
-        {
-          result,
-          existingComments,
-          apiKey: inputs.anthropicApiKey,
-          runtime: auxiliaryOptions.runtime,
-          model: auxiliaryOptions.model,
-          maxRetries: auxiliaryOptions.maxRetries,
-          failOnPostError: options.failOnPostError,
-        },
-        { octokit, context }
-      );
+      // Post review. The gate memoizes briefly, so this stays cheap between
+      // writes but re-verifies after slow phases (LLM dedup, consolidation).
+      if (writability !== 'blocked') {
+        writability = await gate.check();
+      }
+      let reviewPosted = false;
+      if (writability === 'writable') {
+        const postResult = await postTriggerReview(
+          {
+            result,
+            existingComments,
+            apiKey: inputs.anthropicApiKey,
+            runtime: auxiliaryOptions.runtime,
+            model: auxiliaryOptions.model,
+            maxRetries: auxiliaryOptions.maxRetries,
+            failOnPostError: options.failOnPostError,
+          },
+          { octokit, context, feedbackGate: gate }
+        );
 
-      // Add newly posted comments to existing comments for cross-trigger deduplication
-      existingComments.push(...postResult.newComments);
-      postResult.activeWardenCommentIds.forEach((id) => activeWardenCommentIds.add(id));
-      findingObservations.push(...postResult.findingObservations);
+        // Add newly posted comments to existing comments for cross-trigger deduplication
+        existingComments.push(...postResult.newComments);
+        postResult.activeWardenCommentIds.forEach((id) => activeWardenCommentIds.add(id));
+        findingObservations.push(...postResult.findingObservations);
+        reviewPosted = postResult.posted;
+      }
+      // A stale head skips silently (the newer run owns feedback), but an
+      // unverifiable head must not silently swallow a blocking review.
+      // Evaluated after the post attempt so a head that becomes unverifiable
+      // during the poster's own LLM phases is escalated too.
+      if (!reviewPosted && wouldPostBlockingReview(result) && (await gate.check()) === 'unknown') {
+        shouldFailAction = true;
+        failureReasons.push(
+          `${result.triggerName}: Could not verify the PR head; blocking review was not posted`
+        );
+      }
 
       // Check if we should fail based on this trigger's config
       // Filter by confidence first so low-confidence findings don't cause failure
@@ -600,6 +624,23 @@ async function postReviewsAndTrackFailures(
 }
 
 /**
+ * Whether posting this trigger's review would produce a blocking
+ * REQUEST_CHANGES review. Mirrors the poster's posting predicate: the
+ * renderer can emit a REQUEST_CHANGES render result with zero reportable
+ * findings (reportOn stricter than failOn), which the poster never posts —
+ * its reportOn early return runs before the needsRequestChanges branch, so
+ * that branch is only reachable when this predicate is already true (the
+ * pre-dedup filtered set was non-empty or reportOnSuccess is set).
+ */
+function wouldPostBlockingReview(result: TriggerResult): boolean {
+  if (!result.report || result.renderResult?.review?.event !== 'REQUEST_CHANGES') {
+    return false;
+  }
+  const filteredFindings = filterFindings(result.report.findings, result.reportOn, result.minConfidence);
+  return filteredFindings.length > 0 || (result.reportOnSuccess ?? false);
+}
+
+/**
  * Evaluate fix attempts on unresolved comments and resolve stale comments.
  *
  * Returns whether all Warden comments are resolved after evaluation.
@@ -614,6 +655,7 @@ async function evaluateFixesAndResolveStale(
   canResolveStale: boolean,
   anthropicApiKey: string,
   auxiliaryOptions: AuxiliaryWorkflowOptions,
+  gate: ReviewFeedbackGate,
   options: { failOnWriteError?: boolean } = {}
 ): Promise<{
   allResolved: boolean;
@@ -626,6 +668,12 @@ async function evaluateFixesAndResolveStale(
   const commentsEvaluatedByFixEval = new Set<number>();
   const commentsResolvedByStale = new Set<number>();
   const findingObservations: FindingObservation[] = [];
+  const blockedReviewFeedbackWriteResult = () => ({
+    allResolved: false,
+    autoResolvedByFixEvaluation: commentsResolvedByFixEval.size,
+    autoResolvedByStaleCheck: commentsResolvedByStale.size,
+    findingObservations,
+  });
   const commentsForFixEvaluation = wardenComments.filter(
     (c) => !activeWardenCommentIds.has(c.id)
   );
@@ -635,11 +683,28 @@ async function evaluateFixesAndResolveStale(
     runtime: fixEvaluationRuntime,
   });
 
+  // Check head freshness up front so a stale or unverifiable run skips the
+  // LLM fix evaluation entirely, not just the writes it would produce.
+  let writability: ReviewFeedbackWritability = 'blocked';
+  if (wardenComments.length > 0) {
+    if (!canResolveStale) {
+      logAction('Skipping stale comment resolution due to trigger failures');
+    } else if (context.pullRequest) {
+      writability = await gate.check();
+      if (writability === 'blocked') {
+        logAction('Skipping stale comment resolution because this run is no longer analyzing the current PR head');
+      } else if (writability === 'unknown') {
+        logAction('Skipping stale comment resolution because the current PR head could not be verified');
+      }
+    }
+  }
+  const canMutateFeedback = writability === 'writable';
+
   // Evaluate follow-up commit fix attempts
   if (
     context.pullRequest &&
     commentsForFixEvaluation.length > 0 &&
-    canResolveStale &&
+    canMutateFeedback &&
     canUseFixEvaluationRuntime
   ) {
     try {
@@ -695,6 +760,11 @@ async function evaluateFixesAndResolveStale(
 
       // Resolve successful fixes
       if (fixEvaluation.toResolve.length > 0) {
+        if (!await gate.canWrite()) {
+          logGroupEnd();
+          return blockedReviewFeedbackWriteResult();
+        }
+
         const { resolvedCount, resolvedIds } = await resolveStaleComments(
           octokit,
           fixEvaluation.toResolve,
@@ -722,6 +792,10 @@ async function evaluateFixesAndResolveStale(
       }
 
       // Post replies for failed fixes and track them so stale pass doesn't override
+      if (fixEvaluation.toReply.length > 0 && !await gate.canWrite()) {
+        logGroupEnd();
+        return blockedReviewFeedbackWriteResult();
+      }
       for (const reply of fixEvaluation.toReply) {
         commentsEvaluatedByFixEval.add(reply.comment.id);
         if (reply.comment.threadId) {
@@ -763,7 +837,7 @@ async function evaluateFixesAndResolveStale(
 
   // Resolve stale Warden comments (comments that no longer have matching findings)
   // Exclude comments already handled by fix evaluation (resolved or flagged as needing attention)
-  if (context.pullRequest && wardenComments.length > 0 && canResolveStale) {
+  if (context.pullRequest && wardenComments.length > 0 && canMutateFeedback) {
     try {
       const scope = buildAnalyzedScope(context.pullRequest.files);
       const commentsForStaleCheck = wardenComments.filter(
@@ -775,6 +849,10 @@ async function evaluateFixesAndResolveStale(
       const staleComments = findStaleComments(commentsForStaleCheck, allFindings, scope);
 
       if (staleComments.length > 0) {
+        if (!await gate.canWrite()) {
+          return blockedReviewFeedbackWriteResult();
+        }
+
         const { resolvedCount, resolvedIds } = await resolveStaleComments(
           octokit,
           staleComments,
@@ -819,8 +897,6 @@ async function evaluateFixesAndResolveStale(
       }
       warnAction(`Failed to resolve stale comments: ${error}`);
     }
-  } else if (!canResolveStale && wardenComments.length > 0) {
-    logAction('Skipping stale comment resolution due to trigger failures');
   }
 
   // Determine if all unresolved Warden comments were resolved during this run
@@ -847,6 +923,7 @@ async function dismissPreviousReviewIfResolved(
   previousReviewInfo: BotReviewInfo | null,
   results: TriggerResult[],
   canResolveStale: boolean,
+  gate: ReviewFeedbackGate,
   options: { failOnWriteError?: boolean } = {}
 ): Promise<void> {
   // Dismiss previous CHANGES_REQUESTED if all blocking issues are resolved.
@@ -865,6 +942,10 @@ async function dismissPreviousReviewIfResolved(
     !wouldRequestChanges &&
     hasActiveFailOn
   ) {
+    if (!await gate.canWrite()) {
+      return;
+    }
+
     try {
       await octokit.pulls.dismissReview({
         owner: context.repository.owner,
@@ -898,6 +979,7 @@ async function finalizeWorkflow(
   shouldFailAction: boolean,
   failureReasons: string[],
   canResolveStale: boolean,
+  gate: ReviewFeedbackGate,
   triggerErrors: string[]
 ): Promise<void> {
   await dismissPreviousReviewIfResolved(
@@ -905,7 +987,8 @@ async function finalizeWorkflow(
     context,
     previousReviewInfo,
     results,
-    canResolveStale
+    canResolveStale,
+    gate
   );
 
   // Set outputs
@@ -1487,6 +1570,7 @@ async function finalizeReportWorkflow(
   shouldFailAction: boolean,
   failureReasons: string[],
   canResolveStale: boolean,
+  gate: ReviewFeedbackGate,
   triggerErrors: string[],
   options: { failOnWriteError?: boolean } = {}
 ): Promise<void> {
@@ -1496,6 +1580,7 @@ async function finalizeReportWorkflow(
     previousReviewInfo,
     results,
     canResolveStale,
+    gate,
     { failOnWriteError: options.failOnWriteError }
   );
 
@@ -1533,6 +1618,7 @@ async function finalizeReportWorkflow(
  * Runs fix evaluation and stale resolution on existing comments so that
  * comments from earlier pushes get resolved even when the current push
  * only touches files outside all skills' paths filters.
+ * Skips cleanup when this run is no longer analyzing the current PR head.
  */
 async function cleanupOrphanedComments(
   octokit: Octokit,
@@ -1542,6 +1628,12 @@ async function cleanupOrphanedComments(
   options: { failOnWriteError?: boolean } = {}
 ): Promise<FindingObservation[]> {
   if (!context.pullRequest) {
+    return [];
+  }
+
+  const gate = new ReviewFeedbackGate(octokit, context);
+
+  if (!await gate.canWrite()) {
     return [];
   }
 
@@ -1571,7 +1663,7 @@ async function cleanupOrphanedComments(
 
   const { allResolved, autoResolvedByFixEvaluation, autoResolvedByStaleCheck, findingObservations } =
     await evaluateFixesAndResolveStale(
-      octokit, context, existingComments, [], new Set(), true, inputs.anthropicApiKey, auxiliaryOptions, {
+      octokit, context, existingComments, [], new Set(), true, inputs.anthropicApiKey, auxiliaryOptions, gate, {
         failOnWriteError: options.failOnWriteError,
       }
     );
@@ -1583,6 +1675,10 @@ async function cleanupOrphanedComments(
   if (allResolved) {
     const previousReviewInfo = await fetchPreviousReviewInfo(octokit, context);
     if (previousReviewInfo?.state === 'CHANGES_REQUESTED') {
+      if (!await gate.canWrite()) {
+        return findingObservations;
+      }
+
       try {
         await octokit.pulls.dismissReview({
           owner: context.repository.owner,
@@ -1760,9 +1856,10 @@ async function runReportMode(
       logAction(`Previous Warden review state: ${previousReviewInfo.state}`);
     }
 
+    const gate = new ReviewFeedbackGate(octokit, context);
     reviewPhase = await Sentry.startSpan(
       { op: 'workflow.review', name: 'post reviews' },
-      () => postReviewsAndTrackFailures(octokit, context, results, inputs, auxiliaryOptions, {
+      () => postReviewsAndTrackFailures(octokit, context, results, inputs, auxiliaryOptions, gate, {
         failOnPostError: true,
       }),
     );
@@ -1779,7 +1876,7 @@ async function runReportMode(
           octokit, context, reviewPhase.fetchedComments,
           allFindings, reviewPhase.activeWardenCommentIds,
           canResolveStale, inputs.anthropicApiKey,
-          auxiliaryOptions,
+          auxiliaryOptions, gate,
           { failOnWriteError: true },
         );
         resolveSpan.setAttribute(
@@ -1800,6 +1897,7 @@ async function runReportMode(
       reviewPhase.findingObservations,
       reviewPhase.shouldFailAction, reviewPhase.failureReasons,
       canResolveStale,
+      gate,
       triggerErrors,
       { failOnWriteError: true },
     );
@@ -1940,13 +2038,14 @@ export async function runPRWorkflow(
         throw error;
       }
 
+      const gate = new ReviewFeedbackGate(octokit, context);
       const reviewPhase = await runOrFailCore(
         octokit,
         context,
         coreCheckId,
         () => Sentry.startSpan(
           { op: 'workflow.review', name: 'post reviews' },
-          () => postReviewsAndTrackFailures(octokit, context, results, inputs, auxiliaryOptions),
+          () => postReviewsAndTrackFailures(octokit, context, results, inputs, auxiliaryOptions, gate),
         ),
       );
 
@@ -1966,7 +2065,7 @@ export async function runPRWorkflow(
               octokit, context, reviewPhase.fetchedComments,
               allFindings, reviewPhase.activeWardenCommentIds,
               canResolveStale, inputs.anthropicApiKey,
-              auxiliaryOptions,
+              auxiliaryOptions, gate,
             );
             resolveSpan.setAttribute(
               'warden.feedback.auto_resolve.fix_eval_count',
@@ -1987,6 +2086,7 @@ export async function runPRWorkflow(
         reviewPhase.findingObservations,
         reviewPhase.shouldFailAction, reviewPhase.failureReasons,
         canResolveStale,
+        gate,
         triggerErrors,
       );
 

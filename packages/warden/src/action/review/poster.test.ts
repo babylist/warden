@@ -21,6 +21,7 @@ vi.mock('../../output/renderer.js', () => ({
 
 import { deduplicateFindings, processDuplicateActions, findingToExistingComment, consolidateBatchFindings } from '../../output/dedup.js';
 import { renderSkillReport } from '../../output/renderer.js';
+import { ReviewFeedbackGate } from './review-feedback-gate.js';
 
 describe('postTriggerReview', () => {
   beforeEach(() => {
@@ -35,11 +36,20 @@ describe('postTriggerReview', () => {
       removedCount: 0,
       removedFindings: [],
     }));
+
+    vi.mocked(mockOctokit.pulls.createReview).mockResolvedValue({} as never);
+    vi.mocked(mockOctokit.pulls.get).mockResolvedValue({ data: { head: { sha: 'abc123' } } } as never);
+    mockDeps = {
+      octokit: mockOctokit,
+      context: mockContext,
+      feedbackGate: new ReviewFeedbackGate(mockOctokit, mockContext),
+    };
   });
 
   const mockOctokit = {
     pulls: {
       createReview: vi.fn().mockResolvedValue({}),
+      get: vi.fn().mockResolvedValue({ data: { head: { sha: 'abc123' } } }),
     },
   } as unknown as Octokit;
 
@@ -61,10 +71,8 @@ describe('postTriggerReview', () => {
     repoPath: '/test/path',
   };
 
-  const mockDeps: ReviewPosterDeps = {
-    octokit: mockOctokit,
-    context: mockContext,
-  };
+  // Rebuilt per test so the gate's head-freshness cache starts empty.
+  let mockDeps: ReviewPosterDeps;
 
   const createFinding = (overrides: Partial<Finding> = {}): Finding => ({
     id: 'test-1',
@@ -231,9 +239,227 @@ describe('postTriggerReview', () => {
       pull_number: 1,
       commit_id: 'abc123',
       event: 'COMMENT',
-      body: 'Test review',
+      body: '',
       comments: [expect.objectContaining({ path: 'test.ts', line: 10, side: 'RIGHT', body: 'Test comment' })],
     });
+  });
+
+  it('skips body-only non-blocking reviews', async () => {
+    const finding = createFinding({ location: undefined });
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      skillName: 'test-skill',
+      report: {
+        skill: 'test-skill',
+        summary: 'Found 1 issue',
+        findings: [finding],
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: createRenderResult({
+        review: {
+          event: 'COMMENT',
+          body: 'Locationless finding',
+          comments: [],
+        },
+      }),
+      reportOn: 'low',
+    };
+
+    const postResult = await postTriggerReview({
+      result,
+      existingComments: [],
+      apiKey: 'test-key',
+    }, mockDeps);
+
+    expect(postResult.posted).toBe(false);
+    expect(postResult.findingObservations).toEqual([
+      { outcome: 'skipped', finding, skill: 'test-skill', skippedReason: 'no_inline_location' },
+    ]);
+    expect(mockOctokit.pulls.createReview).not.toHaveBeenCalled();
+  });
+
+  it('skips all GitHub writes when the PR head advances during consolidation', async () => {
+    const findings = [createFinding(), createFinding({ id: 'test-2', title: 'Second finding' })];
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      skillName: 'test-skill',
+      report: {
+        skill: 'test-skill',
+        summary: 'Found 2 issues',
+        findings,
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: createRenderResult({
+        review: {
+          event: 'COMMENT',
+          body: '',
+          comments: [{ path: 'test.ts', line: 10, body: 'Test comment' }],
+        },
+      }),
+      reportOn: 'low',
+    };
+
+    // The head moves while the LLM consolidation runs.
+    vi.mocked(consolidateBatchFindings).mockImplementation(async (batch) => {
+      vi.mocked(mockOctokit.pulls.get).mockResolvedValue({ data: { head: { sha: 'new-head-sha' } } } as never);
+      return { findings: batch, removedCount: 0, removedFindings: [] };
+    });
+    vi.mocked(deduplicateFindings).mockResolvedValue({
+      newFindings: findings,
+      duplicateActions: [{ finding: findings[0]!, existingComment: createExistingComment(), matchType: 'hash', originalFindingId: findings[0]!.id }],
+    } as never);
+
+    const postResult = await postTriggerReview({
+      result,
+      existingComments: [createExistingComment()],
+      apiKey: 'test-key',
+    }, mockDeps);
+
+    expect(postResult.posted).toBe(false);
+    expect(mockOctokit.pulls.createReview).not.toHaveBeenCalled();
+    expect(processDuplicateActions).not.toHaveBeenCalled();
+  });
+
+  it('skips the review write when the PR head advances during duplicate processing', async () => {
+    // The gate verifies before duplicate processing; advance the clock past
+    // its cache window inside that write phase so the pre-review check
+    // re-fetches the head.
+    let now = 1_750_000_000_000;
+    const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+    try {
+      const findings = [createFinding(), createFinding({ id: 'test-2', title: 'Second finding' })];
+      const result: TriggerResult = {
+        triggerName: 'test-trigger',
+        skillName: 'test-skill',
+        report: {
+          skill: 'test-skill',
+          summary: 'Found 2 issues',
+          findings,
+          usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+        },
+        renderResult: createRenderResult({
+          review: {
+            event: 'COMMENT',
+            body: '',
+            comments: [{ path: 'test.ts', line: 10, body: 'Test comment' }],
+          },
+        }),
+        reportOn: 'low',
+      };
+
+      vi.mocked(deduplicateFindings).mockResolvedValue({
+        newFindings: [findings[0]!],
+        duplicateActions: [{ finding: findings[1]!, existingComment: createExistingComment(), matchType: 'hash', originalFindingId: findings[1]!.id }],
+      } as never);
+      // Dedup shrank the finding set, so the poster re-renders before posting.
+      vi.mocked(renderSkillReport).mockReturnValue(createRenderResult({
+        review: {
+          event: 'COMMENT',
+          body: '',
+          comments: [{ path: 'test.ts', line: 10, body: 'Test comment' }],
+        },
+      }));
+      vi.mocked(processDuplicateActions).mockImplementation(async () => {
+        now += 60_000;
+        vi.mocked(mockOctokit.pulls.get).mockResolvedValue({ data: { head: { sha: 'new-head-sha' } } } as never);
+        return { updated: 1, reacted: 0, skipped: 0, failed: 0 };
+      });
+
+      const postResult = await postTriggerReview({
+        result,
+        existingComments: [createExistingComment()],
+        apiKey: 'test-key',
+      }, mockDeps);
+
+      expect(processDuplicateActions).toHaveBeenCalled();
+      expect(postResult.posted).toBe(false);
+      expect(mockOctokit.pulls.createReview).not.toHaveBeenCalled();
+      // The gate verified twice: before duplicate processing and again before
+      // the review write, where it saw the new head.
+      expect(mockOctokit.pulls.get).toHaveBeenCalledTimes(2);
+      // No swallowed error: the findings were not marked failed.
+      expect(postResult.findingObservations.filter((o) => o.outcome === 'failed')).toEqual([]);
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+  });
+
+  it('marks locationless findings in a mixed review as checks-only instead of posted', async () => {
+    const inlineFinding = createFinding();
+    const bodyFinding = createFinding({ id: 'test-2', title: 'Locationless finding', location: undefined });
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      skillName: 'test-skill',
+      report: {
+        skill: 'test-skill',
+        summary: 'Found 2 issues',
+        findings: [inlineFinding, bodyFinding],
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: createRenderResult({
+        review: {
+          event: 'COMMENT',
+          body: 'Locationless finding body',
+          comments: [{ path: 'test.ts', line: 10, body: 'Test comment' }],
+        },
+      }),
+      reportOn: 'low',
+    };
+
+    vi.mocked(findingToExistingComment).mockReturnValue(createExistingComment());
+
+    const postResult = await postTriggerReview({
+      result,
+      existingComments: [],
+      apiKey: 'test-key',
+    }, mockDeps);
+
+    expect(postResult.posted).toBe(true);
+    expect(mockOctokit.pulls.createReview).toHaveBeenCalledWith(
+      expect.objectContaining({ event: 'COMMENT', body: '' })
+    );
+    expect(postResult.findingObservations).toEqual([
+      { outcome: 'posted', finding: inlineFinding, skill: 'test-skill' },
+      { outcome: 'skipped', finding: bodyFinding, skill: 'test-skill', skippedReason: 'no_inline_location' },
+    ]);
+  });
+
+  it('does not post a blocking review when reportOn filters out all findings', async () => {
+    // reportOn stricter than failOn: the renderer emits a REQUEST_CHANGES
+    // fallback, but the reportOn early return runs before the
+    // needsRequestChanges branch, so nothing posts. The workflow's
+    // wouldPostBlockingReview escalation predicate relies on this.
+    const finding = createFinding({ severity: 'medium' });
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      skillName: 'test-skill',
+      report: {
+        skill: 'test-skill',
+        summary: 'Found 1 issue',
+        findings: [finding],
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: createRenderResult({
+        review: {
+          event: 'REQUEST_CHANGES',
+          body: 'Findings exceed the configured threshold. See the GitHub Check for details.',
+          comments: [],
+        },
+      }),
+      reportOn: 'high',
+      failOn: 'medium',
+      requestChanges: true,
+    };
+
+    const postResult = await postTriggerReview({
+      result,
+      existingComments: [],
+      apiKey: 'test-key',
+    }, mockDeps);
+
+    expect(postResult.posted).toBe(false);
+    expect(mockOctokit.pulls.createReview).not.toHaveBeenCalled();
+    expect(postResult.findingObservations).toEqual([]);
   });
 
   it('deduplicates findings against existing comments', async () => {
@@ -612,7 +838,7 @@ describe('postTriggerReview', () => {
     expect(postResult.shouldFail).toBe(false);
   });
 
-  it('retries with findings in body when GitHub returns line resolution error', async () => {
+  it('does not leave body-only comments when GitHub returns line resolution error', async () => {
     const finding = createFinding();
     const result: TriggerResult = {
       triggerName: 'test-trigger',
@@ -635,10 +861,10 @@ describe('postTriggerReview', () => {
 
     vi.mocked(findingToExistingComment).mockReturnValue(createExistingComment());
 
-    // First call fails with line resolution error, second succeeds
+    // First call fails with line resolution error. The fallback is body-only,
+    // so Warden should rely on checks instead of leaving an unresolvable review.
     vi.mocked(mockOctokit.pulls.createReview)
-      .mockRejectedValueOnce(new Error('Validation Failed: pull_request_review_thread.line does not form part of the diff'))
-      .mockResolvedValueOnce({} as never);
+      .mockRejectedValueOnce(new Error('Validation Failed: pull_request_review_thread.line does not form part of the diff'));
 
     const ctx: ReviewPostingContext = {
       result,
@@ -648,12 +874,51 @@ describe('postTriggerReview', () => {
 
     const postResult = await postTriggerReview(ctx, mockDeps);
 
+    expect(postResult.posted).toBe(false);
+    expect(postResult.newComments).toHaveLength(0);
+    expect(postResult.findingObservations).toEqual([
+      { outcome: 'skipped', finding, skill: 'test-skill', skippedReason: 'no_inline_location' },
+    ]);
+    expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(1);
+  });
+
+  it('still posts body-only request changes reviews', async () => {
+    const finding = createFinding({ severity: 'high' });
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      skillName: 'test-skill',
+      report: {
+        skill: 'test-skill',
+        summary: 'Found 1 issue',
+        findings: [finding],
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: createRenderResult({
+        review: {
+          event: 'REQUEST_CHANGES',
+          body: 'Blocking finding in body',
+          comments: [],
+        },
+      }),
+      reportOn: 'low',
+      requestChanges: true,
+      failOn: 'high',
+    };
+
+    const postResult = await postTriggerReview({
+      result,
+      existingComments: [],
+      apiKey: 'test-key',
+    }, mockDeps);
+
     expect(postResult.posted).toBe(true);
-    expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(2);
-    // Second call should have no inline comments and findings in body
-    const secondCall = vi.mocked(mockOctokit.pulls.createReview).mock.calls[1]![0]!;
-    expect(secondCall.comments).toEqual([]);
-    expect(secondCall.body).toBe('rendered findings body');
+    expect(mockOctokit.pulls.createReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: 'REQUEST_CHANGES',
+        body: 'Blocking finding in body',
+        comments: [],
+      })
+    );
   });
 
   it('does not retry on non-line-resolution errors', async () => {
