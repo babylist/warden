@@ -1,4 +1,21 @@
 # Changelog
+## 0.40.0
+
+### Bug Fixes 🐛
+
+- (warden) Prevent stale PR feedback writes by @dcramer in [#424](https://github.com/getsentry/warden/pull/424)
+
+### Documentation 📚
+
+#### Benchmarking
+
+- Record Grok 4.5 corpus run by @dcramer in [#425](https://github.com/getsentry/warden/pull/425)
+- Record GLM 5.2 corpus run by @dcramer in [#423](https://github.com/getsentry/warden/pull/423)
+
+### Internal Changes 🔧
+
+- (pricing) Use Pi model cost metadata by @dcramer in [#426](https://github.com/getsentry/warden/pull/426)
+
 ## 0.39.0
 
 ### Bug Fixes 🐛
