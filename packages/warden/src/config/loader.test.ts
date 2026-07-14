@@ -496,6 +496,52 @@ describe('resolveSkillConfigs', () => {
       expect(resolved?.verifyFindings).toBe(false);
     });
 
+    it('lets skill-level verification override defaults', () => {
+      const skill: SkillConfig = {
+        name: 'test-skill',
+        verification: { enabled: false },
+        triggers: [
+          { type: 'pull_request', actions: ['opened'] },
+        ],
+      };
+
+      const config: WardenConfig = {
+        version: 1,
+        skills: [skill],
+        defaults: {
+          verification: { enabled: true },
+        },
+      };
+
+      const [resolved] = resolveSkillConfigs(config);
+      expect(resolved?.verifyFindings).toBe(false);
+    });
+
+    it('lets trigger-level verification override skill and defaults', () => {
+      const skill: SkillConfig = {
+        name: 'test-skill',
+        verification: { enabled: false },
+        triggers: [
+          {
+            type: 'pull_request',
+            actions: ['opened'],
+            verification: { enabled: true },
+          },
+        ],
+      };
+
+      const config: WardenConfig = {
+        version: 1,
+        skills: [skill],
+        defaults: {
+          verification: { enabled: false },
+        },
+      };
+
+      const [resolved] = resolveSkillConfigs(config);
+      expect(resolved?.verifyFindings).toBe(true);
+    });
+
     it('falls back to auxiliary model when synthesis model is unset', () => {
       const config: WardenConfig = {
         ...baseConfig,
@@ -940,6 +986,38 @@ describe('resolveLayeredSkillConfigs', () => {
     expect(resolved[1]?.maxContextFiles).toBeUndefined();
   });
 
+  it('lets a repo-layer skill override inherited base verification defaults', () => {
+    const baseConfig: WardenConfig = {
+      version: 1,
+      defaults: {
+        verification: { enabled: false },
+      },
+      skills: [{
+        name: 'org-skill',
+        triggers: [{ type: 'pull_request', actions: ['opened'] }],
+      }],
+    };
+
+    const repoConfig: WardenConfig = {
+      version: 1,
+      skills: [{
+        name: 'repo-skill',
+        verification: { enabled: true },
+        triggers: [{ type: 'pull_request', actions: ['opened'] }],
+      }],
+    };
+
+    const resolved = resolveLayeredSkillConfigs({
+      config: { version: 1, skills: [] },
+      baseConfig,
+      repoConfig,
+    });
+
+    expect(resolved).toHaveLength(2);
+    expect(resolved[0]?.verifyFindings).toBe(false);
+    expect(resolved[1]?.verifyFindings).toBe(true);
+  });
+
   it('ignores repo layer duplicates when resolving skills', () => {
     const baseConfig: WardenConfig = {
       version: 1,
@@ -1105,6 +1183,26 @@ describe('maxTurns config', () => {
     const result = WardenConfigSchema.safeParse(config);
     expect(result.success).toBe(true);
     expect(result.data?.defaults?.verification?.enabled).toBe(false);
+  });
+
+  it('accepts skill- and trigger-level verification overrides', () => {
+    const config = {
+      version: 1,
+      skills: [{
+        name: 'test-skill',
+        verification: { enabled: false },
+        triggers: [{
+          type: 'pull_request',
+          actions: ['opened'],
+          verification: { enabled: true },
+        }],
+      }],
+    };
+
+    const result = WardenConfigSchema.safeParse(config);
+    expect(result.success).toBe(true);
+    expect(result.data?.skills[0]?.verification?.enabled).toBe(false);
+    expect(result.data?.skills[0]?.triggers?.[0]?.verification?.enabled).toBe(true);
   });
 
   it('rejects unknown runtimes', () => {
