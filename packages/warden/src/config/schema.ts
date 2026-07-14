@@ -101,6 +101,8 @@ export const SkillTriggerSchema = z.object({
   failCheck: z.boolean().optional(),
   model: z.string().optional(),
   maxTurns: z.number().int().positive().optional(),
+  /** Candidate finding verification. Overrides skill/defaults verification. */
+  verification: VerificationConfigSchema.optional(),
   /** Minimum confidence level for findings. Findings below this are filtered from output. */
   minConfidence: ConfidenceThresholdSchema.optional(),
   /** Schedule-specific configuration. Only used when type is 'schedule'. */
@@ -146,6 +148,8 @@ export const SkillConfigSchema = z.object({
   model: z.string().optional(),
   /** Maximum agentic turns (API round-trips) per hunk analysis. Overrides defaults.maxTurns. */
   maxTurns: z.number().int().positive().optional(),
+  /** Candidate finding verification. Overrides defaults.verification. */
+  verification: VerificationConfigSchema.optional(),
   /** Minimum confidence level for findings. Findings below this are filtered from output. */
   minConfidence: ConfidenceThresholdSchema.optional(),
   /** Triggers defining when/where this skill runs. Omit to run everywhere (wildcard). */

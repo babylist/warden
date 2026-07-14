@@ -446,6 +446,18 @@ function triggerIdentity(skill: SkillConfig, trigger: SkillTrigger | undefined):
   });
 }
 
+function resolveVerifyFindings(
+  defaults: Defaults | undefined,
+  skill: SkillConfig,
+  trigger?: SkillTrigger
+): boolean {
+  const merged = mergeNestedConfig(
+    mergeNestedConfig(defaults?.verification, skill.verification),
+    trigger?.verification
+  );
+  return merged?.enabled !== false;
+}
+
 function resolveSkillSource(
   skill: SkillConfig,
   skillRootsByName?: Record<string, string | undefined>
@@ -500,7 +512,6 @@ export function resolveSkillConfigs(
   const auxiliaryMaxRetries =
     defaults?.auxiliary?.maxRetries ??
     defaults?.auxiliaryMaxRetries;
-  const verifyFindings = defaults?.verification?.enabled !== false;
 
   for (const skill of config.skills) {
     const skillSource = resolveSkillSource(skill, skillRootsByName);
@@ -547,7 +558,7 @@ export function resolveSkillConfigs(
         auxiliaryModel,
         synthesisModel,
         auxiliaryMaxRetries,
-        verifyFindings,
+        verifyFindings: resolveVerifyFindings(defaults, skill),
         minConfidence: skill.minConfidence ?? defaults?.minConfidence,
         batchDelayMs: defaults?.batchDelayMs,
         maxContextFiles: defaults?.chunking?.maxContextFiles,
@@ -582,7 +593,7 @@ export function resolveSkillConfigs(
           auxiliaryModel,
           synthesisModel,
           auxiliaryMaxRetries,
-          verifyFindings,
+          verifyFindings: resolveVerifyFindings(defaults, skill, trigger),
           minConfidence: trigger.minConfidence ?? skill.minConfidence ?? defaults?.minConfidence,
           batchDelayMs: defaults?.batchDelayMs,
           maxContextFiles: defaults?.chunking?.maxContextFiles,
