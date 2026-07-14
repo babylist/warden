@@ -381,6 +381,7 @@ describe('runPRWorkflow', () => {
               report,
             }),
           ],
+          configuredSkills: [{ name: 'test-skill', triggered: true }],
         }
       );
     });
@@ -2410,7 +2411,10 @@ describe('runPRWorkflow', () => {
             skill: undefined,
             resolvedReason: 'fix_evaluation',
           }),
-        ]
+        ],
+        {
+          configuredSkills: [{ name: 'test-skill', triggered: false }],
+        }
       );
     });
 
