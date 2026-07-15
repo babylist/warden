@@ -14,7 +14,7 @@ import { mapExtractionErrorCode } from '../sdk/errors.js';
 import { aggregateAuxiliaryUsageAttribution, mergeAuxiliaryUsage } from '../sdk/usage.js';
 import { resolveSkillAsync, SkillLoaderError } from '../skills/loader.js';
 import { matchTrigger, filterContextByPaths, shouldFail, countFindingsAtOrAbove } from '../triggers/matcher.js';
-import type { SkillReport, SeverityThreshold, ConfidenceThreshold, SkillError, Finding, UsageStats, AuxiliaryUsageMap } from '../types/index.js';
+import type { SkillReport, SeverityThreshold, ConfidenceThreshold, SkillError, Finding, UsageStats, AuxiliaryUsageMap, VerifierRejections } from '../types/index.js';
 import { filterFindings } from '../types/index.js';
 import { DEFAULT_CONCURRENCY, getAnthropicApiKey } from '../utils/index.js';
 import { isRepoRelativePath, normalizePath, resolveConfigInput } from '../utils/path.js';
@@ -333,6 +333,7 @@ function buildReportChunkRecord(
     durationMs: includeReportResults ? (report.durationMs ?? runDurationMs) : 0,
     error: reportError,
     skippedFiles: report.skippedFiles,
+    verifierRejections: includeReportResults ? report.verifierRejections : undefined,
   };
 }
 
@@ -470,7 +471,8 @@ function buildUsageOnlyChunkRecord(
   log: RunLog,
   report: SkillReport,
   runDurationMs: number,
-  auxiliaryUsage: AuxiliaryUsageMap,
+  auxiliaryUsage: AuxiliaryUsageMap | undefined,
+  verifierRejections: VerifierRejections | undefined,
 ): JsonlChunkRecord {
   return {
     schemaVersion: 1,
@@ -489,6 +491,7 @@ function buildUsageOnlyChunkRecord(
     usageBreakdown: buildJsonlUsageBreakdown(undefined, auxiliaryUsage, {
       auxiliary: report.auxiliaryUsageAttribution,
     }),
+    verifierRejections,
   };
 }
 
@@ -538,8 +541,8 @@ export function buildFinalChunkRecords(
       undefined,
     );
     const missingAuxiliaryUsage = subtractAuxiliaryUsage(report.auxiliaryUsage, recordedAuxiliaryUsage);
-    return missingAuxiliaryUsage
-      ? [buildUsageOnlyChunkRecord(log, report, totalDurationMs, missingAuxiliaryUsage)]
+    return missingAuxiliaryUsage || report.verifierRejections
+      ? [buildUsageOnlyChunkRecord(log, report, totalDurationMs, missingAuxiliaryUsage, report.verifierRejections)]
       : [];
   });
   return [

@@ -13,6 +13,7 @@ import {
   SkillErrorSchema,
   SkippedFileSchema,
   HunkTraceSchema,
+  VerifierRejectionsSchema,
 } from '../../types/index.js';
 import type { SkillReport, UsageStats, AuxiliaryUsageMap, AuxiliaryUsageAttributionMap, SkillError, Finding, FileReport, HunkFailure } from '../../types/index.js';
 import { mergeAuxiliaryUsage, mergeAuxiliaryUsageAttribution } from '../../sdk/usage.js';
@@ -120,6 +121,7 @@ export const JsonlChunkRecordSchema = z.object({
   error: SkillErrorSchema.optional(),
   skippedFiles: z.array(SkippedFileSchema).optional(),
   trace: HunkTraceSchema.optional(),
+  verifierRejections: VerifierRejectionsSchema.optional(),
 });
 export type JsonlChunkRecord = z.infer<typeof JsonlChunkRecordSchema>;
 
@@ -554,6 +556,7 @@ function reportsFromChunks(chunks: JsonlChunkRecord[]): SkillReport[] {
     const failedExtractions = analysisChunkRecords.filter(
       (r) => r.status === 'error' && r.error && isExtractionErrorCode(r.error.code),
     ).length;
+    const verifierRejections = aggregateRecords.find((r) => r.verifierRejections)?.verifierRejections;
     const allChunksFailed =
       analysisChunkRecords.length > 0 &&
       findings.length === 0 &&
@@ -579,6 +582,7 @@ function reportsFromChunks(chunks: JsonlChunkRecord[]): SkillReport[] {
     if (auxiliaryUsageAttribution) report.auxiliaryUsageAttribution = auxiliaryUsageAttribution;
     if (failedHunks > 0) report.failedHunks = failedHunks;
     if (failedExtractions > 0) report.failedExtractions = failedExtractions;
+    if (verifierRejections) report.verifierRejections = verifierRejections;
     if (hunkFailures.length > 0) report.hunkFailures = hunkFailures;
     if (traces.length > 0) report.traces = traces;
     if (skippedFiles.length > 0) report.skippedFiles = skippedFiles;
