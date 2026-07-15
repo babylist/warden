@@ -437,6 +437,7 @@ function triggerIdentity(skill: SkillConfig, trigger: SkillTrigger | undefined):
     failCheck: trigger?.failCheck ?? skill.failCheck,
     model: trigger?.model ?? skill.model,
     maxTurns: trigger?.maxTurns ?? skill.maxTurns,
+    verification: trigger?.verification?.enabled ?? skill.verification?.enabled,
     minConfidence: trigger?.minConfidence ?? skill.minConfidence,
     type: trigger?.type ?? '*',
     actions: trigger?.actions,
@@ -444,6 +445,17 @@ function triggerIdentity(skill: SkillConfig, trigger: SkillTrigger | undefined):
     labels: trigger?.labels,
     schedule: trigger?.schedule,
   });
+}
+
+function resolveVerifyFindings(
+  defaults: Defaults | undefined,
+  skill: SkillConfig,
+  trigger?: SkillTrigger
+): boolean {
+  return trigger?.verification?.enabled
+    ?? skill.verification?.enabled
+    ?? defaults?.verification?.enabled
+    ?? true;
 }
 
 function resolveSkillSource(
@@ -500,7 +512,6 @@ export function resolveSkillConfigs(
   const auxiliaryMaxRetries =
     defaults?.auxiliary?.maxRetries ??
     defaults?.auxiliaryMaxRetries;
-  const verifyFindings = defaults?.verification?.enabled !== false;
 
   for (const skill of config.skills) {
     const skillSource = resolveSkillSource(skill, skillRootsByName);
@@ -547,7 +558,7 @@ export function resolveSkillConfigs(
         auxiliaryModel,
         synthesisModel,
         auxiliaryMaxRetries,
-        verifyFindings,
+        verifyFindings: resolveVerifyFindings(defaults, skill),
         minConfidence: skill.minConfidence ?? defaults?.minConfidence,
         batchDelayMs: defaults?.batchDelayMs,
         maxContextFiles: defaults?.chunking?.maxContextFiles,
@@ -582,7 +593,7 @@ export function resolveSkillConfigs(
           auxiliaryModel,
           synthesisModel,
           auxiliaryMaxRetries,
-          verifyFindings,
+          verifyFindings: resolveVerifyFindings(defaults, skill, trigger),
           minConfidence: trigger.minConfidence ?? skill.minConfidence ?? defaults?.minConfidence,
           batchDelayMs: defaults?.batchDelayMs,
           maxContextFiles: defaults?.chunking?.maxContextFiles,
