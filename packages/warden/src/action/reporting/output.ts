@@ -119,10 +119,13 @@ interface BuildFindingsOutputOptions {
   configuredSkills?: { name: string; triggered: boolean }[];
 }
 
-export function buildConfiguredSkillsList(
-  allTriggers: { name: string }[],
-  matchedTriggers: { name: string }[]
-): { name: string; triggered: boolean }[] {
+export function buildConfiguredSkillsList({
+  allTriggers,
+  matchedTriggers,
+}: {
+  allTriggers: { name: string }[];
+  matchedTriggers: { name: string }[];
+}): { name: string; triggered: boolean }[] {
   const matchedNames = new Set(matchedTriggers.map((t) => t.name));
   const seen = new Set<string>();
   const result: { name: string; triggered: boolean }[] = [];

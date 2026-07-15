@@ -1011,7 +1011,7 @@ async function finalizeWorkflow(
   try {
     const findingsPath = writeFindingsOutput(reports, context, findingObservations, {
       triggerResults: toReplayTriggerResults(results),
-      configuredSkills: buildConfiguredSkillsList(resolvedTriggers, matchedTriggers),
+      configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
     });
     logAction(`Findings written to ${findingsPath}`);
   } catch (error) {
@@ -1607,10 +1607,10 @@ async function finalizeReportWorkflow(
   try {
     const findingsPath = writeFindingsOutput(reports, context, findingObservations, {
       triggerResults: toReplayTriggerResults(results),
-      configuredSkills: buildConfiguredSkillsList(
-        options.resolvedTriggers ?? [],
-        options.matchedTriggers ?? []
-      ),
+      configuredSkills: buildConfiguredSkillsList({
+        allTriggers: options.resolvedTriggers ?? [],
+        matchedTriggers: options.matchedTriggers ?? [],
+      }),
     });
     logAction(`Findings written to ${findingsPath}`);
   } catch (error) {
@@ -1745,7 +1745,7 @@ async function runAnalyzeMode(
     try {
       const findingsPath = writeFindingsOutput([], context, [], {
         triggerResults: [],
-        configuredSkills: buildConfiguredSkillsList(resolvedTriggers, matchedTriggers),
+        configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
       });
       logAction(`Findings written to ${findingsPath}`);
     } catch (error) {
@@ -1772,7 +1772,7 @@ async function runAnalyzeMode(
   try {
     const findingsPath = writeFindingsOutput(reports, context, [], {
       triggerResults: toReplayTriggerResults(results),
-      configuredSkills: buildConfiguredSkillsList(resolvedTriggers, matchedTriggers),
+      configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
     });
     logAction(`Findings written to ${findingsPath}`);
   } catch (error) {
@@ -1821,7 +1821,7 @@ async function runReportMode(
       try {
         const findingsPath = writeFindingsOutput([], context, [], {
           triggerResults: [],
-          configuredSkills: buildConfiguredSkillsList(resolvedTriggers, matchedTriggers),
+          configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
         });
         logAction(`Findings written to ${findingsPath}`);
       } catch (error) {
@@ -1857,7 +1857,7 @@ async function runReportMode(
       try {
         const findingsPath = writeFindingsOutput([], context, cleanupFindingObservations, {
           triggerResults: [],
-          configuredSkills: buildConfiguredSkillsList(resolvedTriggers, matchedTriggers),
+          configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
         });
         logAction(`Findings written to ${findingsPath}`);
       } catch (error) {
@@ -2021,7 +2021,7 @@ export async function runPRWorkflow(
         setOutput('summary', skipCoreCheck.title);
         try {
           writeFindingsOutput([], context, [], {
-            configuredSkills: buildConfiguredSkillsList(resolvedTriggers, matchedTriggers),
+            configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
           });
         } catch (error) {
           warnAction(`Failed to write findings output: ${error}`);
@@ -2043,7 +2043,7 @@ export async function runPRWorkflow(
           setOutput('summary', 'No triggers matched');
           try {
             writeFindingsOutput([], context, cleanupFindingObservations, {
-              configuredSkills: buildConfiguredSkillsList(resolvedTriggers, matchedTriggers),
+              configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
             });
           } catch (error) {
             warnAction(`Failed to write findings output: ${error}`);
