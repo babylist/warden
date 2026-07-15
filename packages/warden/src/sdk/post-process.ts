@@ -1,6 +1,6 @@
 import type { Effort, SkillDefinition } from '../config/schema.js';
 import { emitDedupMetrics } from '../sentry.js';
-import type { Finding } from '../types/index.js';
+import type { Finding, VerifierRejections } from '../types/index.js';
 import { deduplicateFindings, mergeCrossLocationFindings } from './extract.js';
 import type { PromptPRContext } from './prompt-sections.js';
 import type { RuntimeName } from './runtimes/index.js';
@@ -27,7 +27,7 @@ export interface PostProcessFindingsOptions {
 export interface PostProcessFindingsResult {
   findings: Finding[];
   auxiliaryUsage: AuxiliaryUsageEntry[];
-  verifierRejections?: { count: number; reasons: string[] };
+  verifierRejections?: VerifierRejections;
 }
 
 /**
@@ -43,7 +43,7 @@ export async function postProcessFindings(
   emitDedupMetrics(options.skill.name, findings.length, uniqueFindings.length);
 
   let currentFindings = uniqueFindings;
-  let verifierRejections: { count: number; reasons: string[] } | undefined;
+  let verifierRejections: VerifierRejections | undefined;
   if (options.verifyFindings !== false) {
     const verification = await verifyFindings(currentFindings, {
       repoPath: options.repoPath,

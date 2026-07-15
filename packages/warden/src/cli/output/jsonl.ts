@@ -200,6 +200,7 @@ export const JsonlSummaryRecordSchema = z.object({
   failedSkills: z.array(z.string()).optional(),
   totalFailedHunks: z.number().int().nonnegative().optional(),
   totalFailedExtractions: z.number().int().nonnegative().optional(),
+  totalVerifierRejections: z.number().int().nonnegative().optional(),
   /**
    * Top-level run error captured before any skill ran (e.g. auth failure,
    * config load error). Skill-level errors live on the SkillRecord; this
@@ -330,6 +331,7 @@ export function buildSummaryJsonlRecord(
   const failedSkills = reports.filter((r) => r.error).map((r) => r.skill);
   const totalFailedHunks = reports.reduce((n, r) => n + (r.failedHunks ?? 0), 0);
   const totalFailedExtractions = reports.reduce((n, r) => n + (r.failedExtractions ?? 0), 0);
+  const totalVerifierRejections = reports.reduce((n, r) => n + (r.verifierRejections?.count ?? 0), 0);
   return {
     run,
     type: 'summary',
@@ -343,6 +345,7 @@ export function buildSummaryJsonlRecord(
     failedSkills: failedSkills.length > 0 ? failedSkills : undefined,
     totalFailedHunks: totalFailedHunks > 0 ? totalFailedHunks : undefined,
     totalFailedExtractions: totalFailedExtractions > 0 ? totalFailedExtractions : undefined,
+    totalVerifierRejections: totalVerifierRejections > 0 ? totalVerifierRejections : undefined,
     error,
   };
 }

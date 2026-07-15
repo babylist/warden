@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import type { Effort, SkillDefinition } from '../config/schema.js';
-import { FindingSchema, type Finding, type UsageStats } from '../types/index.js';
+import { FindingSchema, type Finding, type UsageStats, type VerifierRejections } from '../types/index.js';
 import { aggregateUsage } from './usage.js';
 import { extractBalancedJson } from './extract.js';
 import {
@@ -44,7 +44,7 @@ export interface VerifyFindingsOptions {
 export interface VerifyFindingsResult {
   findings: Finding[];
   usage?: UsageStats;
-  verifierRejections?: { count: number; reasons: string[] };
+  verifierRejections?: VerifierRejections;
 }
 
 const VerificationVerdictSchema = z.object({

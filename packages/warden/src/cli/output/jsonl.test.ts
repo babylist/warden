@@ -1228,6 +1228,7 @@ another bad line
         summary: 'ok',
         findings: [],
         failedExtractions: 1,
+        verifierRejections: { count: 3, reasons: ['a', 'b', 'c'] },
       },
     ];
     const content = renderJsonlString(original, 1000, { runId: 'sum-123' });
@@ -1237,6 +1238,7 @@ another bad line
     expect(summary.failedSkills).toEqual(['skill-a']);
     expect(summary.totalFailedHunks).toBe(2);
     expect(summary.totalFailedExtractions).toBe(1);
+    expect(summary.totalVerifierRejections).toBe(3);
   });
 
   it('omits summary extras when there are no failures', () => {
@@ -1249,6 +1251,7 @@ another bad line
     expect(summary.failedSkills).toBeUndefined();
     expect(summary.totalFailedHunks).toBeUndefined();
     expect(summary.totalFailedExtractions).toBeUndefined();
+    expect(summary.totalVerifierRejections).toBeUndefined();
   });
 
   it('passes through fix-evaluation records without treating them as malformed', () => {

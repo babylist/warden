@@ -26,7 +26,7 @@ import {
   type ChunkAnalysisResult,
 } from './types.js';
 import { prepareFiles } from './prepare.js';
-import type { EventContext, SkillReport, UsageStats, HunkFailure, HunkTrace } from '../types/index.js';
+import type { EventContext, SkillReport, UsageStats, HunkFailure, HunkTrace, VerifierRejections } from '../types/index.js';
 import type { SourceSnippet, SourceSnippetLine } from '../types/index.js';
 import { runPool } from '../utils/index.js';
 import { getSpanContext, startTraceRecorder, withTraceRecorder, type TraceRecorder } from '../sentry-trace.js';
@@ -1153,7 +1153,7 @@ async function runSkillAnalysis(
   }
 
   let finalFindings = allFindings;
-  let verifierRejections: { count: number; reasons: string[] } | undefined;
+  let verifierRejections: VerifierRejections | undefined;
   if (options.postProcessFindings !== false) {
     const processed = await postProcessFindings(allFindings, {
       skill,

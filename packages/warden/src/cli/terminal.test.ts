@@ -360,6 +360,18 @@ describe('renderTerminalReport', () => {
       expect(output).not.toContain('WARN:');
     });
 
+    it('renders per-skill verifierRejections warning', () => {
+      const report = createReport({
+        durationMs: 5000,
+        findings: [createFinding({ severity: 'high', title: 'Bug found' })],
+        verifierRejections: { count: 2, reasons: ['not reproducible', 'guarded upstream'] },
+      });
+
+      const output = renderTerminalReport([report], ciMode);
+
+      expect(output).toContain('WARN: 2 findings rejected by verification');
+    });
+
     it('renders additional locations in CI mode', () => {
       const report = createReport({
         durationMs: 5000,
