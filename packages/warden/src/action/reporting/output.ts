@@ -120,14 +120,14 @@ interface BuildFindingsOutputOptions {
 }
 
 export function buildConfiguredSkillsList(
-  matchedTriggers: { name: string }[],
-  skippedTriggers: { name: string }[]
+  allTriggers: { name: string }[],
+  matchedTriggers: { name: string }[]
 ): { name: string; triggered: boolean }[] {
   const matchedNames = new Set(matchedTriggers.map((t) => t.name));
   const seen = new Set<string>();
   const result: { name: string; triggered: boolean }[] = [];
 
-  for (const trigger of [...matchedTriggers, ...skippedTriggers]) {
+  for (const trigger of allTriggers) {
     if (seen.has(trigger.name)) continue;
     seen.add(trigger.name);
     result.push({ name: trigger.name, triggered: matchedNames.has(trigger.name) });
