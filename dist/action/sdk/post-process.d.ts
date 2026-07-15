@@ -1,5 +1,5 @@
 import type { Effort, SkillDefinition } from '../config/schema.js';
-import type { Finding } from '../types/index.js';
+import type { Finding, VerifierRejections } from '../types/index.js';
 import type { PromptPRContext } from './prompt-sections.js';
 import type { RuntimeName } from './runtimes/index.js';
 import type { AuxiliaryUsageEntry, FindingProcessingEvent } from './types.js';
@@ -22,6 +22,7 @@ export interface PostProcessFindingsOptions {
 export interface PostProcessFindingsResult {
     findings: Finding[];
     auxiliaryUsage: AuxiliaryUsageEntry[];
+    verifierRejections?: VerifierRejections;
 }
 /**
  * Run the shared post-analysis finding pipeline.

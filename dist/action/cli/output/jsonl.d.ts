@@ -247,6 +247,10 @@ export declare const JsonlChunkRecordSchema: z.ZodObject<{
             attributes: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodUnion<readonly [z.ZodString, z.ZodNumber, z.ZodBoolean, z.ZodArray<z.ZodUnion<readonly [z.ZodString, z.ZodNumber, z.ZodBoolean]>>]>>>;
         }, z.core.$strip>>>;
     }, z.core.$strip>>;
+    verifierRejections: z.ZodOptional<z.ZodObject<{
+        count: z.ZodNumber;
+        reasons: z.ZodArray<z.ZodString>;
+    }, z.core.$strip>>;
 }, z.core.$strip>;
 export type JsonlChunkRecord = z.infer<typeof JsonlChunkRecordSchema>;
 export declare function parseJsonlChunkRecord(value: unknown): JsonlChunkRecord | undefined;
@@ -410,6 +414,10 @@ export declare const JsonlRecordSchema: z.ZodObject<{
         }>;
         message: z.ZodString;
         timestamp: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>>;
+    verifierRejections: z.ZodOptional<z.ZodObject<{
+        count: z.ZodNumber;
+        reasons: z.ZodArray<z.ZodString>;
     }, z.core.$strip>>;
     auxiliaryUsage: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodObject<{
         inputTokens: z.ZodNumber;
@@ -581,6 +589,7 @@ export declare const JsonlSummaryRecordSchema: z.ZodObject<{
     failedSkills: z.ZodOptional<z.ZodArray<z.ZodString>>;
     totalFailedHunks: z.ZodOptional<z.ZodNumber>;
     totalFailedExtractions: z.ZodOptional<z.ZodNumber>;
+    totalVerifierRejections: z.ZodOptional<z.ZodNumber>;
     error: z.ZodOptional<z.ZodObject<{
         code: z.ZodEnum<{
             unknown: "unknown";

@@ -1299,6 +1299,7 @@ function setupAuthEnv(inputs) {
 // EXPORTS
 __webpack_require__.d(__webpack_exports__, {
   DF: () => (/* binding */ FindingsOutputSchema),
+  BA: () => (/* binding */ buildConfiguredSkillsList),
   Cs: () => (/* binding */ buildFindingsOutput)
 });
 
@@ -1431,11 +1432,31 @@ const FindingsOutputSchema = schemas/* object */.Ik({
         model: schemas/* string */.Yj().optional(),
         durationMs: schemas/* number */.ai().nonnegative().optional(),
         usage: types/* UsageStatsSchema */.Ur.optional(),
+        failedHunks: schemas/* number */.ai().int().nonnegative().optional(),
+        failedExtractions: schemas/* number */.ai().int().nonnegative().optional(),
+        error: types/* SkillErrorSchema */.J1.optional(),
+        verifierRejections: types/* VerifierRejectionsSchema */.IH.optional(),
         findings: schemas/* array */.YO(ExportedFindingSchema),
     })),
     triggerResults: schemas/* array */.YO(TriggerRunResultSchema).optional(),
     findingObservations: schemas/* array */.YO(FindingObservationSchema),
+    configuredSkills: schemas/* array */.YO(schemas/* object */.Ik({
+        name: schemas/* string */.Yj(),
+        triggered: schemas/* boolean */.zM(),
+    })).optional(),
 });
+function buildConfiguredSkillsList({ allTriggers, matchedTriggers, }) {
+    const matchedNames = new Set(matchedTriggers.map((t) => t.name));
+    const seen = new Set();
+    const result = [];
+    for (const trigger of allTriggers) {
+        if (seen.has(trigger.name))
+            continue;
+        seen.add(trigger.name);
+        result.push({ name: trigger.name, triggered: matchedNames.has(trigger.name) });
+    }
+    return result;
+}
 function serializeTriggerError(error) {
     if (error instanceof Error) {
         return {
@@ -1512,6 +1533,10 @@ function buildFindingsOutput(reports, context, findingObservations = [], options
             model: r.model,
             durationMs: r.durationMs,
             usage: r.usage,
+            failedHunks: r.failedHunks,
+            failedExtractions: r.failedExtractions,
+            error: r.error,
+            verifierRejections: r.verifierRejections,
             findings: r.findings.map((f) => ({
                 id: f.id,
                 severity: f.severity,
@@ -1527,6 +1552,7 @@ function buildFindingsOutput(reports, context, findingObservations = [], options
             triggerResults: options.triggerResults.map(serializeTriggerResult),
         }),
         findingObservations,
+        ...(options.configuredSkills && { configuredSkills: options.configuredSkills }),
     };
     return FindingsOutputSchema.parse(output);
 }
@@ -2717,6 +2743,7 @@ function writeFindingsOutput(reports, context, findingObservations = [], options
     const filePath = getFindingsOutputPath(context.repoPath);
     const output = (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_6__/* .buildFindingsOutput */ .Cs)(reports, context, findingObservations, {
         triggerResults: options.triggerResults,
+        configuredSkills: options.configuredSkills,
     });
     (0,node_fs__WEBPACK_IMPORTED_MODULE_0__.mkdirSync)((0,node_path__WEBPACK_IMPORTED_MODULE_2__.dirname)(filePath), { recursive: true });
     (0,node_fs__WEBPACK_IMPORTED_MODULE_0__.writeFileSync)(filePath, JSON.stringify(output, null, 2));
@@ -2974,7 +3001,14 @@ async function initializeWorkflow(octokit, inputs, eventName, eventPath, repoPat
         else {
             console.log('No triggers matched for this event');
         }
-        return { context, runnerConcurrency, auxiliaryOptions, matchedTriggers, skippedTriggers };
+        return {
+            context,
+            runnerConcurrency,
+            auxiliaryOptions,
+            resolvedTriggers,
+            matchedTriggers,
+            skippedTriggers,
+        };
     }
     catch (error) {
         if (error instanceof _config_loader_js__WEBPACK_IMPORTED_MODULE_3__/* .ConfigLoadError */ .tx &&
@@ -2986,6 +3020,7 @@ async function initializeWorkflow(octokit, inputs, eventName, eventPath, repoPat
                 context,
                 runnerConcurrency,
                 auxiliaryOptions,
+                resolvedTriggers: [],
                 matchedTriggers: [],
                 skippedTriggers: [],
                 skipCoreCheck: {
@@ -3461,7 +3496,7 @@ async function dismissPreviousReviewIfResolved(octokit, context, previousReviewI
 /**
  * Dismiss review, set outputs, update core check, fail action.
  */
-async function finalizeWorkflow(octokit, context, previousReviewInfo, coreCheckId, results, reports, findingObservations, shouldFailAction, failureReasons, canResolveStale, gate, triggerErrors) {
+async function finalizeWorkflow(octokit, context, previousReviewInfo, coreCheckId, results, reports, findingObservations, shouldFailAction, failureReasons, canResolveStale, gate, triggerErrors, matchedTriggers, resolvedTriggers) {
     await dismissPreviousReviewIfResolved(octokit, context, previousReviewInfo, results, canResolveStale, gate);
     // Set outputs
     const outputs = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .computeWorkflowOutputs */ .dV)(reports);
@@ -3470,6 +3505,7 @@ async function finalizeWorkflow(octokit, context, previousReviewInfo, coreCheckI
     try {
         const findingsPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutput */ .JR)(reports, context, findingObservations, {
             triggerResults: toReplayTriggerResults(results),
+            configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_21__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: resolvedTriggers, matchedTriggers }),
         });
         (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
     }
@@ -3883,6 +3919,10 @@ async function finalizeReportWorkflow(octokit, context, previousReviewInfo, resu
     try {
         const findingsPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutput */ .JR)(reports, context, findingObservations, {
             triggerResults: toReplayTriggerResults(results),
+            configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_21__/* .buildConfiguredSkillsList */ .BA)({
+                allTriggers: options.resolvedTriggers ?? [],
+                matchedTriggers: options.matchedTriggers ?? [],
+            }),
         });
         (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
     }
@@ -3965,13 +4005,16 @@ async function cleanupOrphanedComments(octokit, context, inputs, auxiliaryOption
  * It executes matched triggers and writes the replay artifact for report mode.
  */
 async function runAnalyzeMode(inputs, initResult, span) {
-    const { context, runnerConcurrency, matchedTriggers, skipCoreCheck, } = initResult;
+    const { context, runnerConcurrency, resolvedTriggers, matchedTriggers, skipCoreCheck, } = initResult;
     if (skipCoreCheck || matchedTriggers.length === 0) {
         (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setOutput */ .uH)('findings-count', 0);
         (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setOutput */ .uH)('high-count', 0);
         (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setOutput */ .uH)('summary', skipCoreCheck?.title ?? 'No triggers matched');
         try {
-            const findingsPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutput */ .JR)([], context, [], { triggerResults: [] });
+            const findingsPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutput */ .JR)([], context, [], {
+                triggerResults: [],
+                configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_21__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: resolvedTriggers, matchedTriggers }),
+            });
             (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
         }
         catch (error) {
@@ -3992,6 +4035,7 @@ async function runAnalyzeMode(inputs, initResult, span) {
     try {
         const findingsPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutput */ .JR)(reports, context, [], {
             triggerResults: toReplayTriggerResults(results),
+            configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_21__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: resolvedTriggers, matchedTriggers }),
         });
         (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
     }
@@ -4006,7 +4050,7 @@ async function runAnalyzeMode(inputs, initResult, span) {
  * It replays analyze output against the current PR config and owns GitHub writes.
  */
 async function runReportMode(octokit, inputs, initResult, repoPath, span) {
-    const { context, auxiliaryOptions, matchedTriggers, skippedTriggers, skipCoreCheck, } = initResult;
+    const { context, auxiliaryOptions, resolvedTriggers, matchedTriggers, skippedTriggers, skipCoreCheck, } = initResult;
     const findingsOutput = readFindingsFile(inputs.findingsFile, repoPath);
     validateFindingsMatchContext(findingsOutput, context);
     let results = [];
@@ -4021,7 +4065,10 @@ async function runReportMode(octokit, inputs, initResult, repoPath, span) {
             const outputs = { findingsCount: 0, highCount: 0, summary: skipCoreCheck.title };
             (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setWorkflowOutputs */ .wZ)(outputs);
             try {
-                const findingsPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutput */ .JR)([], context, [], { triggerResults: [] });
+                const findingsPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutput */ .JR)([], context, [], {
+                    triggerResults: [],
+                    configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_21__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: resolvedTriggers, matchedTriggers }),
+                });
                 (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
             }
             catch (error) {
@@ -4041,6 +4088,7 @@ async function runReportMode(octokit, inputs, initResult, repoPath, span) {
             try {
                 const findingsPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutput */ .JR)([], context, cleanupFindingObservations, {
                     triggerResults: [],
+                    configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_21__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: resolvedTriggers, matchedTriggers }),
                 });
                 (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
             }
@@ -4073,7 +4121,7 @@ async function runReportMode(octokit, inputs, initResult, repoPath, span) {
             resolveSpan.setAttribute('warden.feedback.auto_resolve.stale_count', resolutionResult.autoResolvedByStaleCheck);
             reviewPhase.findingObservations.push(...resolutionResult.findingObservations);
         });
-        await finalizeReportWorkflow(octokit, context, previousReviewInfo, results, reviewPhase.reports, reviewPhase.findingObservations, reviewPhase.shouldFailAction, reviewPhase.failureReasons, canResolveStale, gate, triggerErrors, { failOnWriteError: true });
+        await finalizeReportWorkflow(octokit, context, previousReviewInfo, results, reviewPhase.reports, reviewPhase.findingObservations, reviewPhase.shouldFailAction, reviewPhase.failureReasons, canResolveStale, gate, triggerErrors, { failOnWriteError: true, matchedTriggers, resolvedTriggers });
     }
     catch (error) {
         if (error instanceof _base_js__WEBPACK_IMPORTED_MODULE_19__/* .ActionFailedError */ .Ah) {
@@ -4093,7 +4141,7 @@ async function runReportMode(octokit, inputs, initResult, repoPath, span) {
 async function runPRWorkflow(octokit, inputs, eventName, eventPath, repoPath) {
     return _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.startSpan */ .sQ.startSpan({ op: 'workflow.run', name: 'review pull_request' }, async (span) => {
         const initResult = await _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.startSpan */ .sQ.startSpan({ op: 'workflow.init', name: 'initialize workflow' }, () => initializeWorkflow(octokit, inputs, eventName, eventPath, repoPath));
-        const { context, runnerConcurrency, auxiliaryOptions, matchedTriggers, skippedTriggers, skipCoreCheck, } = initResult;
+        const { context, runnerConcurrency, auxiliaryOptions, resolvedTriggers, matchedTriggers, skippedTriggers, skipCoreCheck, } = initResult;
         span.setAttribute('warden.trigger.count', matchedTriggers.length);
         // Set Sentry context after building event context
         if (context.pullRequest) {
@@ -4129,7 +4177,9 @@ async function runPRWorkflow(octokit, inputs, eventName, eventPath, repoPath) {
             (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setOutput */ .uH)('high-count', 0);
             (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setOutput */ .uH)('summary', skipCoreCheck.title);
             try {
-                (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutput */ .JR)([], context);
+                (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutput */ .JR)([], context, [], {
+                    configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_21__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: resolvedTriggers, matchedTriggers }),
+                });
             }
             catch (error) {
                 (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
@@ -4144,7 +4194,9 @@ async function runPRWorkflow(octokit, inputs, eventName, eventPath, repoPath) {
                 (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setOutput */ .uH)('high-count', 0);
                 (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setOutput */ .uH)('summary', 'No triggers matched');
                 try {
-                    (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutput */ .JR)([], context, cleanupFindingObservations);
+                    (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutput */ .JR)([], context, cleanupFindingObservations, {
+                        configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_21__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: resolvedTriggers, matchedTriggers }),
+                    });
                 }
                 catch (error) {
                     (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
@@ -4183,7 +4235,7 @@ async function runPRWorkflow(octokit, inputs, eventName, eventPath, repoPath) {
             resolveSpan.setAttribute('warden.feedback.auto_resolve.stale_count', resolutionResult.autoResolvedByStaleCheck);
             reviewPhase.findingObservations.push(...resolutionResult.findingObservations);
         }));
-        await finalizeWorkflow(octokit, context, previousReviewInfo, coreCheckId, results, reviewPhase.reports, reviewPhase.findingObservations, reviewPhase.shouldFailAction, reviewPhase.failureReasons, canResolveStale, gate, triggerErrors);
+        await finalizeWorkflow(octokit, context, previousReviewInfo, coreCheckId, results, reviewPhase.reports, reviewPhase.findingObservations, reviewPhase.shouldFailAction, reviewPhase.failureReasons, canResolveStale, gate, triggerErrors, matchedTriggers, resolvedTriggers);
         (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .handleTriggerErrors */ .a3)(triggerErrors, matchedTriggers.length);
     });
 }
@@ -6497,6 +6549,7 @@ const JsonlChunkRecordSchema = schemas/* object */.Ik({
     error: types/* SkillErrorSchema */.J1.optional(),
     skippedFiles: schemas/* array */.YO(types/* SkippedFileSchema */.AU).optional(),
     trace: types/* HunkTraceSchema */.Ne.optional(),
+    verifierRejections: types/* VerifierRejectionsSchema */.IH.optional(),
 });
 const JsonlLegacyChunkRecordSchema = JsonlChunkRecordSchema.extend({
     usage: types/* UsageStatsSchema */.Ur.optional(),
@@ -6562,6 +6615,7 @@ const JsonlSummaryRecordSchema = schemas/* object */.Ik({
     failedSkills: schemas/* array */.YO(schemas/* string */.Yj()).optional(),
     totalFailedHunks: schemas/* number */.ai().int().nonnegative().optional(),
     totalFailedExtractions: schemas/* number */.ai().int().nonnegative().optional(),
+    totalVerifierRejections: schemas/* number */.ai().int().nonnegative().optional(),
     /**
      * Top-level run error captured before any skill ran (e.g. auth failure,
      * config load error). Skill-level errors live on the SkillRecord; this
@@ -6660,6 +6714,7 @@ function buildSummaryJsonlRecord(reports, run, error) {
     const failedSkills = reports.filter((r) => r.error).map((r) => r.skill);
     const totalFailedHunks = reports.reduce((n, r) => n + (r.failedHunks ?? 0), 0);
     const totalFailedExtractions = reports.reduce((n, r) => n + (r.failedExtractions ?? 0), 0);
+    const totalVerifierRejections = reports.reduce((n, r) => n + (r.verifierRejections?.count ?? 0), 0);
     return {
         run,
         type: 'summary',
@@ -6673,6 +6728,7 @@ function buildSummaryJsonlRecord(reports, run, error) {
         failedSkills: failedSkills.length > 0 ? failedSkills : undefined,
         totalFailedHunks: totalFailedHunks > 0 ? totalFailedHunks : undefined,
         totalFailedExtractions: totalFailedExtractions > 0 ? totalFailedExtractions : undefined,
+        totalVerifierRejections: totalVerifierRejections > 0 ? totalVerifierRejections : undefined,
         error,
     };
 }
@@ -6822,6 +6878,7 @@ function reportsFromChunks(chunks) {
         }
         const failedHunks = analysisChunkRecords.filter((r) => r.status === 'error' && r.error && !isExtractionErrorCode(r.error.code)).length;
         const failedExtractions = analysisChunkRecords.filter((r) => r.status === 'error' && r.error && isExtractionErrorCode(r.error.code)).length;
+        const verifierRejections = aggregateRecords.find((r) => r.verifierRejections)?.verifierRejections;
         const allChunksFailed = analysisChunkRecords.length > 0 &&
             findings.length === 0 &&
             analysisChunkRecords.every((record) => record.status === 'error');
@@ -6851,6 +6908,8 @@ function reportsFromChunks(chunks) {
             report.failedHunks = failedHunks;
         if (failedExtractions > 0)
             report.failedExtractions = failedExtractions;
+        if (verifierRejections)
+            report.verifierRejections = verifierRejections;
         if (hunkFailures.length > 0)
             report.hunkFailures = hunkFailures;
         if (traces.length > 0)
@@ -7224,11 +7283,13 @@ class Reporter {
         let totalFailedHunks = 0;
         let totalFailedExtractions = 0;
         let totalSkippedFiles = 0;
+        let totalVerifierRejections = 0;
         for (const report of reports) {
             allFindings.push(...report.findings);
             totalFailedHunks += report.failedHunks ?? 0;
             totalFailedExtractions += report.failedExtractions ?? 0;
             totalSkippedFiles += report.skippedFiles?.length ?? 0;
+            totalVerifierRejections += report.verifierRejections?.count ?? 0;
         }
         const counts = countBySeverity(allFindings);
         const totalUsage = this.aggregateUsage(reports);
@@ -7247,6 +7308,9 @@ class Reporter {
             }
             if (totalFailedExtractions > 0) {
                 this.log(chalk.yellow(`${figures.warning}  ${totalFailedExtractions} finding ${pluralize(totalFailedExtractions, 'extraction')} failed`));
+            }
+            if (totalVerifierRejections > 0) {
+                this.log(chalk.yellow(`${figures.warning}  ${totalVerifierRejections} ${pluralize(totalVerifierRejections, 'finding')} rejected by verification`));
             }
             if ((totalFailedHunks > 0 || totalFailedExtractions > 0) && this.verbosity < Verbosity.Verbose) {
                 this.log(chalk.dim('  Use -v for failure details'));
@@ -7272,6 +7336,9 @@ class Reporter {
             }
             if (totalFailedExtractions > 0) {
                 this.logPlain(`WARN: ${totalFailedExtractions} finding ${pluralize(totalFailedExtractions, 'extraction')} failed`);
+            }
+            if (totalVerifierRejections > 0) {
+                this.logPlain(`WARN: ${totalVerifierRejections} ${pluralize(totalVerifierRejections, 'finding')} rejected by verification`);
             }
             if ((totalFailedHunks > 0 || totalFailedExtractions > 0) && this.verbosity < Verbosity.Verbose) {
                 this.logPlain('Use -v for failure details');
@@ -8009,6 +8076,9 @@ async function runSkillTask(options, fileConcurrency, callbacks, semaphore) {
             const auxUsage = (0,_sdk_runner_js__WEBPACK_IMPORTED_MODULE_2__/* .aggregateAuxiliaryUsage */ .RL)(allAuxEntries);
             if (auxUsage) {
                 report.auxiliaryUsage = auxUsage;
+            }
+            if (processed.verifierRejections) {
+                report.verifierRejections = processed.verifierRejections;
             }
             span.setAttribute('warden.finding.count', report.findings.length);
             // Emit metrics and log completion
@@ -12420,6 +12490,7 @@ async function runSkillAnalysis(skill, context, options = {}) {
             `This usually indicates an authentication problem. ${allHunksFailedGuidance(options.runtime)}`, { code: 'all_hunks_failed' });
     }
     let finalFindings = allFindings;
+    let verifierRejections;
     if (options.postProcessFindings !== false) {
         const processed = await (0,_post_process_js__WEBPACK_IMPORTED_MODULE_6__/* .postProcessFindings */ .y)(allFindings, {
             skill,
@@ -12439,6 +12510,7 @@ async function runSkillAnalysis(skill, context, options = {}) {
         });
         finalFindings = processed.findings;
         allAuxiliaryUsage.push(...processed.auxiliaryUsage);
+        verifierRejections = processed.verifierRejections;
     }
     // Generate summary
     const summary = generateSummary(skill.name, finalFindings);
@@ -12480,6 +12552,9 @@ async function runSkillAnalysis(skill, context, options = {}) {
     const auxAttribution = (0,_usage_js__WEBPACK_IMPORTED_MODULE_11__/* .aggregateAuxiliaryUsageAttribution */ .UN)(allAuxiliaryUsage);
     if (auxAttribution) {
         report.auxiliaryUsageAttribution = auxAttribution;
+    }
+    if (verifierRejections) {
+        report.verifierRejections = verifierRejections;
     }
     return report;
 }
@@ -13262,6 +13337,7 @@ async function postProcessFindings(findings, options) {
     const uniqueFindings = (0,_extract_js__WEBPACK_IMPORTED_MODULE_1__/* .deduplicateFindings */ .v9)(findings, options.onFindingProcessing);
     (0,_sentry_js__WEBPACK_IMPORTED_MODULE_0__/* .emitDedupMetrics */ .Zn)(options.skill.name, findings.length, uniqueFindings.length);
     let currentFindings = uniqueFindings;
+    let verifierRejections;
     if (options.verifyFindings !== false) {
         const verification = await (0,_verify_js__WEBPACK_IMPORTED_MODULE_2__/* .verifyFindings */ .q)(currentFindings, {
             repoPath: options.repoPath,
@@ -13277,6 +13353,7 @@ async function postProcessFindings(findings, options) {
             onFindingProcessing: options.onFindingProcessing,
         });
         currentFindings = verification.findings;
+        verifierRejections = verification.verifierRejections;
         if (verification.usage) {
             auxiliaryUsage.push({
                 agent: 'verification',
@@ -13304,7 +13381,7 @@ async function postProcessFindings(findings, options) {
             runtime: options.runtime,
         });
     }
-    return { findings: currentFindings, auxiliaryUsage };
+    return { findings: currentFindings, auxiliaryUsage, verifierRejections };
 }
 
 
@@ -14963,7 +15040,10 @@ async function verifyFindings(findings, options) {
                 : null;
             const next = applyVerdict(finding, verdict);
             notifyVerdict(options, finding, verdict, next);
-            return { finding: next ?? undefined, usage: result?.usage };
+            const rejectionReason = verdict?.verdict === 'reject'
+                ? verdict.reason ?? 'No reason provided'
+                : undefined;
+            return { finding: next ?? undefined, usage: result?.usage, rejectionReason };
         }
         catch (error) {
             if (isAbortRequested(error, options.abortController)) {
@@ -14985,9 +15065,15 @@ async function verifyFindings(findings, options) {
     });
     const verified = results.flatMap((result) => result.finding ? [result.finding] : []);
     const usage = results.map((result) => result.usage).filter((u) => u !== undefined);
+    const rejectionReasons = results
+        .map((result) => result.rejectionReason)
+        .filter((reason) => reason !== undefined);
     return {
         findings: verified,
         usage: usage.length > 0 ? (0,_usage_js__WEBPACK_IMPORTED_MODULE_7__/* .aggregateUsage */ .Z$)(usage) : undefined,
+        verifierRejections: rejectionReasons.length > 0
+            ? { count: rejectionReasons.length, reasons: rejectionReasons }
+            : undefined,
     };
 }
 

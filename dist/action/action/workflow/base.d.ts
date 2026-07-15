@@ -101,5 +101,9 @@ export declare function getFindingsOutputPath(repoPath?: string): string;
  */
 export declare function writeFindingsOutput(reports: SkillReport[], context: EventContext, findingObservations?: FindingObservation[], options?: {
     triggerResults?: ReplayTriggerResult[];
+    configuredSkills?: {
+        name: string;
+        triggered: boolean;
+    }[];
 }): string;
 //# sourceMappingURL=base.d.ts.map

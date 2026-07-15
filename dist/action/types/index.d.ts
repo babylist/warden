@@ -252,6 +252,11 @@ export declare const SkillErrorSchema: z.ZodObject<{
     timestamp: z.ZodOptional<z.ZodString>;
 }, z.core.$strip>;
 export type SkillError = z.infer<typeof SkillErrorSchema>;
+export declare const VerifierRejectionsSchema: z.ZodObject<{
+    count: z.ZodNumber;
+    reasons: z.ZodArray<z.ZodString>;
+}, z.core.$strip>;
+export type VerifierRejections = z.infer<typeof VerifierRejectionsSchema>;
 export declare const HunkFailureSchema: z.ZodObject<{
     type: z.ZodEnum<{
         analysis: "analysis";
@@ -483,6 +488,10 @@ export declare const SkillReportSchema: z.ZodObject<{
         }>;
         message: z.ZodString;
         timestamp: z.ZodOptional<z.ZodString>;
+    }, z.core.$strip>>;
+    verifierRejections: z.ZodOptional<z.ZodObject<{
+        count: z.ZodNumber;
+        reasons: z.ZodArray<z.ZodString>;
     }, z.core.$strip>>;
     auxiliaryUsage: z.ZodOptional<z.ZodRecord<z.ZodString, z.ZodObject<{
         inputTokens: z.ZodNumber;
