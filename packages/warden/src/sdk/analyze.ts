@@ -1153,6 +1153,7 @@ async function runSkillAnalysis(
   }
 
   let finalFindings = allFindings;
+  let verifierRejections: { count: number; reasons: string[] } | undefined;
   if (options.postProcessFindings !== false) {
     const processed = await postProcessFindings(allFindings, {
       skill,
@@ -1172,6 +1173,7 @@ async function runSkillAnalysis(
     });
     finalFindings = processed.findings;
     allAuxiliaryUsage.push(...processed.auxiliaryUsage);
+    verifierRejections = processed.verifierRejections;
   }
 
   // Generate summary
@@ -1219,6 +1221,9 @@ async function runSkillAnalysis(
   const auxAttribution = aggregateAuxiliaryUsageAttribution(allAuxiliaryUsage);
   if (auxAttribution) {
     report.auxiliaryUsageAttribution = auxAttribution;
+  }
+  if (verifierRejections) {
+    report.verifierRejections = verifierRejections;
   }
   return report;
 }
