@@ -100,6 +100,33 @@ describe('runSkill verification', () => {
     );
   });
 
+  it('surfaces verifier rejection counts and reasons on the report', async () => {
+    vi.mocked(verifyFindings).mockResolvedValue({
+      findings: [],
+      usage: makeUsage(),
+      verifierRejections: { count: 1, reasons: ['not reproducible'] },
+    });
+
+    const report = await runSkill(makeSkill(), makeContext(), {
+      auxiliaryModel: 'claude-haiku-4-5',
+    });
+
+    expect(report.verifierRejections).toEqual({ count: 1, reasons: ['not reproducible'] });
+  });
+
+  it('omits verifierRejections on the report when nothing is rejected', async () => {
+    vi.mocked(verifyFindings).mockResolvedValue({
+      findings: [],
+      usage: makeUsage(),
+    });
+
+    const report = await runSkill(makeSkill(), makeContext(), {
+      auxiliaryModel: 'claude-haiku-4-5',
+    });
+
+    expect(report.verifierRejections).toBeUndefined();
+  });
+
   it('can skip post-processing for raw skill benchmarks', async () => {
     const report = await runSkill(makeSkill(), makeContext(), {
       postProcessFindings: false,
