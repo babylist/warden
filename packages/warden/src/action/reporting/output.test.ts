@@ -254,11 +254,11 @@ describe('findings output schema', () => {
 });
 
 describe('buildConfiguredSkillsList', () => {
-  it('marks matched skills as triggered and skipped skills as not', () => {
-    const result = buildConfiguredSkillsList(
-      [{ name: 'matched-skill' }],
-      [{ name: 'skipped-skill' }]
-    );
+  it('marks matched skills as triggered and unmatched skills as not', () => {
+    const result = buildConfiguredSkillsList({
+      allTriggers: [{ name: 'matched-skill' }, { name: 'skipped-skill' }],
+      matchedTriggers: [{ name: 'matched-skill' }],
+    });
 
     expect(result).toEqual([
       { name: 'matched-skill', triggered: true },
@@ -267,16 +267,25 @@ describe('buildConfiguredSkillsList', () => {
   });
 
   it('deduplicates multiple trigger blocks for the same skill', () => {
-    const result = buildConfiguredSkillsList(
-      [{ name: 'multi-trigger-skill' }, { name: 'multi-trigger-skill' }],
-      []
-    );
+    const result = buildConfiguredSkillsList({
+      allTriggers: [{ name: 'multi-trigger-skill' }, { name: 'multi-trigger-skill' }],
+      matchedTriggers: [{ name: 'multi-trigger-skill' }],
+    });
 
     expect(result).toEqual([{ name: 'multi-trigger-skill', triggered: true }]);
   });
 
   it('returns an empty list when nothing is configured', () => {
-    expect(buildConfiguredSkillsList([], [])).toEqual([]);
+    expect(buildConfiguredSkillsList({ allTriggers: [], matchedTriggers: [] })).toEqual([]);
+  });
+
+  it('includes a skill whose only trigger is neither matched nor a PR-check skip', () => {
+    const result = buildConfiguredSkillsList({
+      allTriggers: [{ name: 'nightly-sweep' }],
+      matchedTriggers: [],
+    });
+
+    expect(result).toEqual([{ name: 'nightly-sweep', triggered: false }]);
   });
 });
 

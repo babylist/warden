@@ -226,6 +226,40 @@ describe('generateSkillToml', () => {
     expect(triggerSection).toContain('maxTurns = 3');
   });
 
+  it('includes skill-level verification override', () => {
+    const skill: SkillConfig = {
+      name: 'security-review',
+      verification: { enabled: false },
+      triggers: [
+        { type: 'pull_request', actions: ['opened'] },
+      ],
+    };
+
+    const result = generateSkillToml(skill);
+
+    expect(result).toContain('[skills.verification]');
+    expect(result).toContain('enabled = false');
+  });
+
+  it('includes trigger-level verification override', () => {
+    const skill: SkillConfig = {
+      name: 'security-review',
+      triggers: [
+        {
+          type: 'pull_request',
+          actions: ['opened'],
+          verification: { enabled: true },
+        },
+      ],
+    };
+
+    const result = generateSkillToml(skill);
+
+    const triggerSection = result.split('[[skills.triggers]]')[1]!;
+    expect(triggerSection).toContain('[skills.triggers.verification]');
+    expect(triggerSection).toContain('enabled = true');
+  });
+
   it('includes schedule config for schedule triggers', () => {
     const skill: SkillConfig = {
       name: 'weekly-scan',
