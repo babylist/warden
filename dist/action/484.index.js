@@ -2524,6 +2524,7 @@ async function flushSentry(timeoutMs = 2000) {
 /* harmony export */   AU: () => (/* binding */ SkippedFileSchema),
 /* harmony export */   B: () => (/* binding */ SEVERITY_ORDER),
 /* harmony export */   HA: () => (/* binding */ ConfidenceThresholdSchema),
+/* harmony export */   IH: () => (/* binding */ VerifierRejectionsSchema),
 /* harmony export */   J1: () => (/* binding */ SkillErrorSchema),
 /* harmony export */   Lx: () => (/* binding */ compareFindingPriority),
 /* harmony export */   Ne: () => (/* binding */ HunkTraceSchema),
@@ -2778,6 +2779,10 @@ const SkillErrorSchema = zod__WEBPACK_IMPORTED_MODULE_0__/* .object */ .Ik({
     message: zod__WEBPACK_IMPORTED_MODULE_0__/* .string */ .Yj(),
     timestamp: zod__WEBPACK_IMPORTED_MODULE_0__/* .string */ .Yj().datetime().optional(),
 });
+const VerifierRejectionsSchema = zod__WEBPACK_IMPORTED_MODULE_0__/* .object */ .Ik({
+    count: zod__WEBPACK_IMPORTED_MODULE_0__/* .number */ .ai().int().nonnegative(),
+    reasons: zod__WEBPACK_IMPORTED_MODULE_0__/* .array */ .YO(zod__WEBPACK_IMPORTED_MODULE_0__/* .string */ .Yj()),
+});
 // 'analysis' = SDK/auth/abort failure, 'extraction' = parse-tier failure.
 const HunkFailureSchema = zod__WEBPACK_IMPORTED_MODULE_0__/* .object */ .Ik({
     type: zod__WEBPACK_IMPORTED_MODULE_0__/* ["enum"] */ .k5(['analysis', 'extraction']),
@@ -2843,6 +2848,7 @@ const SkillReportSchema = zod__WEBPACK_IMPORTED_MODULE_0__/* .object */ .Ik({
     traces: zod__WEBPACK_IMPORTED_MODULE_0__/* .array */ .YO(HunkTraceSchema).optional(),
     /** Set when the run cannot complete normally. */
     error: SkillErrorSchema.optional(),
+    verifierRejections: VerifierRejectionsSchema.optional(),
     /** Usage from auxiliary LLM calls (extraction repair, semantic dedup, etc.) */
     auxiliaryUsage: AuxiliaryUsageMapSchema.optional(),
     /** Model/runtime attribution for auxiliary LLM usage, keyed like auxiliaryUsage */

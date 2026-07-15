@@ -133,6 +133,36 @@ export declare const FindingsOutputSchema: z.ZodObject<{
             webSearchRequests: z.ZodOptional<z.ZodNumber>;
             costUSD: z.ZodNumber;
         }, z.core.$strip>>;
+        failedHunks: z.ZodOptional<z.ZodNumber>;
+        failedExtractions: z.ZodOptional<z.ZodNumber>;
+        error: z.ZodOptional<z.ZodObject<{
+            code: z.ZodEnum<{
+                unknown: "unknown";
+                auth_failed: "auth_failed";
+                provider_unavailable: "provider_unavailable";
+                sdk_error: "sdk_error";
+                subprocess_failure: "subprocess_failure";
+                max_turns: "max_turns";
+                aborted: "aborted";
+                all_hunks_failed: "all_hunks_failed";
+                invalid_model_selector: "invalid_model_selector";
+                skill_resolution_failed: "skill_resolution_failed";
+                extraction_invalid_json: "extraction_invalid_json";
+                extraction_unbalanced_json: "extraction_unbalanced_json";
+                extraction_no_findings_json: "extraction_no_findings_json";
+                extraction_missing_findings_key: "extraction_missing_findings_key";
+                extraction_findings_not_array: "extraction_findings_not_array";
+                extraction_llm_failed: "extraction_llm_failed";
+                extraction_llm_timeout: "extraction_llm_timeout";
+                extraction_no_api_key: "extraction_no_api_key";
+            }>;
+            message: z.ZodString;
+            timestamp: z.ZodOptional<z.ZodString>;
+        }, z.core.$strip>>;
+        verifierRejections: z.ZodOptional<z.ZodObject<{
+            count: z.ZodNumber;
+            reasons: z.ZodArray<z.ZodString>;
+        }, z.core.$strip>>;
         findings: z.ZodArray<z.ZodObject<{
             id: z.ZodString;
             severity: z.ZodPreprocess<z.ZodEnum<{
@@ -495,6 +525,10 @@ export declare const FindingsOutputSchema: z.ZodObject<{
         }, z.core.$strip>;
         skill: z.ZodOptional<z.ZodString>;
     }, z.core.$strip>], "outcome">>;
+    configuredSkills: z.ZodOptional<z.ZodArray<z.ZodObject<{
+        name: z.ZodString;
+        triggered: z.ZodBoolean;
+    }, z.core.$strip>>>;
 }, z.core.$strip>;
 export type FindingsOutput = z.infer<typeof FindingsOutputSchema>;
 export interface ReplayTriggerResult {
@@ -508,7 +542,22 @@ interface BuildFindingsOutputOptions {
     timestamp?: string;
     runId?: string;
     triggerResults?: ReplayTriggerResult[];
+    configuredSkills?: {
+        name: string;
+        triggered: boolean;
+    }[];
 }
+export declare function buildConfiguredSkillsList({ allTriggers, matchedTriggers, }: {
+    allTriggers: {
+        name: string;
+    }[];
+    matchedTriggers: {
+        name: string;
+    }[];
+}): {
+    name: string;
+    triggered: boolean;
+}[];
 /** Build the public findings export payload. */
 export declare function buildFindingsOutput(reports: SkillReport[], context: EventContext, findingObservations?: FindingObservation[], options?: BuildFindingsOutputOptions): FindingsOutput;
 export {};

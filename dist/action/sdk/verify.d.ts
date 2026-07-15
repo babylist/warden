@@ -1,5 +1,5 @@
 import type { Effort, SkillDefinition } from '../config/schema.js';
-import { type Finding, type UsageStats } from '../types/index.js';
+import { type Finding, type UsageStats, type VerifierRejections } from '../types/index.js';
 import { type RuntimeName } from './runtimes/index.js';
 import type { FindingProcessingEvent } from './types.js';
 import { type PromptPRContext } from './prompt-sections.js';
@@ -19,6 +19,7 @@ export interface VerifyFindingsOptions {
 export interface VerifyFindingsResult {
     findings: Finding[];
     usage?: UsageStats;
+    verifierRejections?: VerifierRejections;
 }
 /**
  * Verify candidate findings with a second read-only repo-aware agent pass.
