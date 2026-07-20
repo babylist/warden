@@ -380,11 +380,15 @@ export function writeFindingsOutput(
   reports: SkillReport[],
   context: EventContext,
   findingObservations: FindingObservation[] = [],
-  options: { triggerResults?: ReplayTriggerResult[] } = {}
+  options: {
+    triggerResults?: ReplayTriggerResult[];
+    configuredSkills?: { name: string; triggered: boolean }[];
+  } = {}
 ): string {
   const filePath = getFindingsOutputPath(context.repoPath);
   const output = buildFindingsOutput(reports, context, findingObservations, {
     triggerResults: options.triggerResults,
+    configuredSkills: options.configuredSkills,
   });
 
   mkdirSync(dirname(filePath), { recursive: true });
