@@ -14,6 +14,7 @@ import {
   analyzeFile,
   aggregateUsage,
   aggregateAuxiliaryUsage,
+  resolveResponseModel,
   postProcessFindings,
   generateSummary,
   type AuxiliaryUsageEntry,
@@ -47,6 +48,7 @@ interface FileProcessResult {
   hunkFailures: HunkFailure[];
   auxiliaryUsage?: AuxiliaryUsageEntry[];
   traces?: HunkTrace[];
+  responseModels?: string[];
 }
 
 function allAnalysisFailuresHaveCode(
@@ -272,6 +274,7 @@ export async function runSkillTask(
       // report.skill when resolveSkill succeeded but a later step threw.
       // Stays undefined only if resolveSkill itself failed.
       let resolvedSkillName: string | undefined;
+      let resolvedModel: string | undefined;
 
       try {
         let skill: SkillDefinition;
@@ -467,6 +470,7 @@ export async function runSkillTask(
             hunkFailures: result.hunkFailures,
             auxiliaryUsage: result.auxiliaryUsage,
             traces: result.traces,
+            responseModels: result.responseModels,
           };
         };
 
@@ -517,6 +521,8 @@ export async function runSkillTask(
         const allUsage = allResults.map((r) => r.usage).filter((u): u is UsageStats => u !== undefined);
         const allAuxEntries = allResults.flatMap((r) => r.auxiliaryUsage ?? []);
         const allTraces = allResults.flatMap((r) => r.traces ?? []);
+        const allResponseModels = allResults.flatMap((r) => r.responseModels ?? []);
+        resolvedModel = resolveResponseModel(allResponseModels, runnerOptions?.model);
         const totalFailedHunks = allResults.reduce((sum, r) => sum + r.failedHunks, 0);
         const totalFailedExtractions = allResults.reduce((sum, r) => sum + r.failedExtractions, 0);
         const allHunkFailures: HunkFailure[] = allResults.flatMap((r) => r.hunkFailures);
@@ -554,7 +560,7 @@ export async function runSkillTask(
             findings: [],
             usage: aggregateUsage(allUsage),
             durationMs: duration,
-            model: runnerOptions?.model,
+            model: resolvedModel,
             runtime,
             // Preserve per-file metadata (timing, partial usage, attempted
             // filenames) on failure runs too — `warden runs` and JSONL
@@ -627,7 +633,7 @@ export async function runSkillTask(
           findings: finalFindings,
           usage: aggregateUsage(allUsage),
           durationMs: duration,
-          model: runnerOptions?.model,
+          model: resolvedModel,
           runtime,
           files: buildFileReports(
             preparedFiles.map((file, i) => {
@@ -692,7 +698,7 @@ export async function runSkillTask(
           summary: `${skillName}: failed (${code})`,
           findings: [],
           durationMs: Date.now() - startTime,
-          model: runnerOptions?.model,
+          model: resolvedModel ?? runnerOptions?.model,
           runtime,
           error: { code, message, timestamp: new Date().toISOString() },
         };
