@@ -206,7 +206,6 @@ export declare const FileReportSchema: z.ZodPreprocess<z.ZodObject<{
 }, z.core.$strip>>;
 export type FileReport = z.infer<typeof FileReportSchema>;
 export declare const ErrorCodeSchema: z.ZodEnum<{
-    unknown: "unknown";
     auth_failed: "auth_failed";
     provider_unavailable: "provider_unavailable";
     sdk_error: "sdk_error";
@@ -224,12 +223,12 @@ export declare const ErrorCodeSchema: z.ZodEnum<{
     extraction_llm_failed: "extraction_llm_failed";
     extraction_llm_timeout: "extraction_llm_timeout";
     extraction_no_api_key: "extraction_no_api_key";
+    unknown: "unknown";
 }>;
 export type ErrorCode = z.infer<typeof ErrorCodeSchema>;
 export declare function isExtractionErrorCode(code: ErrorCode): boolean;
 export declare const SkillErrorSchema: z.ZodObject<{
     code: z.ZodEnum<{
-        unknown: "unknown";
         auth_failed: "auth_failed";
         provider_unavailable: "provider_unavailable";
         sdk_error: "sdk_error";
@@ -247,6 +246,7 @@ export declare const SkillErrorSchema: z.ZodObject<{
         extraction_llm_failed: "extraction_llm_failed";
         extraction_llm_timeout: "extraction_llm_timeout";
         extraction_no_api_key: "extraction_no_api_key";
+        unknown: "unknown";
     }>;
     message: z.ZodString;
     timestamp: z.ZodOptional<z.ZodString>;
@@ -265,7 +265,6 @@ export declare const HunkFailureSchema: z.ZodObject<{
     filename: z.ZodString;
     lineRange: z.ZodString;
     code: z.ZodEnum<{
-        unknown: "unknown";
         auth_failed: "auth_failed";
         provider_unavailable: "provider_unavailable";
         sdk_error: "sdk_error";
@@ -283,6 +282,7 @@ export declare const HunkFailureSchema: z.ZodObject<{
         extraction_llm_failed: "extraction_llm_failed";
         extraction_llm_timeout: "extraction_llm_timeout";
         extraction_no_api_key: "extraction_no_api_key";
+        unknown: "unknown";
     }>;
     message: z.ZodString;
     preview: z.ZodOptional<z.ZodString>;
@@ -415,7 +415,6 @@ export declare const SkillReportSchema: z.ZodObject<{
         filename: z.ZodString;
         lineRange: z.ZodString;
         code: z.ZodEnum<{
-            unknown: "unknown";
             auth_failed: "auth_failed";
             provider_unavailable: "provider_unavailable";
             sdk_error: "sdk_error";
@@ -433,6 +432,7 @@ export declare const SkillReportSchema: z.ZodObject<{
             extraction_llm_failed: "extraction_llm_failed";
             extraction_llm_timeout: "extraction_llm_timeout";
             extraction_no_api_key: "extraction_no_api_key";
+            unknown: "unknown";
         }>;
         message: z.ZodString;
         preview: z.ZodOptional<z.ZodString>;
@@ -467,7 +467,6 @@ export declare const SkillReportSchema: z.ZodObject<{
     }, z.core.$strip>>>;
     error: z.ZodOptional<z.ZodObject<{
         code: z.ZodEnum<{
-            unknown: "unknown";
             auth_failed: "auth_failed";
             provider_unavailable: "provider_unavailable";
             sdk_error: "sdk_error";
@@ -485,6 +484,7 @@ export declare const SkillReportSchema: z.ZodObject<{
             extraction_llm_failed: "extraction_llm_failed";
             extraction_llm_timeout: "extraction_llm_timeout";
             extraction_no_api_key: "extraction_no_api_key";
+            unknown: "unknown";
         }>;
         message: z.ZodString;
         timestamp: z.ZodOptional<z.ZodString>;
