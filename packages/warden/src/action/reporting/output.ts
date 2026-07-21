@@ -125,6 +125,7 @@ interface BuildFindingsOutputOptions {
   configuredSkills?: { name: string; triggered: boolean }[];
 }
 
+/** Build the configured-skills roster, deduping by name since a skill's multiple trigger blocks (e.g. PR + schedule) share one name. */
 export function buildConfiguredSkillsList({
   allTriggers,
   matchedTriggers,
