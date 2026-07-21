@@ -2124,7 +2124,6 @@ _runner_js__WEBPACK_IMPORTED_MODULE_2__ = (__webpack_async_dependencies__.then ?
         console.error(`::error::${error.message}`);
     }
     else {
-        _sentry_js__WEBPACK_IMPORTED_MODULE_0__/* .Sentry.captureException */ .sQ.captureException(error);
         console.error(`::error::Unexpected error: ${error}`);
     }
     await (0,_sentry_js__WEBPACK_IMPORTED_MODULE_0__/* .flushSentry */ .KR)();
@@ -2143,14 +2142,16 @@ __webpack_require__.a(module, async (__webpack_handle_async_dependencies__, __we
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   C: () => (/* binding */ runAction)
 /* harmony export */ });
-/* harmony import */ var _octokit_rest__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(5798);
-/* harmony import */ var _sentry_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(30340);
-/* harmony import */ var _inputs_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(93857);
-/* harmony import */ var _workflow_base_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(53537);
-/* harmony import */ var _workflow_pr_workflow_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(39422);
-/* harmony import */ var _workflow_schedule_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(30517);
-var __webpack_async_dependencies__ = __webpack_handle_async_dependencies__([_workflow_pr_workflow_js__WEBPACK_IMPORTED_MODULE_3__, _workflow_schedule_js__WEBPACK_IMPORTED_MODULE_4__]);
-([_workflow_pr_workflow_js__WEBPACK_IMPORTED_MODULE_3__, _workflow_schedule_js__WEBPACK_IMPORTED_MODULE_4__] = __webpack_async_dependencies__.then ? (await __webpack_async_dependencies__)() : __webpack_async_dependencies__);
+/* harmony import */ var _octokit_rest__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(5798);
+/* harmony import */ var _sentry_core__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(40186);
+/* harmony import */ var _sdk_errors_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(98229);
+/* harmony import */ var _sentry_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(30340);
+/* harmony import */ var _inputs_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(93857);
+/* harmony import */ var _workflow_base_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(53537);
+/* harmony import */ var _workflow_pr_workflow_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(39422);
+/* harmony import */ var _workflow_schedule_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(30517);
+var __webpack_async_dependencies__ = __webpack_handle_async_dependencies__([_workflow_pr_workflow_js__WEBPACK_IMPORTED_MODULE_4__, _workflow_schedule_js__WEBPACK_IMPORTED_MODULE_5__]);
+([_workflow_pr_workflow_js__WEBPACK_IMPORTED_MODULE_4__, _workflow_schedule_js__WEBPACK_IMPORTED_MODULE_5__] = __webpack_async_dependencies__.then ? (await __webpack_async_dependencies__)() : __webpack_async_dependencies__);
 /**
  * GitHub Action dispatcher.
  *
@@ -2163,33 +2164,65 @@ var __webpack_async_dependencies__ = __webpack_handle_async_dependencies__([_wor
 
 
 
+
+
 function isPullRequestEvent(eventName) {
     return eventName === 'pull_request';
 }
 /** Run the GitHub Action dispatcher once. */
 async function runAction() {
-    const inputs = (0,_inputs_js__WEBPACK_IMPORTED_MODULE_1__/* .parseActionInputs */ .HC)();
-    (0,_inputs_js__WEBPACK_IMPORTED_MODULE_1__/* .validateInputs */ .C1)(inputs);
     const eventName = process.env['GITHUB_EVENT_NAME'];
-    const eventPath = process.env['GITHUB_EVENT_PATH'];
-    const repoPath = process.env['GITHUB_WORKSPACE'];
-    if (!eventName || !eventPath || !repoPath) {
-        (0,_workflow_base_js__WEBPACK_IMPORTED_MODULE_2__/* .setFailed */ .C1)('This action must be run in a GitHub Actions environment');
-    }
-    (0,_sentry_js__WEBPACK_IMPORTED_MODULE_0__/* .setGitHubActionScope */ .gs)(eventName);
-    (0,_sentry_js__WEBPACK_IMPORTED_MODULE_0__/* .setRepositoryScope */ .vx)(process.env['GITHUB_REPOSITORY']);
-    (0,_inputs_js__WEBPACK_IMPORTED_MODULE_1__/* .setupAuthEnv */ .Tw)(inputs);
-    const octokit = new _octokit_rest__WEBPACK_IMPORTED_MODULE_5__/* .Octokit */ .E({ auth: inputs.githubToken });
-    if (eventName === 'schedule' || eventName === 'workflow_dispatch') {
-        if (inputs.mode !== 'run') {
-            (0,_workflow_base_js__WEBPACK_IMPORTED_MODULE_2__/* .setFailed */ .C1)(`${inputs.mode} mode is only supported for pull request workflows`);
+    const actionAttributes = (0,_sentry_js__WEBPACK_IMPORTED_MODULE_1__/* .setGitHubActionScope */ .gs)(eventName);
+    return _sentry_js__WEBPACK_IMPORTED_MODULE_1__/* .Sentry.startSpan */ .sQ.startSpan({ op: 'cicd.workflow', name: 'run Warden action', attributes: actionAttributes }, async (span) => {
+        // Advance this before each phase so failures retain their startup stage.
+        let stage = 'input';
+        try {
+            const inputs = (0,_inputs_js__WEBPACK_IMPORTED_MODULE_2__/* .parseActionInputs */ .HC)();
+            (0,_inputs_js__WEBPACK_IMPORTED_MODULE_2__/* .validateInputs */ .C1)(inputs);
+            stage = 'environment';
+            const eventPath = process.env['GITHUB_EVENT_PATH'];
+            const repoPath = process.env['GITHUB_WORKSPACE'];
+            if (!eventName || !eventPath || !repoPath) {
+                (0,_workflow_base_js__WEBPACK_IMPORTED_MODULE_3__/* .setFailed */ .C1)('This action must be run in a GitHub Actions environment');
+            }
+            (0,_inputs_js__WEBPACK_IMPORTED_MODULE_2__/* .setupAuthEnv */ .Tw)(inputs);
+            const octokit = new _octokit_rest__WEBPACK_IMPORTED_MODULE_6__/* .Octokit */ .E({ auth: inputs.githubToken });
+            stage = 'dispatch';
+            if (eventName === 'schedule' || eventName === 'workflow_dispatch') {
+                if (inputs.mode !== 'run') {
+                    (0,_workflow_base_js__WEBPACK_IMPORTED_MODULE_3__/* .setFailed */ .C1)(`${inputs.mode} mode is only supported for pull request workflows`);
+                }
+                await (0,_workflow_schedule_js__WEBPACK_IMPORTED_MODULE_5__/* .runScheduleWorkflow */ .y)(octokit, inputs, repoPath);
+            }
+            else {
+                if (inputs.mode !== 'run' && !isPullRequestEvent(eventName)) {
+                    (0,_workflow_base_js__WEBPACK_IMPORTED_MODULE_3__/* .setFailed */ .C1)(`${inputs.mode} mode is only supported for pull request workflows`);
+                }
+                await (0,_workflow_pr_workflow_js__WEBPACK_IMPORTED_MODULE_4__/* .runPRWorkflow */ .r)(octokit, inputs, eventName, eventPath, repoPath);
+            }
+            span.setAttribute('warden.action.outcome', 'success');
+            span.setStatus({ code: _sentry_core__WEBPACK_IMPORTED_MODULE_7__/* .SPAN_STATUS_OK */ .F3 });
+            (0,_sentry_js__WEBPACK_IMPORTED_MODULE_1__/* .emitActionRunMetric */ .B4)('success', stage);
         }
-        return (0,_workflow_schedule_js__WEBPACK_IMPORTED_MODULE_4__/* .runScheduleWorkflow */ .y)(octokit, inputs, repoPath);
-    }
-    if (inputs.mode !== 'run' && !isPullRequestEvent(eventName)) {
-        (0,_workflow_base_js__WEBPACK_IMPORTED_MODULE_2__/* .setFailed */ .C1)(`${inputs.mode} mode is only supported for pull request workflows`);
-    }
-    return (0,_workflow_pr_workflow_js__WEBPACK_IMPORTED_MODULE_3__/* .runPRWorkflow */ .r)(octokit, inputs, eventName, eventPath, repoPath);
+        catch (error) {
+            const { code } = (0,_sdk_errors_js__WEBPACK_IMPORTED_MODULE_0__/* .classifyError */ .fe)(error);
+            span.setAttribute('warden.action.outcome', 'failure');
+            span.setAttribute('warden.action.stage', stage);
+            span.setAttribute('warden.error.code', code);
+            span.setStatus({ code: _sentry_core__WEBPACK_IMPORTED_MODULE_7__/* .SPAN_STATUS_ERROR */ .TJ, message: code });
+            (0,_sentry_js__WEBPACK_IMPORTED_MODULE_1__/* .emitActionRunMetric */ .B4)('failure', stage, code);
+            // Expected action failures are outcomes, not Sentry Issues.
+            if (!(error instanceof _workflow_base_js__WEBPACK_IMPORTED_MODULE_3__/* .ActionFailedError */ .Ah)) {
+                _sentry_js__WEBPACK_IMPORTED_MODULE_1__/* .Sentry.captureException */ .sQ.captureException(error, {
+                    tags: {
+                        'warden.error.code': code,
+                        'warden.action.stage': stage,
+                    },
+                });
+            }
+            throw error;
+        }
+    });
 }
 
 __webpack_async_result__();
@@ -7714,6 +7747,7 @@ async function runSkillTask(options, fileConcurrency, callbacks, semaphore) {
         // report.skill when resolveSkill succeeded but a later step threw.
         // Stays undefined only if resolveSkill itself failed.
         let resolvedSkillName;
+        let resolvedModel;
         try {
             let skill;
             try {
@@ -7944,7 +7978,7 @@ async function runSkillTask(options, fileConcurrency, callbacks, semaphore) {
             const allAuxEntries = allResults.flatMap((r) => r.auxiliaryUsage ?? []);
             const allTraces = allResults.flatMap((r) => r.traces ?? []);
             const allResponseModels = allResults.flatMap((r) => r.responseModels ?? []);
-            const resolvedModel = (0,_sdk_runner_js__WEBPACK_IMPORTED_MODULE_2__/* .resolveResponseModel */ .X5)(allResponseModels, runnerOptions?.model);
+            resolvedModel = (0,_sdk_runner_js__WEBPACK_IMPORTED_MODULE_2__/* .resolveResponseModel */ .X5)(allResponseModels, runnerOptions?.model);
             const totalFailedHunks = allResults.reduce((sum, r) => sum + r.failedHunks, 0);
             const totalFailedExtractions = allResults.reduce((sum, r) => sum + r.failedExtractions, 0);
             const allHunkFailures = allResults.flatMap((r) => r.hunkFailures);
@@ -8113,7 +8147,7 @@ async function runSkillTask(options, fileConcurrency, callbacks, semaphore) {
                 summary: `${skillName}: failed (${code})`,
                 findings: [],
                 durationMs: Date.now() - startTime,
-                model: runnerOptions?.model,
+                model: resolvedModel ?? runnerOptions?.model,
                 runtime,
                 error: { code, message, timestamp: new Date().toISOString() },
             };
@@ -8855,6 +8889,7 @@ function triggerIdentity(skill, trigger) {
         failCheck: trigger?.failCheck ?? skill.failCheck,
         model: trigger?.model ?? skill.model,
         maxTurns: trigger?.maxTurns ?? skill.maxTurns,
+        verification: trigger?.verification?.enabled ?? skill.verification?.enabled,
         minConfidence: trigger?.minConfidence ?? skill.minConfidence,
         type: trigger?.type ?? '*',
         actions: trigger?.actions,

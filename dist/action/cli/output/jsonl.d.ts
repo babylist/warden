@@ -85,8 +85,8 @@ export declare const JsonlChunkRecordSchema: z.ZodObject<{
     }, z.core.$strip>;
     status: z.ZodEnum<{
         error: "error";
-        skipped: "skipped";
         ok: "ok";
+        skipped: "skipped";
     }>;
     findings: z.ZodArray<z.ZodObject<{
         id: z.ZodString;
