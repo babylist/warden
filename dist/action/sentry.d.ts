@@ -1,15 +1,18 @@
 import * as Sentry from '@sentry/node';
-import type { SkillReport } from './types/index.js';
+import type { NodeOptions } from '@sentry/node';
+import type { ErrorCode, SkillReport } from './types/index.js';
 export type SentryContext = 'cli' | 'action';
+type SentryInitOptions = Pick<NodeOptions, 'beforeSend' | 'beforeSendTransaction' | 'transport'>;
 type TelemetryAttributes = Record<string, string | number | boolean>;
-export declare function initSentry(context: SentryContext): void;
+/** Initialize production telemetry, with optional SDK hooks for local observation. */
+export declare function initSentry(context: SentryContext, options?: SentryInitOptions): void;
 /** Ensure local span objects are materialized for structured trace output. */
 export declare function ensureLocalTracing(): void;
 export { Sentry };
 export declare const logger: typeof Sentry.logger;
 /**
  * Set attributes on the global Sentry scope.
- * These automatically apply to ALL metrics and spans.
+ * These apply to logs and metrics. Pass them explicitly when starting spans.
  */
 export declare function setGlobalAttributes(attrs: TelemetryAttributes): void;
 /**
@@ -17,9 +20,10 @@ export declare function setGlobalAttributes(attrs: TelemetryAttributes): void;
  */
 export declare function setRepositoryScope(repository: string | undefined): void;
 /**
- * Set GitHub Actions metadata on the global Sentry scope.
+ * Set GitHub Actions metadata on the global Sentry scope and return the
+ * attributes that must be passed explicitly to the action's root span.
  */
-export declare function setGitHubActionScope(eventName: string | undefined): void;
+export declare function setGitHubActionScope(eventName: string | undefined): TelemetryAttributes;
 /**
  * Get the trace ID from the active span, if available.
  * Useful for correlating runs to Sentry traces in logs and output.
@@ -30,6 +34,8 @@ export declare function getTraceId(): string | undefined;
  * Inherits warden.source, repository, and GitHub Actions attributes from global scope.
  */
 export declare function emitRunMetric(): void;
+/** Emit the final outcome of a GitHub Action invocation, including startup failures. */
+export declare function emitActionRunMetric(outcome: 'success' | 'failure', stage: 'input' | 'environment' | 'dispatch', errorCode?: ErrorCode): void;
 export declare function emitSkillMetrics(report: SkillReport): void;
 export declare function emitExtractionMetrics(skill: string, method: 'regex' | 'llm' | 'none', count: number): void;
 export declare function emitFixEvalMetrics(evaluated: number, resolved: number, failed: number, skipped: number, uniqueFindingsEvaluated: number, uniqueFindingsCodeChanged: number, uniqueFindingsResolved: number): void;

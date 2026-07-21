@@ -2168,6 +2168,7 @@ function startTraceRecorder(parentSpan) {
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   B4: () => (/* binding */ emitActionRunMetric),
 /* harmony export */   E1: () => (/* binding */ emitFixEvalVerdictMetric),
 /* harmony export */   G_: () => (/* binding */ ensureLocalTracing),
 /* harmony export */   KR: () => (/* binding */ flushSentry),
@@ -2207,7 +2208,24 @@ function getGitHubServerUrl() {
     const serverUrl = process.env['GITHUB_SERVER_URL'] || 'https://github.com';
     return serverUrl.replace(/\/+$/, '');
 }
-function initSentry(context) {
+function repositoryAttributes(repository) {
+    const [owner, name] = repository.split('/');
+    const attrs = name
+        ? {
+            'vcs.owner.name': owner ?? '',
+            'vcs.repository.name': name,
+        }
+        : {
+            'vcs.repository.name': repository,
+        };
+    if (owner && name && owner !== 'local') {
+        attrs['vcs.provider.name'] = 'github';
+        attrs['vcs.repository.url.full'] = `${getGitHubServerUrl()}/${owner}/${name}`;
+    }
+    return attrs;
+}
+/** Initialize production telemetry, with optional SDK hooks for local observation. */
+function initSentry(context, options = {}) {
     const dsn = process.env['WARDEN_SENTRY_DSN'];
     if (!dsn || initialized)
         return;
@@ -2218,6 +2236,7 @@ function initSentry(context) {
         environment: context === 'action' ? 'github-action' : 'cli',
         tracesSampleRate: 1.0,
         enableLogs: true,
+        ...options,
         integrations: [
             _sentry_node__WEBPACK_IMPORTED_MODULE_5__/* .consoleLoggingIntegration */ .d({ levels: ['warn', 'error'] }),
             _sentry_node__WEBPACK_IMPORTED_MODULE_6__/* .anthropicAIIntegration */ .v({ recordInputs: true, recordOutputs: true }),
@@ -2245,7 +2264,7 @@ function ensureLocalTracing() {
 const { logger } = _sentry_node__WEBPACK_IMPORTED_MODULE_10__;
 /**
  * Set attributes on the global Sentry scope.
- * These automatically apply to ALL metrics and spans.
+ * These apply to logs and metrics. Pass them explicitly when starting spans.
  */
 function setGlobalAttributes(attrs) {
     if (!initialized)
@@ -2263,32 +2282,26 @@ function setGlobalAttributes(attrs) {
 function setRepositoryScope(repository) {
     if (!repository || !initialized)
         return;
-    const [owner, name] = repository.split('/');
-    const attrs = name
-        ? {
-            'vcs.owner.name': owner ?? '',
-            'vcs.repository.name': name,
-        }
-        : {
-            'vcs.repository.name': repository,
-        };
-    if (owner && name && owner !== 'local') {
-        const serverUrl = getGitHubServerUrl();
-        attrs['vcs.provider.name'] = 'github';
-        attrs['vcs.repository.url.full'] = `${serverUrl}/${owner}/${name}`;
+    const attrs = repositoryAttributes(repository);
+    try {
+        _sentry_node__WEBPACK_IMPORTED_MODULE_8__/* .setTag */ .NA('repository', repository);
+    }
+    catch {
+        // Never break the workflow
     }
     setGlobalAttributes(attrs);
 }
 /**
- * Set GitHub Actions metadata on the global Sentry scope.
+ * Set GitHub Actions metadata on the global Sentry scope and return the
+ * attributes that must be passed explicitly to the action's root span.
  */
 function setGitHubActionScope(eventName) {
-    if (!initialized)
-        return;
     const repository = process.env['GITHUB_REPOSITORY'];
     const runId = process.env['GITHUB_RUN_ID'];
     const serverUrl = getGitHubServerUrl();
     const attrs = {};
+    if (repository)
+        Object.assign(attrs, repositoryAttributes(repository));
     if (eventName) {
         attrs['github.event.name'] = eventName;
     }
@@ -2304,9 +2317,38 @@ function setGitHubActionScope(eventName) {
     if (process.env['GITHUB_JOB']) {
         attrs['cicd.pipeline.task.name'] = process.env['GITHUB_JOB'];
     }
-    if (Object.keys(attrs).length > 0) {
-        setGlobalAttributes(attrs);
+    if (!initialized)
+        return attrs;
+    setGlobalAttributes(attrs);
+    try {
+        if (repository)
+            _sentry_node__WEBPACK_IMPORTED_MODULE_8__/* .setTag */ .NA('repository', repository);
+        if (eventName)
+            _sentry_node__WEBPACK_IMPORTED_MODULE_8__/* .setTag */ .NA('github.event.name', eventName);
+        if (process.env['GITHUB_WORKFLOW']) {
+            _sentry_node__WEBPACK_IMPORTED_MODULE_8__/* .setTag */ .NA('cicd.pipeline.name', process.env['GITHUB_WORKFLOW']);
+        }
+        if (runId)
+            _sentry_node__WEBPACK_IMPORTED_MODULE_8__/* .setTag */ .NA('cicd.pipeline.run.id', runId);
+        if (process.env['GITHUB_JOB']) {
+            _sentry_node__WEBPACK_IMPORTED_MODULE_8__/* .setTag */ .NA('cicd.pipeline.task.name', process.env['GITHUB_JOB']);
+        }
+        _sentry_node__WEBPACK_IMPORTED_MODULE_8__/* .setContext */ .o('github_actions', {
+            repository,
+            event: eventName,
+            workflow: process.env['GITHUB_WORKFLOW'],
+            job: process.env['GITHUB_JOB'],
+            run_id: runId,
+            run_attempt: process.env['GITHUB_RUN_ATTEMPT'],
+            run_url: repository && runId ? `${serverUrl}/${repository}/actions/runs/${runId}` : undefined,
+            ref: process.env['GITHUB_REF'],
+            sha: process.env['GITHUB_SHA'],
+        });
     }
+    catch {
+        // Never break the workflow
+    }
+    return attrs;
 }
 /**
  * Get the trace ID from the active span, if available.
@@ -2409,6 +2451,18 @@ function emitCostComponentMetrics(attrs, model, usage) {
 function emitRunMetric() {
     safeEmit(() => {
         _sentry_node__WEBPACK_IMPORTED_MODULE_11__.count('warden.workflow.runs', 1);
+    });
+}
+/** Emit the final outcome of a GitHub Action invocation, including startup failures. */
+function emitActionRunMetric(outcome, stage, errorCode) {
+    safeEmit(() => {
+        const attrs = {
+            'warden.action.outcome': outcome,
+            'warden.action.stage': stage,
+        };
+        if (errorCode)
+            attrs['warden.error.code'] = errorCode;
+        _sentry_node__WEBPACK_IMPORTED_MODULE_11__.count('warden.action.runs', 1, { attributes: attrs });
     });
 }
 function emitSkillMetrics(report) {
