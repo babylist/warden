@@ -250,6 +250,12 @@ describe('findings output schema', () => {
     expect(output.skills[0]?.failedExtractions).toBeUndefined();
     expect(output.skills[0]?.error).toBeUndefined();
     expect(output.skills[0]?.verifierRejections).toBeUndefined();
+
+    const serialized = JSON.parse(JSON.stringify(output.skills[0]));
+    expect('failedHunks' in serialized).toBe(false);
+    expect('failedExtractions' in serialized).toBe(false);
+    expect('error' in serialized).toBe(false);
+    expect('verifierRejections' in serialized).toBe(false);
   });
 });
 
