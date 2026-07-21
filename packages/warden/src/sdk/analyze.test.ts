@@ -839,6 +839,46 @@ describe('runSkill', () => {
     expect(report.model).toBe('configured-alias');
   });
 
+  it('attributes each skill its own response model when multiple skills run concurrently', async () => {
+    const modelBySkill: Record<string, string> = {
+      'skill-a': 'model-a',
+      'skill-b': 'model-b',
+      'skill-c': 'model-c',
+    };
+    const runSkillMock = vi.fn(async ({ skillName }: { skillName: string }) => ({
+      result: {
+        status: 'success',
+        text: JSON.stringify({ findings: [] }),
+        errors: [],
+        usage: makeUsage(),
+        responseModel: modelBySkill[skillName],
+      },
+    }));
+    vi.mocked(getRuntime).mockReturnValue({
+      name: 'claude',
+      runSkill: runSkillMock,
+      runAuxiliary: vi.fn(),
+      runSynthesis: vi.fn(),
+    } as unknown as Runtime);
+
+    const [reportA, reportB, reportC] = await Promise.all(
+      Object.keys(modelBySkill).map((skillName) =>
+        runSkill(
+          { name: skillName, description: `${skillName} description.`, prompt: 'Return findings as JSON.' },
+          makeContextWithOneHunk(),
+          {},
+        )
+      )
+    );
+
+    expect(reportA!.skill).toBe('skill-a');
+    expect(reportA!.model).toBe('model-a');
+    expect(reportB!.skill).toBe('skill-b');
+    expect(reportB!.model).toBe('model-b');
+    expect(reportC!.skill).toBe('skill-c');
+    expect(reportC!.model).toBe('model-c');
+  });
+
   it('preserves candidate findings when verification is interrupted', async () => {
     const controller = new AbortController();
     const runSkillMock = vi.fn()
