@@ -722,6 +722,76 @@ describe('runSkill', () => {
     expect(report.runtime).toBe('pi');
   });
 
+  it('reports the model that actually answered when no model override is configured', async () => {
+    const runSkillMock = vi.fn().mockResolvedValue({
+      result: {
+        status: 'success',
+        text: JSON.stringify({ findings: [] }),
+        errors: [],
+        usage: makeUsage(),
+        responseModel: 'claude-sonnet-4-5-20260929',
+      },
+    });
+    vi.mocked(getRuntime).mockReturnValue({
+      name: 'claude',
+      runSkill: runSkillMock,
+      runAuxiliary: vi.fn(),
+      runSynthesis: vi.fn(),
+    } as unknown as Runtime);
+
+    const report = await runSkill(
+      {
+        name: 'security-review',
+        description: 'Security review.',
+        prompt: 'Return findings as JSON.',
+      },
+      makeContextWithOneHunk(),
+      {},
+    );
+
+    expect(report.model).toBe('claude-sonnet-4-5-20260929');
+  });
+
+  it('falls back to the configured model when hunks report different response models', async () => {
+    const runSkillMock = vi.fn()
+      .mockResolvedValueOnce({
+        result: {
+          status: 'success',
+          text: JSON.stringify({ findings: [] }),
+          errors: [],
+          usage: makeUsage(),
+          responseModel: 'claude-sonnet-4-5-20260929',
+        },
+      })
+      .mockResolvedValueOnce({
+        result: {
+          status: 'success',
+          text: JSON.stringify({ findings: [] }),
+          errors: [],
+          usage: makeUsage(),
+          responseModel: 'claude-opus-4-8-20260601',
+        },
+      });
+    vi.mocked(getRuntime).mockReturnValue({
+      name: 'claude',
+      runSkill: runSkillMock,
+      runAuxiliary: vi.fn(),
+      runSynthesis: vi.fn(),
+    } as unknown as Runtime);
+
+    const report = await runSkill(
+      {
+        name: 'security-review',
+        description: 'Security review.',
+        prompt: 'Return findings as JSON.',
+      },
+      makeContextWithTwoHunks(),
+      { model: 'configured-alias' },
+    );
+
+    expect(report.model).toBe('configured-alias');
+  });
+
   it('preserves candidate findings when verification is interrupted', async () => {
     const controller = new AbortController();
     const runSkillMock = vi.fn()

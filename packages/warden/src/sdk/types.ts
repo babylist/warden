@@ -48,6 +48,7 @@ export interface HunkAnalysisResult {
   auxiliaryUsage?: AuxiliaryUsageEntry[];
   /** Optional runtime trace captured for this hunk. */
   trace?: HunkTrace;
+  responseModel?: string;
 }
 
 /** Result from one completed chunk, suitable for durable run logging. */
@@ -223,6 +224,7 @@ export interface FileAnalysisResult {
   auxiliaryUsage?: AuxiliaryUsageEntry[];
   /** Optional runtime traces captured for analyzed hunks. */
   traces?: HunkTrace[];
+  responseModels?: string[];
 }
 
 /**

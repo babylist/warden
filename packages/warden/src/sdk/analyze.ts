@@ -6,7 +6,7 @@ import { Sentry, emitExtractionMetrics, emitRetryMetric, emitSkillMetrics, ensur
 import { SkillRunnerError, WardenAuthenticationError, isRetryableError, isAuthenticationError, isAuthenticationErrorMessage, isSubprocessError, classifyError, mapExtractionErrorCode, sanitizeErrorMessage } from './errors.js';
 import type { CircuitBreakerReason } from './circuit-breaker.js';
 import { DEFAULT_RETRY_CONFIG, calculateRetryDelay, sleep } from './retry.js';
-import { aggregateUsage, emptyUsage, estimateTokens, aggregateAuxiliaryUsage, aggregateAuxiliaryUsageAttribution } from './usage.js';
+import { aggregateUsage, emptyUsage, estimateTokens, aggregateAuxiliaryUsage, aggregateAuxiliaryUsageAttribution, resolveResponseModel } from './usage.js';
 import { buildHunkSystemPrompt, buildHunkUserPrompt, type PRPromptContext } from './prompt.js';
 import { extractFindingsJson, extractFindingsWithLLM, validateFindings } from './extract.js';
 import { postProcessFindings } from './post-process.js';
@@ -483,6 +483,7 @@ async function analyzeHunk(
               failureCode,
               failureMessage,
               attempts: attempt + 1,
+              responseModel: resultMessage.responseModel,
               trace: buildHunkTrace({
                 enabled: options.captureTraces,
                 span,
@@ -557,6 +558,7 @@ async function analyzeHunk(
                   runtime: runtimeName,
                 }]
               : undefined,
+            responseModel: resultMessage.responseModel,
             trace: buildHunkTrace({
               enabled: options.captureTraces,
               span,
@@ -784,6 +786,7 @@ export async function analyzeFile(
       const fileAuxiliaryUsage: AuxiliaryUsageEntry[] = [];
       const hunkFailures: HunkFailure[] = [];
       const hunkTraces: HunkTrace[] = [];
+      const fileResponseModels: string[] = [];
       let failedHunks = 0;
       let failedExtractions = 0;
 
@@ -841,6 +844,9 @@ export async function analyzeFile(
         if (result.trace) {
           hunkTraces.push(result.trace);
         }
+        if (result.responseModel) {
+          fileResponseModels.push(result.responseModel);
+        }
         const chunkResult: ChunkAnalysisResult = {
           filename: file.filename,
           model: options.model,
@@ -881,6 +887,7 @@ export async function analyzeFile(
         hunkFailures,
         auxiliaryUsage: fileAuxiliaryUsage.length > 0 ? fileAuxiliaryUsage : undefined,
         traces: hunkTraces.length > 0 ? hunkTraces : undefined,
+        responseModels: fileResponseModels.length > 0 ? fileResponseModels : undefined,
       };
     },
   );
@@ -982,6 +989,7 @@ async function runSkillAnalysis(
   const allUsage: UsageStats[] = [];
   const allAuxiliaryUsage: AuxiliaryUsageEntry[] = [];
   const allTraces: HunkTrace[] = [];
+  const allResponseModels: string[] = [];
 
   // Track failed hunks across all files
   let totalFailedHunks = 0;
@@ -1111,6 +1119,9 @@ async function runSkillAnalysis(
     if (fr.result.traces) {
       allTraces.push(...fr.result.traces);
     }
+    if (fr.result.responseModels) {
+      allResponseModels.push(...fr.result.responseModels);
+    }
   }
 
   // All hunks failed — typically a systemic problem (auth, subprocess, etc).
@@ -1188,7 +1199,7 @@ async function runSkillAnalysis(
     findings: finalFindings,
     usage: totalUsage,
     durationMs: Date.now() - startTime,
-    model: options.model,
+    model: resolveResponseModel(allResponseModels, options.model),
     files: buildFileReports(
       fileResults.map((fr) => ({
         filename: fr.filename,
