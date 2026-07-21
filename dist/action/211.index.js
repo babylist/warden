@@ -7894,6 +7894,7 @@ async function runSkillTask(options, fileConcurrency, callbacks, semaphore) {
                     hunkFailures: result.hunkFailures,
                     auxiliaryUsage: result.auxiliaryUsage,
                     traces: result.traces,
+                    responseModels: result.responseModels,
                 };
             };
             // Return an empty result for files skipped due to abort
@@ -7942,6 +7943,8 @@ async function runSkillTask(options, fileConcurrency, callbacks, semaphore) {
             const allUsage = allResults.map((r) => r.usage).filter((u) => u !== undefined);
             const allAuxEntries = allResults.flatMap((r) => r.auxiliaryUsage ?? []);
             const allTraces = allResults.flatMap((r) => r.traces ?? []);
+            const allResponseModels = allResults.flatMap((r) => r.responseModels ?? []);
+            const resolvedModel = (0,_sdk_runner_js__WEBPACK_IMPORTED_MODULE_2__/* .resolveResponseModel */ .X5)(allResponseModels, runnerOptions?.model);
             const totalFailedHunks = allResults.reduce((sum, r) => sum + r.failedHunks, 0);
             const totalFailedExtractions = allResults.reduce((sum, r) => sum + r.failedExtractions, 0);
             const allHunkFailures = allResults.flatMap((r) => r.hunkFailures);
@@ -7972,7 +7975,7 @@ async function runSkillTask(options, fileConcurrency, callbacks, semaphore) {
                     findings: [],
                     usage: (0,_sdk_runner_js__WEBPACK_IMPORTED_MODULE_2__/* .aggregateUsage */ .Z$)(allUsage),
                     durationMs: duration,
-                    model: runnerOptions?.model,
+                    model: resolvedModel,
                     runtime,
                     // Preserve per-file metadata (timing, partial usage, attempted
                     // filenames) on failure runs too — `warden runs` and JSONL
@@ -8047,7 +8050,7 @@ async function runSkillTask(options, fileConcurrency, callbacks, semaphore) {
                 findings: finalFindings,
                 usage: (0,_sdk_runner_js__WEBPACK_IMPORTED_MODULE_2__/* .aggregateUsage */ .Z$)(allUsage),
                 durationMs: duration,
-                model: runnerOptions?.model,
+                model: resolvedModel,
                 runtime,
                 files: (0,_sdk_report_files_js__WEBPACK_IMPORTED_MODULE_9__/* .buildFileReports */ .K)(preparedFiles.map((file, i) => {
                     const r = allResults[i];
@@ -11607,7 +11610,7 @@ function isAbortRequested(error, abortController) {
 function isCircuitBreakerCode(code) {
     return code === 'auth_failed' || code === 'provider_unavailable' || code === 'invalid_model_selector';
 }
-function hunkFailureFromCircuit(reason, usage, attempts, trace) {
+function hunkFailureFromCircuit(reason, usage, attempts, trace, responseModel) {
     return {
         findings: [],
         usage: (0,_usage_js__WEBPACK_IMPORTED_MODULE_11__/* .aggregateUsage */ .Z$)(usage),
@@ -11617,6 +11620,7 @@ function hunkFailureFromCircuit(reason, usage, attempts, trace) {
         failureMessage: reason.message,
         attempts,
         trace,
+        responseModel,
     };
 }
 function recordCircuitFailure(options, code, message) {
@@ -11931,7 +11935,7 @@ async function analyzeHunk(skill, hunkCtx, repoPath, options, callbacks, prConte
                             status: resultMessage.status,
                             result: resultMessage,
                             traceRecorder,
-                        }));
+                        }), resultMessage.responseModel);
                     }
                     return {
                         findings: [],
@@ -11941,6 +11945,7 @@ async function analyzeHunk(skill, hunkCtx, repoPath, options, callbacks, prConte
                         failureCode,
                         failureMessage,
                         attempts: attempt + 1,
+                        responseModel: resultMessage.responseModel,
                         trace: buildHunkTrace({
                             enabled: options.captureTraces,
                             span,
@@ -11997,6 +12002,7 @@ async function analyzeHunk(skill, hunkCtx, repoPath, options, callbacks, prConte
                                 runtime: runtimeName,
                             }]
                         : undefined,
+                    responseModel: resultMessage.responseModel,
                     trace: buildHunkTrace({
                         enabled: options.captureTraces,
                         span,
@@ -12180,6 +12186,7 @@ async function analyzeFile(skill, file, repoPath, options = {}, callbacks, prCon
         const fileAuxiliaryUsage = [];
         const hunkFailures = [];
         const hunkTraces = [];
+        const fileResponseModels = [];
         let failedHunks = 0;
         let failedExtractions = 0;
         for (const [hunkIndex, hunk] of file.hunks.entries()) {
@@ -12233,6 +12240,9 @@ async function analyzeFile(skill, file, repoPath, options = {}, callbacks, prCon
             if (result.trace) {
                 hunkTraces.push(result.trace);
             }
+            if (result.responseModel) {
+                fileResponseModels.push(result.responseModel);
+            }
             const chunkResult = {
                 filename: file.filename,
                 model: options.model,
@@ -12270,6 +12280,7 @@ async function analyzeFile(skill, file, repoPath, options = {}, callbacks, prCon
             hunkFailures,
             auxiliaryUsage: fileAuxiliaryUsage.length > 0 ? fileAuxiliaryUsage : undefined,
             traces: hunkTraces.length > 0 ? hunkTraces : undefined,
+            responseModels: fileResponseModels.length > 0 ? fileResponseModels : undefined,
         };
     });
 }
@@ -12352,6 +12363,7 @@ async function runSkillAnalysis(skill, context, options = {}) {
     const allUsage = [];
     const allAuxiliaryUsage = [];
     const allTraces = [];
+    const allResponseModels = [];
     // Track failed hunks across all files
     let totalFailedHunks = 0;
     let totalFailedExtractions = 0;
@@ -12463,6 +12475,9 @@ async function runSkillAnalysis(skill, context, options = {}) {
         if (fr.result.traces) {
             allTraces.push(...fr.result.traces);
         }
+        if (fr.result.responseModels) {
+            allResponseModels.push(...fr.result.responseModels);
+        }
     }
     // All hunks failed — typically a systemic problem (auth, subprocess, etc).
     // Throw so direct SDK consumers (evals, scheduled workflows) keep their
@@ -12522,7 +12537,7 @@ async function runSkillAnalysis(skill, context, options = {}) {
         findings: finalFindings,
         usage: totalUsage,
         durationMs: Date.now() - startTime,
-        model: options.model,
+        model: (0,_usage_js__WEBPACK_IMPORTED_MODULE_11__/* .resolveResponseModel */ .X5)(allResponseModels, options.model),
         files: (0,_report_files_js__WEBPACK_IMPORTED_MODULE_13__/* .buildFileReports */ .K)(fileResults.map((fr) => ({
             filename: fr.filename,
             durationMs: fr.durationMs,
@@ -13821,6 +13836,7 @@ async function sleep(ms, abortSignal) {
 __webpack_require__.a(module, async (__webpack_handle_async_dependencies__, __webpack_async_result__) => { try {
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   RL: () => (/* reexport safe */ _usage_js__WEBPACK_IMPORTED_MODULE_3__.RL),
+/* harmony export */   X5: () => (/* reexport safe */ _usage_js__WEBPACK_IMPORTED_MODULE_3__.X5),
 /* harmony export */   Z$: () => (/* reexport safe */ _usage_js__WEBPACK_IMPORTED_MODULE_3__.Z$),
 /* harmony export */   pd: () => (/* reexport safe */ _analyze_js__WEBPACK_IMPORTED_MODULE_11__.pd),
 /* harmony export */   t9: () => (/* reexport safe */ _prepare_js__WEBPACK_IMPORTED_MODULE_8__.t),

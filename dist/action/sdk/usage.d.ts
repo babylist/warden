@@ -39,6 +39,7 @@ export declare function aggregateUsage(usages: UsageStats[]): UsageStats;
  * Returns undefined if no entries are provided.
  */
 export declare function aggregateAuxiliaryUsage(entries: AuxiliaryUsageEntry[]): AuxiliaryUsageMap | undefined;
+export declare function resolveResponseModel(models: string[], fallback?: string): string | undefined;
 /**
  * Aggregate auxiliary usage model/runtime attribution by agent name.
  */
