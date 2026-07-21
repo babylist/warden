@@ -1773,6 +1773,7 @@ const piRuntime = {
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
 /* harmony export */   RL: () => (/* binding */ aggregateAuxiliaryUsage),
 /* harmony export */   UN: () => (/* binding */ aggregateAuxiliaryUsageAttribution),
+/* harmony export */   X5: () => (/* binding */ resolveResponseModel),
 /* harmony export */   Z$: () => (/* binding */ aggregateUsage),
 /* harmony export */   bP: () => (/* binding */ estimateTokens),
 /* harmony export */   f5: () => (/* binding */ extractUsage),
@@ -1866,6 +1867,10 @@ function aggregateAuxiliaryUsage(entries) {
 function uniqueSorted(values) {
     const unique = [...new Set(values.filter((value) => Boolean(value)))].sort();
     return unique.length > 0 ? unique : undefined;
+}
+function resolveResponseModel(models, fallback) {
+    const unique = [...new Set(models)];
+    return unique.length === 1 ? unique[0] : fallback;
 }
 function attributionFromEntries(entries) {
     const models = uniqueSorted(entries.map((entry) => entry.model));

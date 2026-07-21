@@ -14,7 +14,7 @@
 export { SkillRunnerError, WardenAuthenticationError, isRetryableError, isAuthenticationError, isAuthenticationErrorMessage, isSubprocessError } from './errors.js';
 export { verifyAuth } from './auth.js';
 export { calculateRetryDelay } from './retry.js';
-export { aggregateUsage, aggregateAuxiliaryUsage, mergeAuxiliaryUsage, estimateTokens } from './usage.js';
+export { aggregateUsage, aggregateAuxiliaryUsage, mergeAuxiliaryUsage, estimateTokens, resolveResponseModel } from './usage.js';
 export { anthropicUsageToStats, apiUsageToStats } from './pricing.js';
 export type { AnthropicApiUsage } from './pricing.js';
 export { buildHunkSystemPrompt, buildHunkUserPrompt } from './prompt.js';

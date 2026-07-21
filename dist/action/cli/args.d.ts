@@ -37,8 +37,8 @@ export declare const CLIOptionsSchema: z.ZodObject<{
         xhigh: "xhigh";
     }>>;
     runtime: z.ZodOptional<z.ZodEnum<{
-        claude: "claude";
         pi: "pi";
+        claude: "claude";
     }>>;
     quiet: z.ZodDefault<z.ZodBoolean>;
     verbose: z.ZodDefault<z.ZodNumber>;

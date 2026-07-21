@@ -68,9 +68,9 @@ export declare const ScheduleConfigSchema: z.ZodObject<{
 }, z.core.$strip>;
 export type ScheduleConfig = z.infer<typeof ScheduleConfigSchema>;
 export declare const TriggerTypeSchema: z.ZodEnum<{
-    local: "local";
     pull_request: "pull_request";
     schedule: "schedule";
+    local: "local";
 }>;
 export type TriggerType = z.infer<typeof TriggerTypeSchema>;
 export { RuntimeNameSchema };
@@ -110,9 +110,9 @@ export declare const VerificationConfigSchema: z.ZodObject<{
 export type VerificationConfig = z.infer<typeof VerificationConfigSchema>;
 export declare const SkillTriggerSchema: z.ZodObject<{
     type: z.ZodEnum<{
-        local: "local";
         pull_request: "pull_request";
         schedule: "schedule";
+        local: "local";
     }>;
     actions: z.ZodOptional<z.ZodArray<z.ZodString>>;
     draft: z.ZodOptional<z.ZodBoolean>;
@@ -183,9 +183,9 @@ export declare const SkillConfigSchema: z.ZodObject<{
     }>>;
     triggers: z.ZodOptional<z.ZodArray<z.ZodObject<{
         type: z.ZodEnum<{
-            local: "local";
             pull_request: "pull_request";
             schedule: "schedule";
+            local: "local";
         }>;
         actions: z.ZodOptional<z.ZodArray<z.ZodString>>;
         draft: z.ZodOptional<z.ZodBoolean>;
@@ -291,8 +291,8 @@ export declare const DefaultsSchema: z.ZodObject<{
     model: z.ZodOptional<z.ZodString>;
     maxTurns: z.ZodOptional<z.ZodNumber>;
     runtime: z.ZodOptional<z.ZodEnum<{
-        claude: "claude";
         pi: "pi";
+        claude: "claude";
     }>>;
     agent: z.ZodOptional<z.ZodObject<{
         model: z.ZodOptional<z.ZodString>;
@@ -389,8 +389,8 @@ export declare const WardenConfigSchema: z.ZodObject<{
         model: z.ZodOptional<z.ZodString>;
         maxTurns: z.ZodOptional<z.ZodNumber>;
         runtime: z.ZodOptional<z.ZodEnum<{
-            claude: "claude";
             pi: "pi";
+            claude: "claude";
         }>>;
         agent: z.ZodOptional<z.ZodObject<{
             model: z.ZodOptional<z.ZodString>;
@@ -483,9 +483,9 @@ export declare const WardenConfigSchema: z.ZodObject<{
         }>>;
         triggers: z.ZodOptional<z.ZodArray<z.ZodObject<{
             type: z.ZodEnum<{
-                local: "local";
                 pull_request: "pull_request";
                 schedule: "schedule";
+                local: "local";
             }>;
             actions: z.ZodOptional<z.ZodArray<z.ZodString>>;
             draft: z.ZodOptional<z.ZodBoolean>;
