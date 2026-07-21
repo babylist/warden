@@ -274,6 +274,7 @@ export async function runSkillTask(
       // report.skill when resolveSkill succeeded but a later step threw.
       // Stays undefined only if resolveSkill itself failed.
       let resolvedSkillName: string | undefined;
+      let resolvedModel: string | undefined;
 
       try {
         let skill: SkillDefinition;
@@ -521,7 +522,7 @@ export async function runSkillTask(
         const allAuxEntries = allResults.flatMap((r) => r.auxiliaryUsage ?? []);
         const allTraces = allResults.flatMap((r) => r.traces ?? []);
         const allResponseModels = allResults.flatMap((r) => r.responseModels ?? []);
-        const resolvedModel = resolveResponseModel(allResponseModels, runnerOptions?.model);
+        resolvedModel = resolveResponseModel(allResponseModels, runnerOptions?.model);
         const totalFailedHunks = allResults.reduce((sum, r) => sum + r.failedHunks, 0);
         const totalFailedExtractions = allResults.reduce((sum, r) => sum + r.failedExtractions, 0);
         const allHunkFailures: HunkFailure[] = allResults.flatMap((r) => r.hunkFailures);
@@ -700,7 +701,7 @@ export async function runSkillTask(
           summary: `${skillName}: failed (${code})`,
           findings: [],
           durationMs: Date.now() - startTime,
-          model: runnerOptions?.model,
+          model: resolvedModel ?? runnerOptions?.model,
           runtime,
           error: { code, message, timestamp: new Date().toISOString() },
         };
