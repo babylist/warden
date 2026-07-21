@@ -1587,9 +1587,9 @@ async function finalizeReportWorkflow(
   triggerErrors: string[],
   options: {
     failOnWriteError?: boolean;
-    matchedTriggers?: ResolvedTrigger[];
-    resolvedTriggers?: ResolvedTrigger[];
-  } = {}
+    matchedTriggers: ResolvedTrigger[];
+    resolvedTriggers: ResolvedTrigger[];
+  }
 ): Promise<void> {
   await dismissPreviousReviewIfResolved(
     octokit,
@@ -1608,8 +1608,8 @@ async function finalizeReportWorkflow(
     const findingsPath = writeFindingsOutput(reports, context, findingObservations, {
       triggerResults: toReplayTriggerResults(results),
       configuredSkills: buildConfiguredSkillsList({
-        allTriggers: options.resolvedTriggers ?? [],
-        matchedTriggers: options.matchedTriggers ?? [],
+        allTriggers: options.resolvedTriggers,
+        matchedTriggers: options.matchedTriggers,
       }),
     });
     logAction(`Findings written to ${findingsPath}`);
