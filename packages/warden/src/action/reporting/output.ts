@@ -8,6 +8,7 @@ import {
   SkillErrorSchema,
   SourceSnippetSchema,
   UsageStatsSchema,
+  VerifierRejectionsSchema,
 } from '../../types/index.js';
 import type { FindingObservation } from './outcomes.js';
 import { FindingObservationSchema } from './outcomes.js';
@@ -96,6 +97,7 @@ export const FindingsOutputSchema = z.object({
     failedHunks: z.number().int().nonnegative().optional(),
     failedExtractions: z.number().int().nonnegative().optional(),
     error: SkillErrorSchema.optional(),
+    verifierRejections: VerifierRejectionsSchema.optional(),
     findings: z.array(ExportedFindingSchema),
   })),
   triggerResults: z.array(TriggerRunResultSchema).optional(),
@@ -207,6 +209,7 @@ export function buildFindingsOutput(
       failedHunks: r.failedHunks,
       failedExtractions: r.failedExtractions,
       error: r.error,
+      verifierRejections: r.verifierRejections,
       findings: r.findings.map((f) => ({
         id: f.id,
         severity: f.severity,
