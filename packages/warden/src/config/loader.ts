@@ -437,6 +437,7 @@ function triggerIdentity(skill: SkillConfig, trigger: SkillTrigger | undefined):
     failCheck: trigger?.failCheck ?? skill.failCheck,
     model: trigger?.model ?? skill.model,
     maxTurns: trigger?.maxTurns ?? skill.maxTurns,
+    verification: trigger?.verification?.enabled ?? skill.verification?.enabled,
     minConfidence: trigger?.minConfidence ?? skill.minConfidence,
     type: trigger?.type ?? '*',
     actions: trigger?.actions,

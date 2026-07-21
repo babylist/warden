@@ -1,4 +1,29 @@
 # Changelog
+## 0.42.0
+
+### Bug Fixes 🐛
+
+- (action) Attribute startup telemetry to repositories by @dcramer in [#433](https://github.com/getsentry/warden/pull/433)
+- (ci) Use configured Warden model by @dcramer in [#435](https://github.com/getsentry/warden/pull/435)
+
+### Other
+
+- Remove Anthropic key by @dcramer in [#434](https://github.com/getsentry/warden/pull/434)
+
+## 0.41.0
+
+### New Features ✨
+
+- (config) Add per-skill verification overrides by @dcramer in [#432](https://github.com/getsentry/warden/pull/432)
+
+### Documentation 📚
+
+- (benchmarking) Add GPT 5.6 Luna result by @dcramer in [#427](https://github.com/getsentry/warden/pull/427)
+
+### Other
+
+- Refactor Warden workflow environment variables by @dcramer in [#428](https://github.com/getsentry/warden/pull/428)
+
 ## 0.40.0
 
 ### Bug Fixes 🐛
