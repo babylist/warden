@@ -374,6 +374,53 @@ describe('analyzeFile', () => {
     consoleSpy.mockRestore();
   });
 
+  it('preserves the response model when the circuit opens on an SDK-reported provider error', async () => {
+    const controller = new AbortController();
+    const circuitBreaker = new ProviderFailureCircuitBreaker({
+      maxConsecutiveProviderFailures: 1,
+      abortController: controller,
+    });
+    const runSkillMock = vi.fn().mockResolvedValue({
+      result: {
+        status: 'provider_error',
+        text: '',
+        errors: ['upstream provider error'],
+        usage: makeUsage(),
+        responseModel: 'claude-sonnet-4-5-20260929',
+      },
+    });
+    vi.mocked(getRuntime).mockReturnValue({
+      name: 'claude',
+      runSkill: runSkillMock,
+      runAuxiliary: vi.fn(),
+      runSynthesis: vi.fn(),
+    } as unknown as Runtime);
+
+    const result = await analyzeFile(
+      {
+        name: 'security-review',
+        description: 'Security review.',
+        prompt: 'Return findings as JSON.',
+      },
+      makePreparedFile(1),
+      '/tmp/repo',
+      {
+        abortController: controller,
+        circuitBreaker,
+        retry: {
+          maxRetries: 0,
+          initialDelayMs: 1,
+          backoffMultiplier: 1,
+          maxDelayMs: 1,
+        },
+      },
+    );
+
+    expect(circuitBreaker.reason?.code).toBe('provider_unavailable');
+    expect(result.failedHunks).toBe(1);
+    expect(result.responseModels).toEqual(['claude-sonnet-4-5-20260929']);
+  });
+
   it('opens the shared circuit after consecutive provider failures', async () => {
     const controller = new AbortController();
     const circuitBreaker = new ProviderFailureCircuitBreaker({

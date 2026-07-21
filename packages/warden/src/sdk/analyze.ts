@@ -71,6 +71,7 @@ function hunkFailureFromCircuit(
   usage: UsageStats[],
   attempts: number,
   trace?: HunkTrace,
+  responseModel?: string,
 ): HunkAnalysisResult {
   return {
     findings: [],
@@ -81,6 +82,7 @@ function hunkFailureFromCircuit(
     failureMessage: reason.message,
     attempts,
     trace,
+    responseModel,
   };
 }
 
@@ -473,6 +475,7 @@ async function analyzeHunk(
                   result: resultMessage,
                   traceRecorder,
                 }),
+                resultMessage.responseModel,
               );
             }
             return {
