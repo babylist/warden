@@ -5,6 +5,7 @@ import {
   FindingSchema,
   GitHubEventTypeSchema,
   LocationSchema,
+  SkillErrorSchema,
   SourceSnippetSchema,
   UsageStatsSchema,
 } from '../../types/index.js';
@@ -92,6 +93,9 @@ export const FindingsOutputSchema = z.object({
     model: z.string().optional(),
     durationMs: z.number().nonnegative().optional(),
     usage: UsageStatsSchema.optional(),
+    failedHunks: z.number().int().nonnegative().optional(),
+    failedExtractions: z.number().int().nonnegative().optional(),
+    error: SkillErrorSchema.optional(),
     findings: z.array(ExportedFindingSchema),
   })),
   triggerResults: z.array(TriggerRunResultSchema).optional(),
@@ -200,6 +204,9 @@ export function buildFindingsOutput(
       model: r.model,
       durationMs: r.durationMs,
       usage: r.usage,
+      failedHunks: r.failedHunks,
+      failedExtractions: r.failedExtractions,
+      error: r.error,
       findings: r.findings.map((f) => ({
         id: f.id,
         severity: f.severity,
