@@ -1,0 +1,636 @@
+import { z } from 'zod';
+import {
+  ConfidenceSchema,
+  ConfidenceThresholdSchema,
+  GitHubEventTypeSchema,
+  LocationSchema,
+  SeveritySchema,
+  SeverityThresholdSchema,
+  SkillErrorSchema,
+  SourceSnippetSchema,
+  UsageStatsSchema,
+  VerifierRejectionsSchema,
+} from '../../types/index.js';
+import type {
+  AuxiliaryUsageAttributionMap,
+  AuxiliaryUsageMap,
+  EventContext,
+  Severity,
+} from '../../types/index.js';
+import type { ResolvedTrigger } from '../../config/loader.js';
+import { matchPathFilters, matchPullRequestState } from '../../triggers/matcher.js';
+import type { TriggerResult } from '../triggers/executor.js';
+import { buildConfiguredSkillsList, serializeTriggerError } from './output.js';
+import { generateContentHash } from '../../output/dedup.js';
+import { getVersion } from '../../utils/version.js';
+import type { FindingObservation } from './outcomes.js';
+
+export const SEVERITY_BREAKDOWN_KEYS = ['high', 'medium', 'low'] as const;
+
+export const SeverityBreakdownSchema = z.object({
+  high: z.number().int().nonnegative(),
+  medium: z.number().int().nonnegative(),
+  low: z.number().int().nonnegative(),
+});
+export type SeverityBreakdown = z.infer<typeof SeverityBreakdownSchema>;
+
+const HarnessSchema = z.object({
+  name: z.literal('warden'),
+  version: z.string(),
+  actionRef: z.string().optional(),
+});
+
+const RepositorySchema = z.object({
+  owner: z.string(),
+  name: z.string(),
+  fullName: z.string(),
+});
+
+const PullRequestEnvelopeSchema = z.object({
+  number: z.number().int(),
+  author: z.string(),
+  title: z.string(),
+  baseBranch: z.string(),
+  headBranch: z.string(),
+  headSha: z.string(),
+});
+
+const ConfiguredSkillSchema = z.object({
+  name: z.string(),
+  triggered: z.boolean(),
+});
+
+export const SkippedTriggerReasonSchema = z.enum([
+  'no_event_match',
+  'path_filter',
+  'draft_state',
+  'label_mismatch',
+  'disabled',
+]);
+
+const SkippedTriggerSchema = z.object({
+  skillName: z.string(),
+  triggerId: z.string().optional(),
+  triggerName: z.string().optional(),
+  reason: SkippedTriggerReasonSchema,
+});
+
+const TriggerErrorSchema = z.object({
+  name: z.string().optional(),
+  message: z.string(),
+});
+
+export const TriggerRunResultV2Schema = z.discriminatedUnion('status', [
+  z.object({
+    status: z.literal('success'),
+    triggerId: z.string().optional(),
+    triggerName: z.string(),
+    skillName: z.string(),
+  }),
+  z.object({
+    status: z.literal('error'),
+    triggerId: z.string().optional(),
+    triggerName: z.string(),
+    skillName: z.string(),
+    error: TriggerErrorSchema,
+  }),
+]);
+
+const ResolvedDefaultsSchema = z.object({
+  failOn: SeverityThresholdSchema.optional(),
+  reportOn: SeverityThresholdSchema.optional(),
+  minConfidence: ConfidenceThresholdSchema.optional(),
+  model: z.string().optional(),
+  auxiliaryModel: z.string().optional(),
+  synthesisModel: z.string().optional(),
+  runtime: z.string().optional(),
+  verifyFindings: z.boolean().optional(),
+});
+
+export const WardenMetadataSchema = z.object({
+  schemaVersion: z.literal('2'),
+  runId: z.string(),
+  runAttempt: z.string().optional(),
+  generatedAt: z.string().datetime(),
+  harness: HarnessSchema,
+  repository: RepositorySchema,
+  event: GitHubEventTypeSchema,
+  pullRequest: PullRequestEnvelopeSchema.optional(),
+  configuredSkills: z.array(ConfiguredSkillSchema).optional(),
+  skippedTriggers: z.array(SkippedTriggerSchema).optional(),
+  triggerResults: z.array(TriggerRunResultV2Schema).optional(),
+  resolvedDefaults: ResolvedDefaultsSchema.optional(),
+});
+export type WardenMetadata = z.infer<typeof WardenMetadataSchema>;
+
+const AuxiliaryUsageEntrySchema = z.object({
+  agent: z.string(),
+  model: z.string().optional(),
+  runtime: z.string().optional(),
+  usage: UsageStatsSchema,
+});
+
+export const SkillExecutionSchema = z.object({
+  skillExecutionId: z.string(),
+  skillName: z.string(),
+  triggerId: z.string().optional(),
+  triggerName: z.string().optional(),
+  model: z.string().optional(),
+  runtime: z.string().optional(),
+  auxiliaryModel: z.string().optional(),
+  synthesisModel: z.string().optional(),
+  summary: z.string(),
+  durationMs: z.number().nonnegative().optional(),
+  usage: UsageStatsSchema.optional(),
+  auxiliaryUsage: z.array(AuxiliaryUsageEntrySchema).optional(),
+  findingsBySeverity: SeverityBreakdownSchema,
+  findingIds: z.array(z.string()),
+  failedHunks: z.number().int().nonnegative().optional(),
+  failedExtractions: z.number().int().nonnegative().optional(),
+  error: SkillErrorSchema.optional(),
+  verifierRejections: VerifierRejectionsSchema.optional(),
+});
+export type SkillExecution = z.infer<typeof SkillExecutionSchema>;
+
+const FindingSnapshotSchema = z.object({
+  title: z.string(),
+  description: z.string(),
+  severity: SeveritySchema,
+  confidence: ConfidenceSchema.optional(),
+});
+
+const VerificationStageSchema = z.discriminatedUnion('outcome', [
+  z.object({
+    outcome: z.literal('kept'),
+    model: z.string().optional(),
+    runtime: z.string().optional(),
+  }),
+  z.object({
+    outcome: z.literal('revised'),
+    model: z.string().optional(),
+    runtime: z.string().optional(),
+    evidence: z.string().optional(),
+    before: FindingSnapshotSchema,
+  }),
+]);
+
+const MergeStageSchema = z.object({
+  model: z.string().optional(),
+  runtime: z.string().optional(),
+  absorbedFindingIds: z.array(z.string()),
+});
+
+export type VerificationStage = z.infer<typeof VerificationStageSchema>;
+export type MergeStage = z.infer<typeof MergeStageSchema>;
+
+const FindingProvenanceSchema = z.object({
+  originSkillExecutionId: z.string(),
+  originModel: z.string().optional(),
+  verification: VerificationStageSchema.optional(),
+  merge: MergeStageSchema.optional(),
+});
+export type FindingProvenance = z.infer<typeof FindingProvenanceSchema>;
+
+const FindingAttributionSchema = z.object({
+  skillExecutionId: z.string(),
+  skillName: z.string(),
+  role: z.enum(['primary', 'corroborating']),
+  matchType: z.enum(['hash', 'semantic']).optional(),
+});
+export type FindingAttribution = z.infer<typeof FindingAttributionSchema>;
+
+export const ExportedFindingV2Schema = z.object({
+  id: z.string(),
+  contentHash: z.string(),
+  severity: SeveritySchema,
+  confidence: ConfidenceSchema.optional(),
+  title: z.string(),
+  description: z.string(),
+  verification: z.string().optional(),
+  location: LocationSchema.optional(),
+  additionalLocations: z.array(LocationSchema).optional(),
+  sourceSnippet: SourceSnippetSchema.optional(),
+  reportedBy: z.array(FindingAttributionSchema).min(1),
+  provenance: FindingProvenanceSchema,
+});
+export type ExportedFindingV2 = z.infer<typeof ExportedFindingV2Schema>;
+
+export const DiscardedFindingSchema = z.object({
+  originSkillExecutionId: z.string(),
+  stage: z.enum(['verification_rejected', 'merge_absorbed']),
+  severity: SeveritySchema,
+  title: z.string(),
+  location: LocationSchema.optional(),
+  model: z.string().optional(),
+  reason: z.string().optional(),
+  survivorFindingId: z.string().optional(),
+});
+export type DiscardedFinding = z.infer<typeof DiscardedFindingSchema>;
+
+const FindingOriginSchema = z.object({
+  skillExecutionId: z.string(),
+  skillName: z.string(),
+});
+
+export const DedupeDetailV2Schema = z.object({
+  source: z.enum(['warden', 'external']),
+  matchType: z.enum(['hash', 'semantic']),
+  existingFindingId: z.string().optional(),
+  existingCommentId: z.number().int().positive().optional(),
+  existingThreadId: z.string().optional(),
+  existingResolved: z.boolean().optional(),
+  existingSkills: z.array(z.string()).optional(),
+  actor: z.string().optional(),
+});
+export type DedupeDetailV2 = z.infer<typeof DedupeDetailV2Schema>;
+
+const ObservedFindingSchema = z.object({
+  id: z.string(),
+  severity: SeveritySchema,
+  confidence: ConfidenceSchema.optional(),
+  title: z.string(),
+  description: z.string(),
+  location: LocationSchema.optional(),
+  elapsedMs: z.number().nonnegative().optional(),
+});
+
+export const FindingObservationV2Schema = z.discriminatedUnion('outcome', [
+  z.object({
+    outcome: z.literal('posted'),
+    origin: FindingOriginSchema,
+    finding: ObservedFindingSchema,
+  }),
+  z.object({
+    outcome: z.literal('deduped'),
+    origin: FindingOriginSchema,
+    finding: ObservedFindingSchema,
+    dedupe: DedupeDetailV2Schema,
+  }),
+  z.object({
+    outcome: z.literal('skipped'),
+    origin: FindingOriginSchema,
+    finding: ObservedFindingSchema,
+    skippedReason: z.enum(['max_findings', 'duplicate_in_batch', 'no_inline_location']),
+  }),
+  z.object({
+    outcome: z.literal('resolved'),
+    origin: FindingOriginSchema,
+    finding: ObservedFindingSchema,
+    resolvedReason: z.enum(['fix_evaluation', 'stale_check']),
+  }),
+  z.object({
+    outcome: z.literal('failed'),
+    origin: FindingOriginSchema,
+    finding: ObservedFindingSchema,
+  }),
+]);
+export type FindingObservationV2 = z.infer<typeof FindingObservationV2Schema>;
+
+const SummarySchema = z.object({
+  totalFindings: z.number().int().nonnegative(),
+  totalSkillExecutions: z.number().int().nonnegative(),
+  bySeverity: SeverityBreakdownSchema,
+  byOutcome: z.object({
+    posted: z.number().int().nonnegative(),
+    deduped: z.number().int().nonnegative(),
+    skipped: z.number().int().nonnegative(),
+    resolved: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+  }),
+});
+export type SummaryV2 = z.infer<typeof SummarySchema>;
+
+export const WardenFindingsSchemaV2 = z.object({
+  schemaVersion: z.literal('2'),
+  runId: z.string(),
+  skillExecutions: z.array(SkillExecutionSchema),
+  findings: z.array(ExportedFindingV2Schema),
+  discardedFindings: z.array(DiscardedFindingSchema).optional(),
+  findingObservations: z.array(FindingObservationV2Schema),
+  summary: SummarySchema,
+});
+export type WardenFindingsV2 = z.infer<typeof WardenFindingsSchemaV2>;
+
+// -----------------------------------------------------------------------------
+// Builders
+// -----------------------------------------------------------------------------
+
+function severityBreakdown(items: { severity: Severity }[]): SeverityBreakdown {
+  return {
+    high: items.filter((i) => i.severity === 'high').length,
+    medium: items.filter((i) => i.severity === 'medium').length,
+    low: items.filter((i) => i.severity === 'low').length,
+  };
+}
+
+function toAuxiliaryUsageEntries(
+  usage: AuxiliaryUsageMap | undefined,
+  attribution: AuxiliaryUsageAttributionMap | undefined
+): z.infer<typeof AuxiliaryUsageEntrySchema>[] {
+  if (!usage) return [];
+  return Object.entries(usage).map(([agent, agentUsage]) => {
+    const agentAttribution = attribution?.[agent];
+    return {
+      agent,
+      model: agentAttribution?.model ?? agentAttribution?.models?.[0],
+      runtime: agentAttribution?.runtime ?? agentAttribution?.runtimes?.[0],
+      usage: agentUsage,
+    };
+  });
+}
+
+function deriveSkippedReason(
+  trigger: ResolvedTrigger,
+  context: EventContext
+): z.infer<typeof SkippedTriggerReasonSchema> {
+  if (trigger.type === 'local') return 'no_event_match';
+  if (trigger.type === 'schedule') {
+    return context.eventType === 'schedule' ? 'disabled' : 'no_event_match';
+  }
+  if (trigger.type === 'pull_request') {
+    if (context.eventType !== 'pull_request') return 'no_event_match';
+    if (!trigger.actions?.includes(context.action)) return 'no_event_match';
+    if (!matchPullRequestState(trigger, context)) {
+      const labels = context.pullRequest?.labels ?? [];
+      const labelMatches = trigger.labels?.some((label) => labels.includes(label));
+      if (trigger.labels !== undefined && !labelMatches) return 'label_mismatch';
+      return 'draft_state';
+    }
+  }
+  const filenames = context.pullRequest?.files.map((f) => f.filename);
+  return matchPathFilters(trigger.filters, filenames) ? 'disabled' : 'path_filter';
+}
+
+export interface BuildMetadataOutputV2Options {
+  runId: string;
+  runAttempt?: string;
+  generatedAt?: string;
+  actionRef?: string;
+}
+
+export function buildMetadataOutputV2(
+  context: EventContext,
+  resolvedTriggers: ResolvedTrigger[],
+  matchedTriggers: ResolvedTrigger[],
+  results: TriggerResult[],
+  options: BuildMetadataOutputV2Options
+): WardenMetadata {
+  const matchedIds = new Set(matchedTriggers.map((t) => t.id));
+  const skippedTriggers = resolvedTriggers
+    .filter((t) => !matchedIds.has(t.id))
+    .map((t) => ({
+      skillName: t.skill,
+      triggerId: t.id,
+      triggerName: t.name,
+      reason: deriveSkippedReason(t, context),
+    }));
+
+  const triggerResults = results.map((r) =>
+    r.error
+      ? {
+          status: 'error' as const,
+          triggerId: r.triggerId,
+          triggerName: r.triggerName,
+          skillName: r.skillName,
+          error: serializeTriggerError(r.error),
+        }
+      : {
+          status: 'success' as const,
+          triggerId: r.triggerId,
+          triggerName: r.triggerName,
+          skillName: r.skillName,
+        }
+  );
+
+  const primary = matchedTriggers[0];
+
+  return WardenMetadataSchema.parse({
+    schemaVersion: '2',
+    runId: options.runId,
+    runAttempt: options.runAttempt,
+    generatedAt: options.generatedAt ?? new Date().toISOString(),
+    harness: {
+      name: 'warden',
+      version: getVersion(),
+      actionRef: options.actionRef,
+    },
+    repository: {
+      owner: context.repository.owner,
+      name: context.repository.name,
+      fullName: context.repository.fullName,
+    },
+    event: context.eventType,
+    ...(context.pullRequest && {
+      pullRequest: {
+        number: context.pullRequest.number,
+        author: context.pullRequest.author,
+        title: context.pullRequest.title,
+        baseBranch: context.pullRequest.baseBranch,
+        headBranch: context.pullRequest.headBranch,
+        headSha: context.pullRequest.headSha,
+      },
+    }),
+    configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
+    skippedTriggers,
+    triggerResults,
+    ...(primary && {
+      resolvedDefaults: {
+        failOn: primary.failOn,
+        reportOn: primary.reportOn,
+        minConfidence: primary.minConfidence,
+        model: primary.model,
+        auxiliaryModel: primary.auxiliaryModel,
+        synthesisModel: primary.synthesisModel,
+        runtime: primary.runtime,
+        verifyFindings: primary.verifyFindings,
+      },
+    }),
+  });
+}
+
+export interface BuildFindingsOutputV2Options {
+  runId: string;
+}
+
+export function buildFindingsOutputV2(
+  results: TriggerResult[],
+  matchedTriggers: ResolvedTrigger[],
+  findingObservations: FindingObservation[],
+  options: BuildFindingsOutputV2Options
+): WardenFindingsV2 {
+  const triggerById = new Map(matchedTriggers.map((t) => [t.id, t]));
+  const skillExecutionIdByName = new Map<string, string>();
+  for (const t of matchedTriggers) {
+    if (!skillExecutionIdByName.has(t.skill)) {
+      skillExecutionIdByName.set(t.skill, t.skillExecutionId);
+    }
+  }
+
+  const corroboratingById = new Map<string, FindingAttribution[]>();
+  for (const observation of findingObservations) {
+    if (observation.outcome === 'deduped' && observation.dedupe.existingFindingId) {
+      const winnerId = observation.dedupe.existingFindingId;
+      const list = corroboratingById.get(winnerId) ?? [];
+      list.push({
+        skillExecutionId: skillExecutionIdByName.get(observation.skill ?? '') ?? '',
+        skillName: observation.skill ?? '',
+        role: 'corroborating',
+        matchType: observation.dedupe.matchType,
+      });
+      corroboratingById.set(winnerId, list);
+    }
+  }
+
+  const skillExecutions: SkillExecution[] = [];
+  const findings: ExportedFindingV2[] = [];
+  const discardedFindings: DiscardedFinding[] = [];
+  const verificationById = new Map<string, VerificationStage>();
+  const mergeById = new Map<string, MergeStage>();
+
+  for (const result of results) {
+    const report = result.report;
+    if (!report) continue;
+
+    const trigger = result.triggerId ? triggerById.get(result.triggerId) : undefined;
+    const skillExecutionId = trigger?.skillExecutionId ?? skillExecutionIdByName.get(report.skill) ?? report.skill;
+
+    for (const event of result.findingProcessingEvents ?? []) {
+      if (event.stage === 'verification' && event.action === 'revised' && event.replacement) {
+        verificationById.set(event.replacement.id, {
+          outcome: 'revised',
+          model: event.model,
+          runtime: event.runtime,
+          evidence: event.replacement.verification,
+          before: {
+            title: event.finding.title,
+            description: event.finding.description,
+            severity: event.finding.severity,
+            confidence: event.finding.confidence,
+          },
+        });
+      } else if (event.stage === 'verification' && event.action === 'rejected') {
+        discardedFindings.push({
+          originSkillExecutionId: skillExecutionId,
+          stage: 'verification_rejected',
+          severity: event.finding.severity,
+          title: event.finding.title,
+          location: event.finding.location,
+          model: event.model,
+          reason: event.reason,
+        });
+      } else if (event.stage === 'merge' && event.action === 'merged') {
+        const survivorId = event.replacement?.id;
+        discardedFindings.push({
+          originSkillExecutionId: skillExecutionId,
+          stage: 'merge_absorbed',
+          severity: event.finding.severity,
+          title: event.finding.title,
+          location: event.finding.location,
+          model: event.model,
+          reason: event.reason,
+          survivorFindingId: survivorId,
+        });
+        if (survivorId) {
+          const entry = mergeById.get(survivorId) ?? { model: event.model, runtime: event.runtime, absorbedFindingIds: [] };
+          entry.absorbedFindingIds.push(event.finding.id);
+          mergeById.set(survivorId, entry);
+        }
+      }
+    }
+
+    const auxiliaryUsageEntries = toAuxiliaryUsageEntries(report.auxiliaryUsage, report.auxiliaryUsageAttribution);
+
+    skillExecutions.push({
+      skillExecutionId,
+      skillName: report.skill,
+      triggerId: result.triggerId,
+      triggerName: result.triggerName,
+      model: report.model,
+      runtime: report.runtime,
+      auxiliaryModel: trigger?.auxiliaryModel,
+      synthesisModel: trigger?.synthesisModel,
+      summary: report.summary,
+      durationMs: report.durationMs,
+      usage: report.usage,
+      auxiliaryUsage: auxiliaryUsageEntries.length > 0 ? auxiliaryUsageEntries : undefined,
+      findingsBySeverity: severityBreakdown(report.findings),
+      findingIds: report.findings.map((f) => f.id),
+      failedHunks: report.failedHunks,
+      failedExtractions: report.failedExtractions,
+      error: report.error,
+      verifierRejections: report.verifierRejections,
+    });
+
+    for (const finding of report.findings) {
+      findings.push({
+        id: finding.id,
+        contentHash: generateContentHash(finding.title, finding.description),
+        severity: finding.severity,
+        confidence: finding.confidence,
+        title: finding.title,
+        description: finding.description,
+        verification: finding.verification,
+        location: finding.location,
+        additionalLocations: finding.additionalLocations,
+        sourceSnippet: finding.sourceSnippet,
+        reportedBy: [
+          { skillExecutionId, skillName: report.skill, role: 'primary' },
+          ...(corroboratingById.get(finding.id) ?? []),
+        ],
+        provenance: {
+          originSkillExecutionId: skillExecutionId,
+          originModel: report.model,
+          verification: verificationById.get(finding.id),
+          merge: mergeById.get(finding.id),
+        },
+      });
+    }
+  }
+
+  const observations: FindingObservationV2[] = findingObservations.map((observation) => {
+    const skillExecutionId = skillExecutionIdByName.get(observation.skill ?? '') ?? '';
+    const origin = { skillExecutionId, skillName: observation.skill ?? '' };
+    const findingSnapshot = {
+      id: observation.finding.id,
+      severity: observation.finding.severity,
+      confidence: observation.finding.confidence,
+      title: observation.finding.title,
+      description: observation.finding.description,
+      location: observation.finding.location,
+      elapsedMs: observation.finding.elapsedMs,
+    };
+
+    switch (observation.outcome) {
+      case 'deduped':
+        return { outcome: 'deduped', origin, finding: findingSnapshot, dedupe: observation.dedupe };
+      case 'skipped':
+        return { outcome: 'skipped', origin, finding: findingSnapshot, skippedReason: observation.skippedReason };
+      case 'resolved':
+        return { outcome: 'resolved', origin, finding: findingSnapshot, resolvedReason: observation.resolvedReason };
+      case 'posted':
+        return { outcome: 'posted', origin, finding: findingSnapshot };
+      case 'failed':
+        return { outcome: 'failed', origin, finding: findingSnapshot };
+    }
+  });
+
+  const byOutcome = { posted: 0, deduped: 0, skipped: 0, resolved: 0, failed: 0 };
+  for (const observation of findingObservations) {
+    byOutcome[observation.outcome]++;
+  }
+
+  return WardenFindingsSchemaV2.parse({
+    schemaVersion: '2',
+    runId: options.runId,
+    skillExecutions,
+    findings,
+    discardedFindings: discardedFindings.length > 0 ? discardedFindings : undefined,
+    findingObservations: observations,
+    summary: {
+      totalFindings: findings.length,
+      totalSkillExecutions: skillExecutions.length,
+      bySeverity: severityBreakdown(findings),
+      byOutcome,
+    },
+  });
+}

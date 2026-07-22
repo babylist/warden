@@ -173,6 +173,7 @@ describe('setupAuthEnv', () => {
       configPath: 'warden.toml',
       maxFindings: 50,
       parallel: 4,
+      outputSchemaVersion: '1',
     });
     expect(process.env['ANTHROPIC_API_KEY']).toBe('sk-ant-api-key');
     expect(process.env['WARDEN_ANTHROPIC_API_KEY']).toBe('sk-ant-api-key');
@@ -188,6 +189,7 @@ describe('setupAuthEnv', () => {
       configPath: 'warden.toml',
       maxFindings: 50,
       parallel: 4,
+      outputSchemaVersion: '1',
     });
     expect(process.env['CLAUDE_CODE_OAUTH_TOKEN']).toBe('sk-ant-oat-oauth-token');
     expect(process.env['ANTHROPIC_API_KEY']).toBeUndefined();
@@ -206,6 +208,7 @@ describe('setupAuthEnv', () => {
       configPath: 'warden.toml',
       maxFindings: 50,
       parallel: 4,
+      outputSchemaVersion: '1',
     });
 
     expect(process.env['CLAUDE_CODE_OAUTH_TOKEN']).toBe('sk-ant-oat-oauth-token');
@@ -226,6 +229,7 @@ describe('setupAuthEnv', () => {
       configPath: 'warden.toml',
       maxFindings: 50,
       parallel: 4,
+      outputSchemaVersion: '1',
     });
 
     expect(process.env['CLAUDE_CODE_OAUTH_TOKEN']).toBeUndefined();
@@ -245,6 +249,7 @@ describe('validateInputs', () => {
       configPath: 'warden.toml',
       maxFindings: 50,
       parallel: 4,
+      outputSchemaVersion: '1',
     })).toThrow('base-skill-root requires base-config-path');
   });
 
@@ -257,6 +262,7 @@ describe('validateInputs', () => {
       configPath: 'warden.toml',
       maxFindings: 50,
       parallel: 4,
+      outputSchemaVersion: '1',
     })).toThrow('findings-file is required when mode is report');
   });
 });

@@ -19,7 +19,10 @@ inputs:
     required: false
     default: 'run'
   findings-file:
-    description: 'Path to structured JSON findings file to read in report mode.'
+    description: 'Path to structured JSON findings file to read in report mode. When output-schema-version is "2", this is the schema-v2 findings file.'
+    required: false
+  metadata-file:
+    description: 'Path to schema-v2 metadata JSON file to read in report mode, required alongside findings-file when output-schema-version is "2".'
     required: false
   base-config-path:
     description: 'Path to the org-wide base warden.toml file to load before the repo config (relative to repo root)'
@@ -55,6 +58,13 @@ inputs:
     description: 'Maximum number of concurrent trigger executions'
     required: false
     default: '5'
+  output-schema-version:
+    description: 'Output schema for findings-file. "2" additionally writes warden-metadata.json and warden-findings-v2.json.'
+    required: false
+    default: '1'
+  action-ref:
+    description: 'Pinned SHA/ref of this action as referenced by the calling workflow, recorded in schema v2 metadata as harness.actionRef'
+    required: false
 
 outputs:
   findings-count:
@@ -69,6 +79,12 @@ outputs:
   findings-file:
     description: 'Path to structured JSON findings file (always written, use for upload to GCS/S3/etc.)'
     value: ${{ steps.warden.outputs.findings-file }}
+  metadata-file:
+    description: 'Path to schema-v2 metadata JSON file (only written when output-schema-version is "2")'
+    value: ${{ steps.warden.outputs.metadata-file }}
+  findings-file-v2:
+    description: 'Path to schema-v2 findings JSON file (only written when output-schema-version is "2")'
+    value: ${{ steps.warden.outputs.findings-file-v2 }}
 
 runs:
   using: 'composite'
@@ -81,6 +97,7 @@ runs:
         INPUT_GITHUB_TOKEN: ${{ inputs.github-token }}
         INPUT_MODE: ${{ inputs.mode }}
         INPUT_FINDINGS_FILE: ${{ inputs.findings-file }}
+        INPUT_METADATA_FILE: ${{ inputs.metadata-file }}
         INPUT_BASE_CONFIG_PATH: ${{ inputs.base-config-path }}
         INPUT_BASE_SKILL_ROOT: ${{ inputs.base-skill-root }}
         INPUT_CONFIG_PATH: ${{ inputs.config-path }}
@@ -90,4 +107,6 @@ runs:
         INPUT_REQUEST_CHANGES: ${{ inputs.request-changes }}
         INPUT_FAIL_CHECK: ${{ inputs.fail-check }}
         INPUT_PARALLEL: ${{ inputs.parallel }}
+        INPUT_OUTPUT_SCHEMA_VERSION: ${{ inputs.output-schema-version }}
+        INPUT_ACTION_REF: ${{ inputs.action-ref }}
       run: node ${{ github.action_path }}/dist/action/index.js

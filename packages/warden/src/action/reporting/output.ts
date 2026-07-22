@@ -146,7 +146,7 @@ export function buildConfiguredSkillsList({
   return result;
 }
 
-function serializeTriggerError(error: unknown): z.infer<typeof TriggerErrorSchema> {
+export function serializeTriggerError(error: unknown): z.infer<typeof TriggerErrorSchema> {
   if (error instanceof Error) {
     return {
       name: error.name,

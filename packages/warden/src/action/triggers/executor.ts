@@ -15,7 +15,8 @@ import type { OutputMode } from '../../cli/output/tty.js';
 import { resolveSkillAsync } from '../../skills/loader.js';
 import { filterContextByPaths } from '../../triggers/matcher.js';
 import { runSkillTask, createDefaultCallbacks } from '../../cli/output/tasks.js';
-import type { SkillTaskOptions } from '../../cli/output/tasks.js';
+import type { SkillTaskOptions, SkillProgressCallbacks } from '../../cli/output/tasks.js';
+import type { FindingProcessingEvent } from '../../sdk/runner.js';
 import { renderSkillReport } from '../../output/renderer.js';
 import { logGroup, logGroupEnd } from '../workflow/base.js';
 import { DEFAULT_FILE_CONCURRENCY, type AnalysisChunkingConfig } from '../../sdk/types.js';
@@ -125,6 +126,8 @@ export interface TriggerResult {
   checkRunUrl?: string;
   maxFindings?: number;
   error?: unknown;
+  /** Verification/merge events for this run, independent of CLI debug verbosity. */
+  findingProcessingEvents?: FindingProcessingEvent[];
 }
 
 // -----------------------------------------------------------------------------
@@ -204,7 +207,15 @@ export async function executeTrigger(
           },
         };
 
-        const callbacks = createDefaultCallbacks([taskOptions], CI_OUTPUT_MODE, Verbosity.Normal);
+        const defaultCallbacks = createDefaultCallbacks([taskOptions], CI_OUTPUT_MODE, Verbosity.Normal);
+        const findingProcessingEvents: FindingProcessingEvent[] = [];
+        const callbacks: SkillProgressCallbacks = {
+          ...defaultCallbacks,
+          onFindingProcessing: (name, event) => {
+            findingProcessingEvents.push(event);
+            defaultCallbacks.onFindingProcessing?.(name, event);
+          },
+        };
         const fileConcurrency = deps.semaphore ? Number.MAX_SAFE_INTEGER : DEFAULT_FILE_CONCURRENCY;
         const result = await runSkillTask(taskOptions, fileConcurrency, callbacks, deps.semaphore);
         const report = result.report;
@@ -269,6 +280,7 @@ export async function executeTrigger(
           failCheck,
           checkRunUrl: skillCheckUrl,
           maxFindings,
+          findingProcessingEvents,
         };
       } catch (error) {
         if (error instanceof ActionFailedError) throw error;

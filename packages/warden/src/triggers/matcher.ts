@@ -93,7 +93,7 @@ export function matchGlob(pattern: string, path: string): boolean {
  * Check if a file list matches the path filters.
  * Returns true if paths match (or no filters), false if all files are excluded.
  */
-function matchPathFilters(
+export function matchPathFilters(
   filters: { paths?: string[]; ignorePaths?: string[] },
   filenames: string[] | undefined
 ): boolean {
@@ -125,7 +125,7 @@ function matchPathFilters(
   return true;
 }
 
-function matchPullRequestState(trigger: ResolvedTrigger, context: EventContext): boolean {
+export function matchPullRequestState(trigger: ResolvedTrigger, context: EventContext): boolean {
   const labels = context.pullRequest?.labels ?? [];
   const labelMatches =
     trigger.labels !== undefined &&

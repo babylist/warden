@@ -104,6 +104,8 @@ describe('verifyFindings', () => {
       action: 'rejected',
       finding,
       reason: 'guarded upstream',
+      model: 'claude-haiku-4-5',
+      runtime: undefined,
     });
     expect(result.usage).toEqual(expect.objectContaining(makeUsage()));
     expect(result.verifierRejections).toEqual({ count: 1, reasons: ['guarded upstream'] });

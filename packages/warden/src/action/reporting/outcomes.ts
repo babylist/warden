@@ -21,6 +21,7 @@ export const DedupeDetailSchema = z.object({
   existingCommentId: z.number().int().positive().optional(),
   existingThreadId: z.string().optional(),
   existingResolved: z.boolean().optional(),
+  existingSkills: z.array(z.string()).optional(),
   actor: z.string().optional(),
 });
 

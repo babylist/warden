@@ -119,7 +119,7 @@ vi.mock('./base.js', async () => {
 import { runSkillTask } from '../../cli/output/tasks.js';
 import { fetchExistingComments, deduplicateFindings, processDuplicateActions } from '../../output/dedup.js';
 import { evaluateFixAttempts } from '../fix-evaluation/index.js';
-import { setFailed, writeFindingsOutput } from './base.js';
+import { setFailed, writeFindingsOutput, getMetadataOutputPath, getFindingsOutputPathV2 } from './base.js';
 import { runPRWorkflow } from './pr-workflow.js';
 import { clearSkillsCache } from '../../skills/loader.js';
 import { Semaphore } from '../../utils/index.js';
@@ -229,6 +229,7 @@ function createDefaultInputs(overrides: Partial<ActionInputs> = {}): ActionInput
     configPath: 'warden.toml',
     maxFindings: 50,
     parallel: 2,
+    outputSchemaVersion: '1',
     ...overrides,
   };
 }
@@ -470,6 +471,49 @@ describe('runPRWorkflow', () => {
           name: 'warden',
           status: 'completed',
         })
+      );
+      expect(mockOctokit.pulls.createReview).toHaveBeenCalledWith(
+        expect.objectContaining({
+          owner: 'test-owner',
+          repo: 'test-repo',
+          pull_number: 123,
+          commit_id: PR_HEAD_SHA,
+        })
+      );
+    });
+
+    it('schema v2 analyze output replays correctly in report mode', async () => {
+      const finding = createFinding();
+      const report = createSkillReport({ findings: [finding] });
+      mockRunSkillTask.mockResolvedValue({ name: 'test-trigger', report });
+
+      await runPRWorkflow(
+        mockOctokit,
+        createDefaultInputs({ mode: 'analyze', outputSchemaVersion: '2' }),
+        'pull_request',
+        EVENT_PAYLOAD_PATH,
+        FIXTURES_DIR
+      );
+
+      const metadataFile = getMetadataOutputPath(FIXTURES_DIR);
+      const findingsFile = getFindingsOutputPathV2(FIXTURES_DIR);
+
+      try {
+        await runPRWorkflow(
+          mockOctokit,
+          createDefaultInputs({ mode: 'report', outputSchemaVersion: '2', metadataFile, findingsFile }),
+          'pull_request',
+          EVENT_PAYLOAD_PATH,
+          FIXTURES_DIR
+        );
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+      }
+
+      expect(mockRunSkillTask).toHaveBeenCalledTimes(1);
+      expect(mockOctokit.checks.create).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'warden: test-skill', status: 'completed' })
       );
       expect(mockOctokit.pulls.createReview).toHaveBeenCalledWith(
         expect.objectContaining({

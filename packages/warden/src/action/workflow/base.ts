@@ -15,10 +15,13 @@ import type { EventContext, SkillReport } from '../../types/index.js';
 import type { FindingObservation } from '../reporting/outcomes.js';
 import { buildFindingsOutput } from '../reporting/output.js';
 import type { ReplayTriggerResult } from '../reporting/output.js';
+import { buildFindingsOutputV2, buildMetadataOutputV2 } from '../reporting/output-v2.js';
+import type { BuildFindingsOutputV2Options, BuildMetadataOutputV2Options } from '../reporting/output-v2.js';
 import { countSeverity } from '../../triggers/matcher.js';
 import type { RuntimeName } from '../../sdk/runtimes/index.js';
 import type { ActionInputs } from '../inputs.js';
 import type { TriggerResult } from '../triggers/executor.js';
+import type { ResolvedTrigger } from '../../config/loader.js';
 
 /**
  * Sentinel error thrown by setFailed() so the top-level catch handler
@@ -394,5 +397,59 @@ export function writeFindingsOutput(
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, JSON.stringify(output, null, 2));
   setOutput('findings-file', getFindingsOutputValue(filePath, context.repoPath));
+  return filePath;
+}
+
+/** Get the path for the schema-v2 metadata output file. */
+export function getMetadataOutputPath(repoPath?: string): string {
+  if (repoPath && process.env['GITHUB_WORKSPACE']) {
+    return join(repoPath, 'warden-metadata.json');
+  }
+
+  const tmpDir = process.env['RUNNER_TEMP'] ?? tmpdir();
+  return join(tmpDir, 'warden-metadata.json');
+}
+
+/** Get the path for the schema-v2 findings output file. */
+export function getFindingsOutputPathV2(repoPath?: string): string {
+  if (repoPath && process.env['GITHUB_WORKSPACE']) {
+    return join(repoPath, 'warden-findings-v2.json');
+  }
+
+  const tmpDir = process.env['RUNNER_TEMP'] ?? tmpdir();
+  return join(tmpDir, 'warden-findings-v2.json');
+}
+
+/** Write the schema-v2 metadata file, gated separately from the v1 findings-file write. */
+export function writeMetadataOutput(
+  context: EventContext,
+  resolvedTriggers: ResolvedTrigger[],
+  matchedTriggers: ResolvedTrigger[],
+  results: TriggerResult[],
+  options: BuildMetadataOutputV2Options
+): string {
+  const filePath = getMetadataOutputPath(context.repoPath);
+  const output = buildMetadataOutputV2(context, resolvedTriggers, matchedTriggers, results, options);
+
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, JSON.stringify(output, null, 2));
+  setOutput('metadata-file', getFindingsOutputValue(filePath, context.repoPath));
+  return filePath;
+}
+
+/** Write the schema-v2 findings file, gated separately from the v1 findings-file write. */
+export function writeFindingsOutputV2(
+  results: TriggerResult[],
+  matchedTriggers: ResolvedTrigger[],
+  findingObservations: FindingObservation[],
+  context: EventContext,
+  options: BuildFindingsOutputV2Options
+): string {
+  const filePath = getFindingsOutputPathV2(context.repoPath);
+  const output = buildFindingsOutputV2(results, matchedTriggers, findingObservations, options);
+
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, JSON.stringify(output, null, 2));
+  setOutput('findings-file-v2', getFindingsOutputValue(filePath, context.repoPath));
   return filePath;
 }

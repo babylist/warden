@@ -49,6 +49,7 @@ const baseInputs: ActionInputs = {
   configPath: 'warden.toml',
   maxFindings: 50,
   parallel: 4,
+  outputSchemaVersion: '1',
 };
 
 const capturedTransactions: TransactionEvent[] = [];
