@@ -7,7 +7,7 @@ import type { Octokit } from '@octokit/rest';
 import type { EventContext, SkillReport } from '../../types/index.js';
 import type { FindingObservation } from '../reporting/outcomes.js';
 import type { ReplayTriggerResult } from '../reporting/output.js';
-import type { BuildFindingsOutputV2Options, BuildMetadataOutputV2Options } from '../reporting/output-v2.js';
+import type { BuildFindingsOutputV2Options, BuildMetadataOutputV2Options, WardenFindingsV2, WardenMetadata } from '../reporting/output-v2.js';
 import type { RuntimeName } from '../../sdk/runtimes/index.js';
 import type { ActionInputs } from '../inputs.js';
 import type { TriggerResult } from '../triggers/executor.js';
@@ -112,8 +112,12 @@ export declare function writeFindingsOutput(reports: SkillReport[], context: Eve
 export declare function getMetadataOutputPath(repoPath?: string): string;
 /** Get the path for the schema-v2 findings output file. */
 export declare function getFindingsOutputPathV2(repoPath?: string): string;
+/** Write an already-built schema-v2 metadata object as-is, with no rebuild. */
+export declare function writeMetadataOutputObject(metadata: WardenMetadata, context: EventContext): string;
 /** Write the schema-v2 metadata file, gated separately from the v1 findings-file write. */
 export declare function writeMetadataOutput(context: EventContext, resolvedTriggers: ResolvedTrigger[], matchedTriggers: ResolvedTrigger[], results: TriggerResult[], options: BuildMetadataOutputV2Options): string;
+/** Write an already-built schema-v2 findings object as-is, with no rebuild. */
+export declare function writeFindingsOutputV2Object(findings: WardenFindingsV2, context: EventContext): string;
 /** Write the schema-v2 findings file, gated separately from the v1 findings-file write. */
 export declare function writeFindingsOutputV2(results: TriggerResult[], matchedTriggers: ResolvedTrigger[], findingObservations: FindingObservation[], context: EventContext, options: BuildFindingsOutputV2Options): string;
 //# sourceMappingURL=base.d.ts.map

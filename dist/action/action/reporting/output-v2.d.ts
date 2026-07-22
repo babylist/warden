@@ -166,7 +166,6 @@ export declare const SkillExecutionSchema: z.ZodObject<{
     failedExtractions: z.ZodOptional<z.ZodNumber>;
     error: z.ZodOptional<z.ZodObject<{
         code: z.ZodEnum<{
-            unknown: "unknown";
             auth_failed: "auth_failed";
             provider_unavailable: "provider_unavailable";
             sdk_error: "sdk_error";
@@ -184,6 +183,7 @@ export declare const SkillExecutionSchema: z.ZodObject<{
             extraction_llm_failed: "extraction_llm_failed";
             extraction_llm_timeout: "extraction_llm_timeout";
             extraction_no_api_key: "extraction_no_api_key";
+            unknown: "unknown";
         }>;
         message: z.ZodString;
         timestamp: z.ZodOptional<z.ZodString>;
@@ -625,7 +625,6 @@ export declare const WardenFindingsSchemaV2: z.ZodObject<{
         failedExtractions: z.ZodOptional<z.ZodNumber>;
         error: z.ZodOptional<z.ZodObject<{
             code: z.ZodEnum<{
-                unknown: "unknown";
                 auth_failed: "auth_failed";
                 provider_unavailable: "provider_unavailable";
                 sdk_error: "sdk_error";
@@ -643,6 +642,7 @@ export declare const WardenFindingsSchemaV2: z.ZodObject<{
                 extraction_llm_failed: "extraction_llm_failed";
                 extraction_llm_timeout: "extraction_llm_timeout";
                 extraction_no_api_key: "extraction_no_api_key";
+                unknown: "unknown";
             }>;
             message: z.ZodString;
             timestamp: z.ZodOptional<z.ZodString>;
@@ -944,6 +944,15 @@ export interface BuildMetadataOutputV2Options {
     actionRef?: string;
 }
 export declare function buildMetadataOutputV2(context: EventContext, resolvedTriggers: ResolvedTrigger[], matchedTriggers: ResolvedTrigger[], results: TriggerResult[], options: BuildMetadataOutputV2Options): WardenMetadata;
+/**
+ * Rebuild only the observation-derived parts of a v2 findings payload:
+ * `findingObservations` and `summary.byOutcome`. Used by report mode to fold
+ * real posting outcomes into an analyze-phase payload without touching
+ * `skillExecutions`/`findings`/`discardedFindings`, which can only be
+ * reconstructed from the original `findingProcessingEvents` and would
+ * otherwise be silently wiped by a full rebuild from replayed results.
+ */
+export declare function patchFindingsOutputV2Observations(base: WardenFindingsV2, matchedTriggers: ResolvedTrigger[], findingObservations: FindingObservation[]): WardenFindingsV2;
 export interface BuildFindingsOutputV2Options {
     runId: string;
 }

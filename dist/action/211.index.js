@@ -1274,6 +1274,9 @@ function validateInputs(inputs) {
     if (inputs.mode === 'report' && !inputs.findingsFile) {
         throw new Error('findings-file is required when mode is report');
     }
+    if (inputs.mode === 'report' && inputs.outputSchemaVersion === '2' && !inputs.metadataFile) {
+        throw new Error('metadata-file is required when mode is report and output-schema-version is \'2\'');
+    }
 }
 /**
  * Set up environment variables for authentication.
@@ -1303,6 +1306,7 @@ function setupAuthEnv(inputs) {
 /* harmony export */   HT: () => (/* binding */ WardenFindingsSchemaV2),
 /* harmony export */   I2: () => (/* binding */ WardenMetadataSchema),
 /* harmony export */   LE: () => (/* binding */ buildMetadataOutputV2),
+/* harmony export */   V6: () => (/* binding */ patchFindingsOutputV2Observations),
 /* harmony export */   WS: () => (/* binding */ buildFindingsOutputV2)
 /* harmony export */ });
 /* unused harmony exports SeverityBreakdownSchema, SkippedTriggerReasonSchema, TriggerRunResultV2Schema, SkillExecutionSchema, ExportedFindingV2Schema, DiscardedFindingSchema, DedupeDetailV2Schema, FindingObservationV2Schema */
@@ -1680,14 +1684,67 @@ function buildMetadataOutputV2(context, resolvedTriggers, matchedTriggers, resul
         }),
     });
 }
-function buildFindingsOutputV2(results, matchedTriggers, findingObservations, options) {
-    const triggerById = new Map(matchedTriggers.map((t) => [t.id, t]));
+function skillExecutionIdByNameFrom(matchedTriggers) {
     const skillExecutionIdByName = new Map();
     for (const t of matchedTriggers) {
         if (!skillExecutionIdByName.has(t.skill)) {
             skillExecutionIdByName.set(t.skill, t.skillExecutionId);
         }
     }
+    return skillExecutionIdByName;
+}
+function buildFindingObservationsV2(findingObservations, matchedTriggers) {
+    const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
+    const observations = findingObservations.map((observation) => {
+        const skillExecutionId = skillExecutionIdByName.get(observation.skill ?? '') ?? '';
+        const origin = { skillExecutionId, skillName: observation.skill ?? '' };
+        const findingSnapshot = {
+            id: observation.finding.id,
+            severity: observation.finding.severity,
+            confidence: observation.finding.confidence,
+            title: observation.finding.title,
+            description: observation.finding.description,
+            location: observation.finding.location,
+            elapsedMs: observation.finding.elapsedMs,
+        };
+        switch (observation.outcome) {
+            case 'deduped':
+                return { outcome: 'deduped', origin, finding: findingSnapshot, dedupe: observation.dedupe };
+            case 'skipped':
+                return { outcome: 'skipped', origin, finding: findingSnapshot, skippedReason: observation.skippedReason };
+            case 'resolved':
+                return { outcome: 'resolved', origin, finding: findingSnapshot, resolvedReason: observation.resolvedReason };
+            case 'posted':
+                return { outcome: 'posted', origin, finding: findingSnapshot };
+            case 'failed':
+                return { outcome: 'failed', origin, finding: findingSnapshot };
+        }
+    });
+    const byOutcome = { posted: 0, deduped: 0, skipped: 0, resolved: 0, failed: 0 };
+    for (const observation of findingObservations) {
+        byOutcome[observation.outcome]++;
+    }
+    return { observations, byOutcome };
+}
+/**
+ * Rebuild only the observation-derived parts of a v2 findings payload:
+ * `findingObservations` and `summary.byOutcome`. Used by report mode to fold
+ * real posting outcomes into an analyze-phase payload without touching
+ * `skillExecutions`/`findings`/`discardedFindings`, which can only be
+ * reconstructed from the original `findingProcessingEvents` and would
+ * otherwise be silently wiped by a full rebuild from replayed results.
+ */
+function patchFindingsOutputV2Observations(base, matchedTriggers, findingObservations) {
+    const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, matchedTriggers);
+    return WardenFindingsSchemaV2.parse({
+        ...base,
+        findingObservations: observations,
+        summary: { ...base.summary, byOutcome },
+    });
+}
+function buildFindingsOutputV2(results, matchedTriggers, findingObservations, options) {
+    const triggerById = new Map(matchedTriggers.map((t) => [t.id, t]));
+    const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
     const corroboratingById = new Map();
     for (const observation of findingObservations) {
         if (observation.outcome === 'deduped' && observation.dedupe.existingFindingId) {
@@ -1804,35 +1861,7 @@ function buildFindingsOutputV2(results, matchedTriggers, findingObservations, op
             });
         }
     }
-    const observations = findingObservations.map((observation) => {
-        const skillExecutionId = skillExecutionIdByName.get(observation.skill ?? '') ?? '';
-        const origin = { skillExecutionId, skillName: observation.skill ?? '' };
-        const findingSnapshot = {
-            id: observation.finding.id,
-            severity: observation.finding.severity,
-            confidence: observation.finding.confidence,
-            title: observation.finding.title,
-            description: observation.finding.description,
-            location: observation.finding.location,
-            elapsedMs: observation.finding.elapsedMs,
-        };
-        switch (observation.outcome) {
-            case 'deduped':
-                return { outcome: 'deduped', origin, finding: findingSnapshot, dedupe: observation.dedupe };
-            case 'skipped':
-                return { outcome: 'skipped', origin, finding: findingSnapshot, skippedReason: observation.skippedReason };
-            case 'resolved':
-                return { outcome: 'resolved', origin, finding: findingSnapshot, resolvedReason: observation.resolvedReason };
-            case 'posted':
-                return { outcome: 'posted', origin, finding: findingSnapshot };
-            case 'failed':
-                return { outcome: 'failed', origin, finding: findingSnapshot };
-        }
-    });
-    const byOutcome = { posted: 0, deduped: 0, skipped: 0, resolved: 0, failed: 0 };
-    for (const observation of findingObservations) {
-        byOutcome[observation.outcome]++;
-    }
+    const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, matchedTriggers);
     return WardenFindingsSchemaV2.parse({
         schemaVersion: '2',
         runId: options.runId,
@@ -3023,10 +3052,12 @@ __webpack_async_result__();
 /* harmony export */   QT: () => (/* binding */ logGroup),
 /* harmony export */   TN: () => (/* binding */ logGroupEnd),
 /* harmony export */   Uf: () => (/* binding */ getAuthenticatedBotLogin),
+/* harmony export */   XM: () => (/* binding */ writeMetadataOutputObject),
 /* harmony export */   YL: () => (/* binding */ getDefaultBranchFromAPI),
 /* harmony export */   a3: () => (/* binding */ handleTriggerErrors),
 /* harmony export */   bZ: () => (/* binding */ prepareRuntimeEnvironment),
 /* harmony export */   dV: () => (/* binding */ computeWorkflowOutputs),
+/* harmony export */   iy: () => (/* binding */ writeFindingsOutputV2Object),
 /* harmony export */   sl: () => (/* binding */ collectTriggerErrors),
 /* harmony export */   uH: () => (/* binding */ setOutput),
 /* harmony export */   wZ: () => (/* binding */ setWorkflowOutputs),
@@ -3375,23 +3406,31 @@ function getFindingsOutputPathV2(repoPath) {
     const tmpDir = process.env['RUNNER_TEMP'] ?? (0,node_os__WEBPACK_IMPORTED_MODULE_1__.tmpdir)();
     return (0,node_path__WEBPACK_IMPORTED_MODULE_2__.join)(tmpDir, 'warden-findings-v2.json');
 }
+/** Write an already-built schema-v2 metadata object as-is, with no rebuild. */
+function writeMetadataOutputObject(metadata, context) {
+    const filePath = getMetadataOutputPath(context.repoPath);
+    (0,node_fs__WEBPACK_IMPORTED_MODULE_0__.mkdirSync)((0,node_path__WEBPACK_IMPORTED_MODULE_2__.dirname)(filePath), { recursive: true });
+    (0,node_fs__WEBPACK_IMPORTED_MODULE_0__.writeFileSync)(filePath, JSON.stringify(metadata, null, 2));
+    setOutput('metadata-file', getFindingsOutputValue(filePath, context.repoPath));
+    return filePath;
+}
 /** Write the schema-v2 metadata file, gated separately from the v1 findings-file write. */
 function writeMetadataOutput(context, resolvedTriggers, matchedTriggers, results, options) {
-    const filePath = getMetadataOutputPath(context.repoPath);
     const output = (0,_reporting_output_v2_js__WEBPACK_IMPORTED_MODULE_7__/* .buildMetadataOutputV2 */ .LE)(context, resolvedTriggers, matchedTriggers, results, options);
+    return writeMetadataOutputObject(output, context);
+}
+/** Write an already-built schema-v2 findings object as-is, with no rebuild. */
+function writeFindingsOutputV2Object(findings, context) {
+    const filePath = getFindingsOutputPathV2(context.repoPath);
     (0,node_fs__WEBPACK_IMPORTED_MODULE_0__.mkdirSync)((0,node_path__WEBPACK_IMPORTED_MODULE_2__.dirname)(filePath), { recursive: true });
-    (0,node_fs__WEBPACK_IMPORTED_MODULE_0__.writeFileSync)(filePath, JSON.stringify(output, null, 2));
-    setOutput('metadata-file', getFindingsOutputValue(filePath, context.repoPath));
+    (0,node_fs__WEBPACK_IMPORTED_MODULE_0__.writeFileSync)(filePath, JSON.stringify(findings, null, 2));
+    setOutput('findings-file-v2', getFindingsOutputValue(filePath, context.repoPath));
     return filePath;
 }
 /** Write the schema-v2 findings file, gated separately from the v1 findings-file write. */
 function writeFindingsOutputV2(results, matchedTriggers, findingObservations, context, options) {
-    const filePath = getFindingsOutputPathV2(context.repoPath);
     const output = (0,_reporting_output_v2_js__WEBPACK_IMPORTED_MODULE_7__/* .buildFindingsOutputV2 */ .WS)(results, matchedTriggers, findingObservations, options);
-    (0,node_fs__WEBPACK_IMPORTED_MODULE_0__.mkdirSync)((0,node_path__WEBPACK_IMPORTED_MODULE_2__.dirname)(filePath), { recursive: true });
-    (0,node_fs__WEBPACK_IMPORTED_MODULE_0__.writeFileSync)(filePath, JSON.stringify(output, null, 2));
-    setOutput('findings-file-v2', getFindingsOutputValue(filePath, context.repoPath));
-    return filePath;
+    return writeFindingsOutputV2Object(output, context);
 }
 
 
@@ -4163,6 +4202,28 @@ function writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers
     }
 }
 /**
+ * Report mode's v2 write: unlike analyze mode or single-run mode, report mode
+ * only has TriggerResults replayed from ExportedFindingV2 (no
+ * findingProcessingEvents), so a full rebuild here would silently wipe the
+ * analyze-phase `provenance`/`discardedFindings`. Instead, write the
+ * unmodified analyze-phase metadata and patch only `findingObservations` /
+ * `summary.byOutcome` onto the analyze-phase findings payload.
+ */
+function writeSchemaV2ReportOutputs(metadataOutputV2, findingsOutputV2, context, matchedTriggers, findingObservations, onError) {
+    if (!metadataOutputV2 || !findingsOutputV2)
+        return;
+    try {
+        const metadataPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeMetadataOutputObject */ .XM)(metadataOutputV2, context);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Metadata written to ${metadataPath}`);
+        const patched = (0,_reporting_output_v2_js__WEBPACK_IMPORTED_MODULE_22__/* .patchFindingsOutputV2Observations */ .V6)(findingsOutputV2, matchedTriggers, findingObservations);
+        const findingsV2Path = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutputV2Object */ .iy)(patched, context);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Findings (v2) written to ${findingsV2Path}`);
+    }
+    catch (error) {
+        onError(`Failed to write schema-v2 output: ${error}`);
+    }
+}
+/**
  * Dismiss review, set outputs, update core check, fail action.
  */
 async function finalizeWorkflow(octokit, context, previousReviewInfo, coreCheckId, results, reports, findingObservations, shouldFailAction, failureReasons, canResolveStale, gate, triggerErrors, matchedTriggers, resolvedTriggers, inputs) {
@@ -4310,9 +4371,9 @@ async function runOrFailCore(octokit, context, coreCheckId, operation) {
         throw error;
     }
 }
-function resolveFindingsFilePath(inputPath, repoPath) {
+function resolveFindingsFilePath(inputPath, repoPath, missingMessage = 'findings-file is required when mode is report') {
     if (!inputPath) {
-        (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)('findings-file is required when mode is report');
+        (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(missingMessage);
     }
     return (0,node_path__WEBPACK_IMPORTED_MODULE_1__.isAbsolute)(inputPath) ? inputPath : (0,node_path__WEBPACK_IMPORTED_MODULE_1__.join)(repoPath, inputPath);
 }
@@ -4599,7 +4660,7 @@ async function finalizeReportWorkflow(octokit, context, previousReviewInfo, resu
     catch (error) {
         (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
     }
-    writeSchemaV2Outputs(options.inputs, context, options.resolvedTriggers, options.matchedTriggers, results, findingObservations, _cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6);
+    writeSchemaV2ReportOutputs(options.metadataOutputV2, options.findingsOutputV2, context, options.matchedTriggers, findingObservations, _cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6);
     await createCompletedCoreCheckForReport(octokit, context, results, reports, shouldFailAction || triggerErrors.length > 0, outputs);
     if (shouldFailAction) {
         (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(failureReasons.join('; '));
@@ -4719,7 +4780,7 @@ async function runAnalyzeMode(inputs, initResult, span) {
     (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Analysis complete: ${outputs.findingsCount} total findings`);
 }
 function readMetadataFileV2(inputPath, repoPath) {
-    const filePath = resolveFindingsFilePath(inputPath, repoPath);
+    const filePath = resolveFindingsFilePath(inputPath, repoPath, 'metadata-file is required when mode is report and output-schema-version is \'2\'');
     try {
         return _reporting_output_v2_js__WEBPACK_IMPORTED_MODULE_22__/* .WardenMetadataSchema */ .I2.parse(JSON.parse((0,node_fs__WEBPACK_IMPORTED_MODULE_0__.readFileSync)(filePath, 'utf-8')));
     }
@@ -4923,7 +4984,7 @@ async function runReportMode(octokit, inputs, initResult, repoPath, span) {
             resolveSpan.setAttribute('warden.feedback.auto_resolve.stale_count', resolutionResult.autoResolvedByStaleCheck);
             reviewPhase.findingObservations.push(...resolutionResult.findingObservations);
         });
-        await finalizeReportWorkflow(octokit, context, previousReviewInfo, results, reviewPhase.reports, reviewPhase.findingObservations, reviewPhase.shouldFailAction, reviewPhase.failureReasons, canResolveStale, gate, triggerErrors, { failOnWriteError: true, matchedTriggers, resolvedTriggers, inputs });
+        await finalizeReportWorkflow(octokit, context, previousReviewInfo, results, reviewPhase.reports, reviewPhase.findingObservations, reviewPhase.shouldFailAction, reviewPhase.failureReasons, canResolveStale, gate, triggerErrors, { failOnWriteError: true, matchedTriggers, resolvedTriggers, inputs, metadataOutputV2, findingsOutputV2 });
     }
     catch (error) {
         if (error instanceof _base_js__WEBPACK_IMPORTED_MODULE_19__/* .ActionFailedError */ .Ah) {

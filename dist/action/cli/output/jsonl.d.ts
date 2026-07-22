@@ -84,8 +84,8 @@ export declare const JsonlChunkRecordSchema: z.ZodObject<{
         lineRange: z.ZodString;
     }, z.core.$strip>;
     status: z.ZodEnum<{
-        error: "error";
         ok: "ok";
+        error: "error";
         skipped: "skipped";
     }>;
     findings: z.ZodArray<z.ZodObject<{
@@ -181,7 +181,6 @@ export declare const JsonlChunkRecordSchema: z.ZodObject<{
     durationMs: z.ZodNumber;
     error: z.ZodOptional<z.ZodObject<{
         code: z.ZodEnum<{
-            unknown: "unknown";
             auth_failed: "auth_failed";
             provider_unavailable: "provider_unavailable";
             sdk_error: "sdk_error";
@@ -199,6 +198,7 @@ export declare const JsonlChunkRecordSchema: z.ZodObject<{
             extraction_llm_failed: "extraction_llm_failed";
             extraction_llm_timeout: "extraction_llm_timeout";
             extraction_no_api_key: "extraction_no_api_key";
+            unknown: "unknown";
         }>;
         message: z.ZodString;
         timestamp: z.ZodOptional<z.ZodString>;
@@ -341,7 +341,6 @@ export declare const JsonlRecordSchema: z.ZodObject<{
         filename: z.ZodString;
         lineRange: z.ZodString;
         code: z.ZodEnum<{
-            unknown: "unknown";
             auth_failed: "auth_failed";
             provider_unavailable: "provider_unavailable";
             sdk_error: "sdk_error";
@@ -359,6 +358,7 @@ export declare const JsonlRecordSchema: z.ZodObject<{
             extraction_llm_failed: "extraction_llm_failed";
             extraction_llm_timeout: "extraction_llm_timeout";
             extraction_no_api_key: "extraction_no_api_key";
+            unknown: "unknown";
         }>;
         message: z.ZodString;
         preview: z.ZodOptional<z.ZodString>;
@@ -393,7 +393,6 @@ export declare const JsonlRecordSchema: z.ZodObject<{
     }, z.core.$strip>>>;
     error: z.ZodOptional<z.ZodObject<{
         code: z.ZodEnum<{
-            unknown: "unknown";
             auth_failed: "auth_failed";
             provider_unavailable: "provider_unavailable";
             sdk_error: "sdk_error";
@@ -411,6 +410,7 @@ export declare const JsonlRecordSchema: z.ZodObject<{
             extraction_llm_failed: "extraction_llm_failed";
             extraction_llm_timeout: "extraction_llm_timeout";
             extraction_no_api_key: "extraction_no_api_key";
+            unknown: "unknown";
         }>;
         message: z.ZodString;
         timestamp: z.ZodOptional<z.ZodString>;
@@ -592,7 +592,6 @@ export declare const JsonlSummaryRecordSchema: z.ZodObject<{
     totalVerifierRejections: z.ZodOptional<z.ZodNumber>;
     error: z.ZodOptional<z.ZodObject<{
         code: z.ZodEnum<{
-            unknown: "unknown";
             auth_failed: "auth_failed";
             provider_unavailable: "provider_unavailable";
             sdk_error: "sdk_error";
@@ -610,6 +609,7 @@ export declare const JsonlSummaryRecordSchema: z.ZodObject<{
             extraction_llm_failed: "extraction_llm_failed";
             extraction_llm_timeout: "extraction_llm_timeout";
             extraction_no_api_key: "extraction_no_api_key";
+            unknown: "unknown";
         }>;
         message: z.ZodString;
         timestamp: z.ZodOptional<z.ZodString>;
