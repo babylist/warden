@@ -15,6 +15,7 @@ const __dirname = fileURLToPath(new URL('.', import.meta.url));
 const SCHEDULE_FIXTURES = join(__dirname, '__fixtures__/schedule');
 const SCHEDULE_BASE_ONLY_FIXTURES = join(__dirname, '__fixtures__/schedule-base-only');
 const SCHEDULE_MULTI_FIXTURES = join(__dirname, '__fixtures__/schedule-multi');
+const SCHEDULE_WITH_PR_SKILL_FIXTURES = join(__dirname, '__fixtures__/schedule-with-pr-skill');
 const SCHEDULE_TITLE_FIXTURES = join(__dirname, '__fixtures__/schedule-title');
 const NO_CONFIG_FIXTURES = join(__dirname, '__fixtures__/no-config');
 const RUNTIME_CLAUDE_FIXTURES = join(__dirname, '__fixtures__/runtime-claude');
@@ -458,6 +459,26 @@ describe('runScheduleWorkflow', () => {
 
         const findings = JSON.parse(readFileSync(findingsFile, 'utf-8'));
         expect(findings.configuredSkills).toEqual([{ name: 'test-skill', triggered: true }]);
+      } finally {
+        rmSync(findingsFile, { force: true });
+      }
+    });
+
+    it('lists PR-only skills as untriggered in configuredSkills instead of omitting them', async () => {
+      mockRunSkill.mockResolvedValue(createSkillReport({ findings: [] }));
+
+      const findingsFile = getFindingsOutputPath(SCHEDULE_WITH_PR_SKILL_FIXTURES);
+
+      try {
+        await runScheduleWorkflow(mockOctokit, createDefaultInputs(), SCHEDULE_WITH_PR_SKILL_FIXTURES);
+
+        const findings = JSON.parse(readFileSync(findingsFile, 'utf-8'));
+        expect(findings.configuredSkills).toEqual(
+          expect.arrayContaining([
+            { name: 'test-skill', triggered: true },
+            { name: 'pr-only-skill', triggered: false },
+          ])
+        );
       } finally {
         rmSync(findingsFile, { force: true });
       }

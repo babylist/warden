@@ -108,6 +108,7 @@ async function runScheduleWorkflowInner(
   logGroupEnd();
 
   let scheduleTriggers: ResolvedTrigger[];
+  let allResolvedTriggers: ResolvedTrigger[];
   let skillRootsByName: LayeredSkillRootsByName | undefined;
   try {
     const layered = loadLayeredWardenConfig(repoPath, {
@@ -116,8 +117,8 @@ async function runScheduleWorkflowInner(
       onWarning: (message) => console.log(`::warning::${message}`),
     });
     skillRootsByName = buildSkillRootsByName(repoPath, layered, inputs.baseSkillRoot);
-    scheduleTriggers = resolveLayeredSkillConfigs(layered, undefined, skillRootsByName)
-      .filter((t) => t.type === 'schedule');
+    allResolvedTriggers = resolveLayeredSkillConfigs(layered, undefined, skillRootsByName);
+    scheduleTriggers = allResolvedTriggers.filter((t) => t.type === 'schedule');
   } catch (error) {
     if (
       error instanceof ConfigLoadError &&
@@ -172,11 +173,13 @@ async function runScheduleWorkflowInner(
       repoPath,
     };
     try {
-      writeFindingsOutput([], emptyContext, [], { configuredSkills: [] });
+      writeFindingsOutput([], emptyContext, [], {
+        configuredSkills: buildConfiguredSkillsList({ allTriggers: allResolvedTriggers, matchedTriggers: [] }),
+      });
     } catch (writeError) {
       console.error(`::warning::Failed to write findings output: ${writeError}`);
     }
-    writeSchemaV2ScheduleOutputs(inputs, emptyContext, scheduleTriggers, [], []);
+    writeSchemaV2ScheduleOutputs(inputs, emptyContext, allResolvedTriggers, [], []);
     return;
   }
 
@@ -350,13 +353,13 @@ async function runScheduleWorkflowInner(
   };
   try {
     const findingsPath = writeFindingsOutput(allReports, scheduleContext, [], {
-      configuredSkills: buildConfiguredSkillsList({ allTriggers: scheduleTriggers, matchedTriggers }),
+      configuredSkills: buildConfiguredSkillsList({ allTriggers: allResolvedTriggers, matchedTriggers }),
     });
     console.log(`Findings written to ${findingsPath}`);
   } catch (error) {
     console.error(`::warning::Failed to write findings output: ${error}`);
   }
-  writeSchemaV2ScheduleOutputs(inputs, scheduleContext, scheduleTriggers, matchedTriggers, results);
+  writeSchemaV2ScheduleOutputs(inputs, scheduleContext, allResolvedTriggers, matchedTriggers, results);
 
   if (shouldFailAction) {
     setFailed(failureReasons.join('; '));

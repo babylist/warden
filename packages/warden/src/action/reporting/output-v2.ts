@@ -471,7 +471,8 @@ export function buildMetadataOutputV2(
   });
 }
 
-function skillExecutionIdByNameFrom(matchedTriggers: ResolvedTrigger[]): Map<string, string> {
+/** skillExecutionId per skill name, restricted to names with exactly one current execution. */
+export function skillExecutionIdByNameFrom(matchedTriggers: ResolvedTrigger[]): Map<string, string> {
   const counts = new Map<string, number>();
   const idByName = new Map<string, string>();
   for (const t of matchedTriggers) {
