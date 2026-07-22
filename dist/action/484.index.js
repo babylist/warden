@@ -3384,12 +3384,23 @@ function resolvePathTarget(path, baseDir) {
 
 
 let cachedVersion;
+function readPackageVersion(path) {
+    if (!(0,node_fs__WEBPACK_IMPORTED_MODULE_0__.existsSync)(path))
+        return undefined;
+    const pkg = JSON.parse((0,node_fs__WEBPACK_IMPORTED_MODULE_0__.readFileSync)(path, 'utf-8'));
+    return pkg.version;
+}
 function getVersion() {
     if (cachedVersion)
         return cachedVersion;
     const __dirname = (0,node_path__WEBPACK_IMPORTED_MODULE_1__.dirname)((0,node_url__WEBPACK_IMPORTED_MODULE_2__.fileURLToPath)(import.meta.url));
-    const pkg = JSON.parse((0,node_fs__WEBPACK_IMPORTED_MODULE_0__.readFileSync)((0,node_path__WEBPACK_IMPORTED_MODULE_1__.join)(__dirname, '..', '..', 'package.json'), 'utf-8'));
-    cachedVersion = pkg.version;
+    // Normal build: dist/<pkg-relative-dir>/utils/version.js, two levels below the
+    // package root. ncc-bundled action: dist/action/index.js at the monorepo root,
+    // where packages/warden/package.json is a sibling rather than an ancestor.
+    cachedVersion =
+        readPackageVersion((0,node_path__WEBPACK_IMPORTED_MODULE_1__.join)(__dirname, '..', '..', 'package.json')) ??
+            readPackageVersion((0,node_path__WEBPACK_IMPORTED_MODULE_1__.join)(__dirname, '..', '..', 'packages', 'warden', 'package.json')) ??
+            '0.0.0';
     return cachedVersion;
 }
 function getMajorVersion() {
