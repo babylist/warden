@@ -265,4 +265,32 @@ describe('validateInputs', () => {
       outputSchemaVersion: '1',
     })).toThrow('findings-file is required when mode is report');
   });
+
+  it('requires metadata-file in report mode when output-schema-version is 2', () => {
+    expect(() => validateInputs({
+      anthropicApiKey: 'sk-ant-api-key',
+      oauthToken: '',
+      githubToken: 'test',
+      mode: 'report',
+      configPath: 'warden.toml',
+      maxFindings: 50,
+      parallel: 4,
+      outputSchemaVersion: '2',
+      findingsFile: 'warden-findings-v2.json',
+    })).toThrow("metadata-file is required when mode is report and output-schema-version is '2'");
+  });
+
+  it('does not require metadata-file in report mode when output-schema-version is 1', () => {
+    expect(() => validateInputs({
+      anthropicApiKey: 'sk-ant-api-key',
+      oauthToken: '',
+      githubToken: 'test',
+      mode: 'report',
+      configPath: 'warden.toml',
+      maxFindings: 50,
+      parallel: 4,
+      outputSchemaVersion: '1',
+      findingsFile: 'warden-findings.json',
+    })).not.toThrow();
+  });
 });

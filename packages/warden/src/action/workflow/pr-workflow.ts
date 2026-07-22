@@ -78,7 +78,9 @@ import {
   getAuthenticatedBotLogin,
   writeFindingsOutput,
   writeMetadataOutput,
+  writeMetadataOutputObject,
   writeFindingsOutputV2,
+  writeFindingsOutputV2Object,
 } from './base.js';
 import { renderSkillReport } from '../../output/renderer.js';
 import {
@@ -90,6 +92,7 @@ import {
 import {
   WardenMetadataSchema,
   WardenFindingsSchemaV2,
+  patchFindingsOutputV2Observations,
   type WardenMetadata,
   type WardenFindingsV2,
   type ExportedFindingV2,
@@ -1017,6 +1020,35 @@ function writeSchemaV2Outputs(
 }
 
 /**
+ * Report mode's v2 write: unlike analyze mode or single-run mode, report mode
+ * only has TriggerResults replayed from ExportedFindingV2 (no
+ * findingProcessingEvents), so a full rebuild here would silently wipe the
+ * analyze-phase `provenance`/`discardedFindings`. Instead, write the
+ * unmodified analyze-phase metadata and patch only `findingObservations` /
+ * `summary.byOutcome` onto the analyze-phase findings payload.
+ */
+function writeSchemaV2ReportOutputs(
+  metadataOutputV2: WardenMetadata | undefined,
+  findingsOutputV2: WardenFindingsV2 | undefined,
+  context: EventContext,
+  matchedTriggers: ResolvedTrigger[],
+  findingObservations: FindingObservation[],
+  onError: (message: string) => void
+): void {
+  if (!metadataOutputV2 || !findingsOutputV2) return;
+
+  try {
+    const metadataPath = writeMetadataOutputObject(metadataOutputV2, context);
+    logAction(`Metadata written to ${metadataPath}`);
+    const patched = patchFindingsOutputV2Observations(findingsOutputV2, matchedTriggers, findingObservations);
+    const findingsV2Path = writeFindingsOutputV2Object(patched, context);
+    logAction(`Findings (v2) written to ${findingsV2Path}`);
+  } catch (error) {
+    onError(`Failed to write schema-v2 output: ${error}`);
+  }
+}
+
+/**
  * Dismiss review, set outputs, update core check, fail action.
  */
 async function finalizeWorkflow(
@@ -1244,9 +1276,13 @@ async function runOrFailCore<T>(
   }
 }
 
-function resolveFindingsFilePath(inputPath: string | undefined, repoPath: string): string {
+function resolveFindingsFilePath(
+  inputPath: string | undefined,
+  repoPath: string,
+  missingMessage = 'findings-file is required when mode is report'
+): string {
   if (!inputPath) {
-    setFailed('findings-file is required when mode is report');
+    setFailed(missingMessage);
   }
   return isAbsolute(inputPath) ? inputPath : join(repoPath, inputPath);
 }
@@ -1634,6 +1670,8 @@ async function finalizeReportWorkflow(
     matchedTriggers: ResolvedTrigger[];
     resolvedTriggers: ResolvedTrigger[];
     inputs: ActionInputs;
+    metadataOutputV2?: WardenMetadata;
+    findingsOutputV2?: WardenFindingsV2;
   }
 ): Promise<void> {
   await dismissPreviousReviewIfResolved(
@@ -1662,9 +1700,9 @@ async function finalizeReportWorkflow(
     warnAction(`Failed to write findings output: ${error}`);
   }
 
-  writeSchemaV2Outputs(
-    options.inputs, context, options.resolvedTriggers, options.matchedTriggers,
-    results, findingObservations, warnAction
+  writeSchemaV2ReportOutputs(
+    options.metadataOutputV2, options.findingsOutputV2, context,
+    options.matchedTriggers, findingObservations, warnAction
   );
 
   await createCompletedCoreCheckForReport(
@@ -1837,7 +1875,10 @@ async function runAnalyzeMode(
 }
 
 function readMetadataFileV2(inputPath: string | undefined, repoPath: string): WardenMetadata {
-  const filePath = resolveFindingsFilePath(inputPath, repoPath);
+  const filePath = resolveFindingsFilePath(
+    inputPath, repoPath,
+    'metadata-file is required when mode is report and output-schema-version is \'2\''
+  );
 
   try {
     return WardenMetadataSchema.parse(JSON.parse(readFileSync(filePath, 'utf-8')));
@@ -2146,7 +2187,7 @@ async function runReportMode(
       canResolveStale,
       gate,
       triggerErrors,
-      { failOnWriteError: true, matchedTriggers, resolvedTriggers, inputs },
+      { failOnWriteError: true, matchedTriggers, resolvedTriggers, inputs, metadataOutputV2, findingsOutputV2 },
     );
   } catch (error) {
     if (error instanceof ActionFailedError) {

@@ -16,7 +16,12 @@ import type { FindingObservation } from '../reporting/outcomes.js';
 import { buildFindingsOutput } from '../reporting/output.js';
 import type { ReplayTriggerResult } from '../reporting/output.js';
 import { buildFindingsOutputV2, buildMetadataOutputV2 } from '../reporting/output-v2.js';
-import type { BuildFindingsOutputV2Options, BuildMetadataOutputV2Options } from '../reporting/output-v2.js';
+import type {
+  BuildFindingsOutputV2Options,
+  BuildMetadataOutputV2Options,
+  WardenFindingsV2,
+  WardenMetadata,
+} from '../reporting/output-v2.js';
 import { countSeverity } from '../../triggers/matcher.js';
 import type { RuntimeName } from '../../sdk/runtimes/index.js';
 import type { ActionInputs } from '../inputs.js';
@@ -420,6 +425,16 @@ export function getFindingsOutputPathV2(repoPath?: string): string {
   return join(tmpDir, 'warden-findings-v2.json');
 }
 
+/** Write an already-built schema-v2 metadata object as-is, with no rebuild. */
+export function writeMetadataOutputObject(metadata: WardenMetadata, context: EventContext): string {
+  const filePath = getMetadataOutputPath(context.repoPath);
+
+  mkdirSync(dirname(filePath), { recursive: true });
+  writeFileSync(filePath, JSON.stringify(metadata, null, 2));
+  setOutput('metadata-file', getFindingsOutputValue(filePath, context.repoPath));
+  return filePath;
+}
+
 /** Write the schema-v2 metadata file, gated separately from the v1 findings-file write. */
 export function writeMetadataOutput(
   context: EventContext,
@@ -428,12 +443,17 @@ export function writeMetadataOutput(
   results: TriggerResult[],
   options: BuildMetadataOutputV2Options
 ): string {
-  const filePath = getMetadataOutputPath(context.repoPath);
   const output = buildMetadataOutputV2(context, resolvedTriggers, matchedTriggers, results, options);
+  return writeMetadataOutputObject(output, context);
+}
+
+/** Write an already-built schema-v2 findings object as-is, with no rebuild. */
+export function writeFindingsOutputV2Object(findings: WardenFindingsV2, context: EventContext): string {
+  const filePath = getFindingsOutputPathV2(context.repoPath);
 
   mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, JSON.stringify(output, null, 2));
-  setOutput('metadata-file', getFindingsOutputValue(filePath, context.repoPath));
+  writeFileSync(filePath, JSON.stringify(findings, null, 2));
+  setOutput('findings-file-v2', getFindingsOutputValue(filePath, context.repoPath));
   return filePath;
 }
 
@@ -445,11 +465,6 @@ export function writeFindingsOutputV2(
   context: EventContext,
   options: BuildFindingsOutputV2Options
 ): string {
-  const filePath = getFindingsOutputPathV2(context.repoPath);
   const output = buildFindingsOutputV2(results, matchedTriggers, findingObservations, options);
-
-  mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, JSON.stringify(output, null, 2));
-  setOutput('findings-file-v2', getFindingsOutputValue(filePath, context.repoPath));
-  return filePath;
+  return writeFindingsOutputV2Object(output, context);
 }

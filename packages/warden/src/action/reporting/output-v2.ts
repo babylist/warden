@@ -450,6 +450,79 @@ export function buildMetadataOutputV2(
   });
 }
 
+function skillExecutionIdByNameFrom(matchedTriggers: ResolvedTrigger[]): Map<string, string> {
+  const skillExecutionIdByName = new Map<string, string>();
+  for (const t of matchedTriggers) {
+    if (!skillExecutionIdByName.has(t.skill)) {
+      skillExecutionIdByName.set(t.skill, t.skillExecutionId);
+    }
+  }
+  return skillExecutionIdByName;
+}
+
+function buildFindingObservationsV2(
+  findingObservations: FindingObservation[],
+  matchedTriggers: ResolvedTrigger[]
+): { observations: FindingObservationV2[]; byOutcome: SummaryV2['byOutcome'] } {
+  const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
+
+  const observations: FindingObservationV2[] = findingObservations.map((observation) => {
+    const skillExecutionId = skillExecutionIdByName.get(observation.skill ?? '') ?? '';
+    const origin = { skillExecutionId, skillName: observation.skill ?? '' };
+    const findingSnapshot = {
+      id: observation.finding.id,
+      severity: observation.finding.severity,
+      confidence: observation.finding.confidence,
+      title: observation.finding.title,
+      description: observation.finding.description,
+      location: observation.finding.location,
+      elapsedMs: observation.finding.elapsedMs,
+    };
+
+    switch (observation.outcome) {
+      case 'deduped':
+        return { outcome: 'deduped', origin, finding: findingSnapshot, dedupe: observation.dedupe };
+      case 'skipped':
+        return { outcome: 'skipped', origin, finding: findingSnapshot, skippedReason: observation.skippedReason };
+      case 'resolved':
+        return { outcome: 'resolved', origin, finding: findingSnapshot, resolvedReason: observation.resolvedReason };
+      case 'posted':
+        return { outcome: 'posted', origin, finding: findingSnapshot };
+      case 'failed':
+        return { outcome: 'failed', origin, finding: findingSnapshot };
+    }
+  });
+
+  const byOutcome = { posted: 0, deduped: 0, skipped: 0, resolved: 0, failed: 0 };
+  for (const observation of findingObservations) {
+    byOutcome[observation.outcome]++;
+  }
+
+  return { observations, byOutcome };
+}
+
+/**
+ * Rebuild only the observation-derived parts of a v2 findings payload:
+ * `findingObservations` and `summary.byOutcome`. Used by report mode to fold
+ * real posting outcomes into an analyze-phase payload without touching
+ * `skillExecutions`/`findings`/`discardedFindings`, which can only be
+ * reconstructed from the original `findingProcessingEvents` and would
+ * otherwise be silently wiped by a full rebuild from replayed results.
+ */
+export function patchFindingsOutputV2Observations(
+  base: WardenFindingsV2,
+  matchedTriggers: ResolvedTrigger[],
+  findingObservations: FindingObservation[]
+): WardenFindingsV2 {
+  const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, matchedTriggers);
+
+  return WardenFindingsSchemaV2.parse({
+    ...base,
+    findingObservations: observations,
+    summary: { ...base.summary, byOutcome },
+  });
+}
+
 export interface BuildFindingsOutputV2Options {
   runId: string;
 }
@@ -461,12 +534,7 @@ export function buildFindingsOutputV2(
   options: BuildFindingsOutputV2Options
 ): WardenFindingsV2 {
   const triggerById = new Map(matchedTriggers.map((t) => [t.id, t]));
-  const skillExecutionIdByName = new Map<string, string>();
-  for (const t of matchedTriggers) {
-    if (!skillExecutionIdByName.has(t.skill)) {
-      skillExecutionIdByName.set(t.skill, t.skillExecutionId);
-    }
-  }
+  const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
 
   const corroboratingById = new Map<string, FindingAttribution[]>();
   for (const observation of findingObservations) {
@@ -589,37 +657,7 @@ export function buildFindingsOutputV2(
     }
   }
 
-  const observations: FindingObservationV2[] = findingObservations.map((observation) => {
-    const skillExecutionId = skillExecutionIdByName.get(observation.skill ?? '') ?? '';
-    const origin = { skillExecutionId, skillName: observation.skill ?? '' };
-    const findingSnapshot = {
-      id: observation.finding.id,
-      severity: observation.finding.severity,
-      confidence: observation.finding.confidence,
-      title: observation.finding.title,
-      description: observation.finding.description,
-      location: observation.finding.location,
-      elapsedMs: observation.finding.elapsedMs,
-    };
-
-    switch (observation.outcome) {
-      case 'deduped':
-        return { outcome: 'deduped', origin, finding: findingSnapshot, dedupe: observation.dedupe };
-      case 'skipped':
-        return { outcome: 'skipped', origin, finding: findingSnapshot, skippedReason: observation.skippedReason };
-      case 'resolved':
-        return { outcome: 'resolved', origin, finding: findingSnapshot, resolvedReason: observation.resolvedReason };
-      case 'posted':
-        return { outcome: 'posted', origin, finding: findingSnapshot };
-      case 'failed':
-        return { outcome: 'failed', origin, finding: findingSnapshot };
-    }
-  });
-
-  const byOutcome = { posted: 0, deduped: 0, skipped: 0, resolved: 0, failed: 0 };
-  for (const observation of findingObservations) {
-    byOutcome[observation.outcome]++;
-  }
+  const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, matchedTriggers);
 
   return WardenFindingsSchemaV2.parse({
     schemaVersion: '2',

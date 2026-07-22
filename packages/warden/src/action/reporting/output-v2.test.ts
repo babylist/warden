@@ -6,6 +6,7 @@ import type { FindingObservation } from './outcomes.js';
 import {
   buildFindingsOutputV2,
   buildMetadataOutputV2,
+  patchFindingsOutputV2Observations,
   WardenFindingsSchemaV2,
   WardenMetadataSchema,
 } from './output-v2.js';
@@ -258,5 +259,53 @@ describe('buildFindingsOutputV2', () => {
       { skillExecutionId: 'exec-2', skillName: 'security-review', role: 'corroborating', matchType: 'hash' },
     ]);
     expect(output.summary.byOutcome.deduped).toBe(1);
+  });
+});
+
+describe('patchFindingsOutputV2Observations', () => {
+  it('preserves skillExecutions/findings/discardedFindings/provenance while updating only observations and byOutcome', () => {
+    const trigger = createTrigger();
+    const finding = createFinding({ id: 'WRD-002', severity: 'medium' });
+    const result = createResult({
+      report: createReport({ findings: [finding] }),
+      findingProcessingEvents: [
+        {
+          stage: 'verification',
+          action: 'revised',
+          finding: createFinding({ id: 'WRD-002', severity: 'high', title: 'Original title' }),
+          replacement: finding,
+          reason: 'narrower scope',
+          model: 'claude-haiku-4-5',
+        },
+        {
+          stage: 'verification',
+          action: 'rejected',
+          finding: createFinding({ id: 'WRD-003' }),
+          reason: 'mitigated upstream',
+          model: 'claude-haiku-4-5',
+        },
+      ],
+    });
+
+    const analyzePhaseOutput = buildFindingsOutputV2([result], [trigger], [], { runId: '123' });
+
+    const reportPhaseObservations: FindingObservation[] = [
+      { outcome: 'posted', finding, skill: 'code-review' },
+    ];
+    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [trigger], reportPhaseObservations);
+
+    // The parts that can only be reconstructed from findingProcessingEvents
+    // (unavailable during report-mode replay) must survive unchanged.
+    expect(patched.skillExecutions).toEqual(analyzePhaseOutput.skillExecutions);
+    expect(patched.findings).toEqual(analyzePhaseOutput.findings);
+    expect(patched.discardedFindings).toEqual(analyzePhaseOutput.discardedFindings);
+    expect(patched.findings[0]?.provenance.verification?.outcome).toBe('revised');
+
+    // Only the observation-derived parts reflect the new (report-phase) data.
+    expect(patched.findingObservations).toEqual([
+      expect.objectContaining({ outcome: 'posted', finding: expect.objectContaining({ id: 'WRD-002' }) }),
+    ]);
+    expect(patched.summary.byOutcome).toEqual({ posted: 1, deduped: 0, skipped: 0, resolved: 0, failed: 0 });
+    expect(patched.summary.totalFindings).toBe(analyzePhaseOutput.summary.totalFindings);
   });
 });

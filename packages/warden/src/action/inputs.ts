@@ -155,6 +155,9 @@ export function validateInputs(inputs: ActionInputs): void {
   if (inputs.mode === 'report' && !inputs.findingsFile) {
     throw new Error('findings-file is required when mode is report');
   }
+  if (inputs.mode === 'report' && inputs.outputSchemaVersion === '2' && !inputs.metadataFile) {
+    throw new Error('metadata-file is required when mode is report and output-schema-version is \'2\'');
+  }
 }
 
 /**
