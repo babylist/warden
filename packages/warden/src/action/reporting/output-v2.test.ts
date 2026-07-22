@@ -345,6 +345,42 @@ describe('buildFindingsOutputV2', () => {
     ]);
   });
 
+  it('attaches corroboration when the existing comment has an empty skills array', () => {
+    const firstTrigger = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
+    const secondTrigger = createTrigger({
+      id: 'trigger-2',
+      skillExecutionId: 'exec-2',
+      name: 'security-review-trigger',
+      skill: 'security-review',
+    });
+
+    const result = createResult({
+      triggerId: 'trigger-1',
+      report: createReport({ skill: 'code-review', findings: [createFinding({ id: 'WRD-001' })] }),
+    });
+
+    const observations: FindingObservation[] = [
+      {
+        outcome: 'deduped',
+        finding: createFinding({ id: 'WRD-002' }),
+        skill: 'security-review',
+        dedupe: {
+          source: 'warden',
+          matchType: 'hash',
+          existingFindingId: 'WRD-001',
+          existingSkills: [],
+        },
+      },
+    ];
+
+    const output = buildFindingsOutputV2([result], [firstTrigger, secondTrigger], observations, { runId: '123' });
+
+    expect(output.findings[0]?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-1', skillName: 'code-review', role: 'primary' },
+      { skillExecutionId: 'exec-2', skillName: 'security-review', role: 'corroborating', matchType: 'hash' },
+    ]);
+  });
+
   it('records verifier rejections in discardedFindings', () => {
     const trigger = createTrigger();
     const result = createResult({

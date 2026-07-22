@@ -557,7 +557,7 @@ function resolveCorroboratingAttributions(
   targetSkillName: string
 ): FindingAttribution[] {
   return candidates
-    .filter((c) => !c.targetSkills || c.targetSkills.includes(targetSkillName))
+    .filter((c) => !c.targetSkills || c.targetSkills.length === 0 || c.targetSkills.includes(targetSkillName))
     .map((c) => c.attribution);
 }
 

@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 import type { Octokit } from '@octokit/rest';
 import type { ActionInputs } from '../inputs.js';
 import type { SkillReport, Finding, EventContext } from '../../types/index.js';
-import { getMetadataOutputPath, getFindingsOutputPathV2 } from './base.js';
+import { getMetadataOutputPath, getFindingsOutputPathV2, getFindingsOutputPath } from './base.js';
 
 // -----------------------------------------------------------------------------
 // Fixtures Directory
@@ -446,6 +446,21 @@ describe('runScheduleWorkflow', () => {
 
       expect(mockRunSkill).toHaveBeenCalledTimes(1);
       expect(mockCreateOrUpdateIssue).toHaveBeenCalledTimes(1);
+    });
+
+    it('includes configuredSkills in the v1 findings output, matching the PR workflow', async () => {
+      mockRunSkill.mockResolvedValue(createSkillReport({ findings: [] }));
+
+      const findingsFile = getFindingsOutputPath(SCHEDULE_FIXTURES);
+
+      try {
+        await runScheduleWorkflow(mockOctokit, createDefaultInputs(), SCHEDULE_FIXTURES);
+
+        const findings = JSON.parse(readFileSync(findingsFile, 'utf-8'));
+        expect(findings.configuredSkills).toEqual([{ name: 'test-skill', triggered: true }]);
+      } finally {
+        rmSync(findingsFile, { force: true });
+      }
     });
 
     it('skips skill run when no files match trigger', async () => {
