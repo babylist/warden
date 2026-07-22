@@ -4907,14 +4907,30 @@ function toFindingFromV2(finding) {
  * mirroring buildReportModeResults's v1 join-by-trigger-identity behavior.
  */
 function buildReportModeResultsV2(metadata, findingsOutput, matchedTriggers, inputs) {
-    const executionsByTriggerId = new Map(findingsOutput.skillExecutions
-        .filter((execution) => execution.triggerId)
-        .map((execution) => [execution.triggerId, execution]));
+    const executionsWithTriggerId = findingsOutput.skillExecutions.filter((execution) => execution.triggerId);
+    const duplicateExecutionTriggerIds = new Set();
+    const seenExecutionTriggerIds = new Set();
+    for (const execution of executionsWithTriggerId) {
+        const triggerId = execution.triggerId;
+        if (seenExecutionTriggerIds.has(triggerId)) {
+            duplicateExecutionTriggerIds.add(triggerId);
+        }
+        seenExecutionTriggerIds.add(triggerId);
+    }
+    if (duplicateExecutionTriggerIds.size > 0) {
+        const skillNames = executionsWithTriggerId
+            .filter((execution) => duplicateExecutionTriggerIds.has(execution.triggerId))
+            .map((execution) => execution.skillName)
+            .join(', ');
+        throw new Error(`Findings file contains ambiguous duplicate trigger result(s): ${skillNames}`);
+    }
+    const executionsByTriggerId = new Map(executionsWithTriggerId.map((execution) => [execution.triggerId, execution]));
     const findingsByExecutionScopedId = new Map(findingsOutput.findings.map((finding) => [`${finding.provenance.originSkillExecutionId}:${finding.id}`, finding]));
     const errorByTriggerId = new Map((metadata.triggerResults ?? [])
         .filter((result) => result.status === 'error' && result.triggerId)
         .map((result) => [result.triggerId, result.error]));
-    return matchedTriggers.map((trigger) => {
+    const consumedTriggerIds = new Set();
+    const results = matchedTriggers.map((trigger) => {
         const failOn = trigger.failOn ?? inputs.failOn;
         const reportOn = trigger.reportOn ?? inputs.reportOn;
         const minConfidence = trigger.minConfidence ?? 'medium';
@@ -4944,6 +4960,7 @@ function buildReportModeResultsV2(metadata, findingsOutput, matchedTriggers, inp
                     : new Error(`Findings file has no result for trigger ${trigger.name} (${trigger.skill})`),
             };
         }
+        consumedTriggerIds.add(trigger.id);
         const findings = execution.findingIds.flatMap((id) => {
             const finding = findingsByExecutionScopedId.get(`${execution.skillExecutionId}:${id}`);
             return finding ? [toFindingFromV2(finding)] : [];
@@ -4966,6 +4983,12 @@ function buildReportModeResultsV2(metadata, findingsOutput, matchedTriggers, inp
         };
         return { ...baseResult, report };
     });
+    const unreportedExecutions = executionsWithTriggerId.filter((execution) => !consumedTriggerIds.has(execution.triggerId));
+    if (unreportedExecutions.length > 0) {
+        const skillNames = unreportedExecutions.map((execution) => execution.skillName).join(', ');
+        throw new Error(`Findings file contains ${unreportedExecutions.length} result(s) that do not match current config: ${skillNames}`);
+    }
+    return results;
 }
 /**
  * Run the reporting phase without rerunning skills.
@@ -5273,23 +5296,23 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
             (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .setOutput */ .uH)('findings-count', 0);
             (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .setOutput */ .uH)('high-count', 0);
             (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .setOutput */ .uH)('summary', 'No warden.toml found');
+            const fullName = process.env['GITHUB_REPOSITORY'] ?? '';
+            const [o = '', n = ''] = fullName.split('/');
+            workflowSpan.setAttribute('warden.trigger.count', 0);
+            workflowSpan.setAttribute('warden.finding.count', 0);
+            const emptyContext = {
+                eventType: 'schedule',
+                action: 'scheduled',
+                repository: { owner: o, name: n, fullName, defaultBranch: '' },
+                repoPath,
+            };
             try {
-                const fullName = process.env['GITHUB_REPOSITORY'] ?? '';
-                const [o = '', n = ''] = fullName.split('/');
-                workflowSpan.setAttribute('warden.trigger.count', 0);
-                workflowSpan.setAttribute('warden.finding.count', 0);
-                const emptyContext = {
-                    eventType: 'schedule',
-                    action: 'scheduled',
-                    repository: { owner: o, name: n, fullName, defaultBranch: '' },
-                    repoPath,
-                };
                 (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)([], emptyContext);
-                writeSchemaV2ScheduleOutputs(inputs, emptyContext, [], [], []);
             }
             catch (writeError) {
                 console.error(`::warning::Failed to write findings output: ${writeError}`);
             }
+            writeSchemaV2ScheduleOutputs(inputs, emptyContext, [], [], []);
             return;
         }
         throw error;
@@ -5307,21 +5330,21 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
         (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .setOutput */ .uH)('high-count', 0);
         (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .setOutput */ .uH)('summary', 'No schedule triggers configured');
         workflowSpan.setAttribute('warden.finding.count', 0);
+        const fullName = process.env['GITHUB_REPOSITORY'] ?? '';
+        const [o = '', n = ''] = fullName.split('/');
+        const emptyContext = {
+            eventType: 'schedule',
+            action: 'scheduled',
+            repository: { owner: o, name: n, fullName, defaultBranch: '' },
+            repoPath,
+        };
         try {
-            const fullName = process.env['GITHUB_REPOSITORY'] ?? '';
-            const [o = '', n = ''] = fullName.split('/');
-            const emptyContext = {
-                eventType: 'schedule',
-                action: 'scheduled',
-                repository: { owner: o, name: n, fullName, defaultBranch: '' },
-                repoPath,
-            };
             (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)([], emptyContext);
-            writeSchemaV2ScheduleOutputs(inputs, emptyContext, scheduleTriggers, [], []);
         }
         catch (writeError) {
             console.error(`::warning::Failed to write findings output: ${writeError}`);
         }
+        writeSchemaV2ScheduleOutputs(inputs, emptyContext, scheduleTriggers, [], []);
         return;
     }
     // Get repo info from environment
