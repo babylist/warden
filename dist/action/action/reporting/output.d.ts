@@ -141,6 +141,7 @@ export declare const FindingsOutputSchema: z.ZodObject<{
         failedExtractions: z.ZodOptional<z.ZodNumber>;
         error: z.ZodOptional<z.ZodObject<{
             code: z.ZodEnum<{
+                unknown: "unknown";
                 auth_failed: "auth_failed";
                 provider_unavailable: "provider_unavailable";
                 sdk_error: "sdk_error";
@@ -158,7 +159,6 @@ export declare const FindingsOutputSchema: z.ZodObject<{
                 extraction_llm_failed: "extraction_llm_failed";
                 extraction_llm_timeout: "extraction_llm_timeout";
                 extraction_no_api_key: "extraction_no_api_key";
-                unknown: "unknown";
             }>;
             message: z.ZodString;
             timestamp: z.ZodOptional<z.ZodString>;

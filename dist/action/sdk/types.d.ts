@@ -12,7 +12,7 @@ export interface AuxiliaryUsageEntry {
 }
 export interface FindingProcessingEvent {
     stage: 'dedupe' | 'verification' | 'merge' | 'fix_gate';
-    action: 'dropped' | 'rejected' | 'revised' | 'merged' | 'stripped_fix';
+    action: 'dropped' | 'rejected' | 'revised' | 'kept' | 'merged' | 'stripped_fix';
     finding: Finding;
     reason?: string;
     replacement?: Finding;

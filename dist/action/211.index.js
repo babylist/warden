@@ -1726,24 +1726,7 @@ function buildFindingObservationsV2(findingObservations, matchedTriggers) {
     }
     return { observations, byOutcome };
 }
-/**
- * Rebuild only the observation-derived parts of a v2 findings payload:
- * `findingObservations` and `summary.byOutcome`. Used by report mode to fold
- * real posting outcomes into an analyze-phase payload without touching
- * `skillExecutions`/`findings`/`discardedFindings`, which can only be
- * reconstructed from the original `findingProcessingEvents` and would
- * otherwise be silently wiped by a full rebuild from replayed results.
- */
-function patchFindingsOutputV2Observations(base, matchedTriggers, findingObservations) {
-    const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, matchedTriggers);
-    return WardenFindingsSchemaV2.parse({
-        ...base,
-        findingObservations: observations,
-        summary: { ...base.summary, byOutcome },
-    });
-}
-function buildFindingsOutputV2(results, matchedTriggers, findingObservations, options) {
-    const triggerById = new Map(matchedTriggers.map((t) => [t.id, t]));
+function buildCorroboratingAttributions(findingObservations, matchedTriggers) {
     const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
     const corroboratingById = new Map();
     for (const observation of findingObservations) {
@@ -1759,6 +1742,44 @@ function buildFindingsOutputV2(results, matchedTriggers, findingObservations, op
             corroboratingById.set(winnerId, list);
         }
     }
+    return corroboratingById;
+}
+/**
+ * Rebuild only the observation-derived parts of a v2 findings payload:
+ * `findingObservations`, `summary.byOutcome`, and any newly-discovered
+ * cross-skill corroboration on `findings[].reportedBy`. Used by report mode
+ * to fold real posting outcomes into an analyze-phase payload without
+ * touching `skillExecutions`/`discardedFindings`/`provenance`, which can
+ * only be reconstructed from the original `findingProcessingEvents` and
+ * would otherwise be silently wiped by a full rebuild from replayed
+ * results. Corroboration is additive-only (existing `reportedBy` entries
+ * are never removed) since it can only be discovered once posting/dedup
+ * runs, which analyze mode never does.
+ */
+function patchFindingsOutputV2Observations(base, matchedTriggers, findingObservations) {
+    const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, matchedTriggers);
+    const corroboratingById = buildCorroboratingAttributions(findingObservations, matchedTriggers);
+    const findings = base.findings.map((finding) => {
+        const newCorroborators = corroboratingById.get(finding.id);
+        if (!newCorroborators || newCorroborators.length === 0)
+            return finding;
+        const existingSkillExecutionIds = new Set(finding.reportedBy.map((r) => r.skillExecutionId));
+        const additions = newCorroborators.filter((c) => !existingSkillExecutionIds.has(c.skillExecutionId));
+        if (additions.length === 0)
+            return finding;
+        return { ...finding, reportedBy: [...finding.reportedBy, ...additions] };
+    });
+    return WardenFindingsSchemaV2.parse({
+        ...base,
+        findings,
+        findingObservations: observations,
+        summary: { ...base.summary, byOutcome },
+    });
+}
+function buildFindingsOutputV2(results, matchedTriggers, findingObservations, options) {
+    const triggerById = new Map(matchedTriggers.map((t) => [t.id, t]));
+    const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
+    const corroboratingById = buildCorroboratingAttributions(findingObservations, matchedTriggers);
     const skillExecutions = [];
     const findings = [];
     const discardedFindings = [];
@@ -1783,6 +1804,13 @@ function buildFindingsOutputV2(results, matchedTriggers, findingObservations, op
                         severity: event.finding.severity,
                         confidence: event.finding.confidence,
                     },
+                });
+            }
+            else if (event.stage === 'verification' && event.action === 'kept') {
+                verificationById.set(event.finding.id, {
+                    outcome: 'kept',
+                    model: event.model,
+                    runtime: event.runtime,
                 });
             }
             else if (event.stage === 'verification' && event.action === 'rejected') {
@@ -4935,7 +4963,7 @@ async function runReportMode(octokit, inputs, initResult, repoPath, span) {
             catch (error) {
                 (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
             }
-            writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], [], _cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6);
+            writeSchemaV2ReportOutputs(metadataOutputV2, findingsOutputV2, context, matchedTriggers, [], _cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6);
             await createCompletedCoreCheckForReport(octokit, context, [], [], false, outputs, {
                 title: skipCoreCheck.title,
                 message: skipCoreCheck.message,
@@ -4957,7 +4985,7 @@ async function runReportMode(octokit, inputs, initResult, repoPath, span) {
             catch (error) {
                 (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
             }
-            writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], cleanupFindingObservations, _cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6);
+            writeSchemaV2ReportOutputs(metadataOutputV2, findingsOutputV2, context, matchedTriggers, cleanupFindingObservations, _cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6);
             await createCompletedCoreCheckForReport(octokit, context, [], [], false, outputs, {
                 title: 'No triggers matched',
                 message: 'No triggers matched for this event.',
@@ -15890,6 +15918,17 @@ function notifyVerdict(options, finding, verdict, next) {
             action: 'revised',
             finding,
             replacement: next,
+            reason: verdict.reason,
+            model: options.model,
+            runtime: options.runtime,
+        });
+        return;
+    }
+    if (verdict.verdict === 'keep') {
+        options.onFindingProcessing?.({
+            stage: 'verification',
+            action: 'kept',
+            finding,
             reason: verdict.reason,
             model: options.model,
             runtime: options.runtime,
