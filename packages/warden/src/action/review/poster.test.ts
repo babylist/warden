@@ -244,6 +244,41 @@ describe('postTriggerReview', () => {
     });
   });
 
+  it('stamps the posted observation with the trigger result\'s own skillExecutionId', async () => {
+    const finding = createFinding();
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      skillName: 'test-skill',
+      skillExecutionId: 'exec-42',
+      report: {
+        skill: 'test-skill',
+        summary: 'Found 1 issue',
+        findings: [finding],
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: createRenderResult({
+        review: {
+          event: 'COMMENT',
+          body: 'Test review',
+          comments: [{ path: 'test.ts', line: 10, body: 'Test comment' }],
+        },
+      }),
+      reportOn: 'low',
+    };
+
+    vi.mocked(findingToExistingComment).mockReturnValue(createExistingComment());
+
+    const postResult = await postTriggerReview({
+      result,
+      existingComments: [],
+      apiKey: 'test-key',
+    }, mockDeps);
+
+    expect(postResult.findingObservations).toEqual([
+      { outcome: 'posted', finding, skill: 'test-skill', skillExecutionId: 'exec-42' },
+    ]);
+  });
+
   it('skips body-only non-blocking reviews', async () => {
     const finding = createFinding({ location: undefined });
     const result: TriggerResult = {

@@ -30,6 +30,7 @@ export type DedupeDetail = z.infer<typeof DedupeDetailSchema>;
 interface BaseFindingObservation {
   finding: Finding;
   skill?: string;
+  skillExecutionId?: string;
 }
 
 export interface PostedFindingObservation extends BaseFindingObservation {
@@ -67,29 +68,34 @@ export const FindingObservationSchema = z.discriminatedUnion('outcome', [
     outcome: z.literal('posted'),
     finding: FindingSchema,
     skill: z.string().optional(),
+    skillExecutionId: z.string().optional(),
   }),
   z.object({
     outcome: z.literal('deduped'),
     finding: FindingSchema,
     skill: z.string().optional(),
+    skillExecutionId: z.string().optional(),
     dedupe: DedupeDetailSchema,
   }),
   z.object({
     outcome: z.literal('skipped'),
     finding: FindingSchema,
     skill: z.string().optional(),
+    skillExecutionId: z.string().optional(),
     skippedReason: z.enum(['max_findings', 'duplicate_in_batch', 'no_inline_location']),
   }),
   z.object({
     outcome: z.literal('resolved'),
     finding: FindingSchema,
     skill: z.string().optional(),
+    skillExecutionId: z.string().optional(),
     resolvedReason: z.enum(['fix_evaluation', 'stale_check']),
   }),
   z.object({
     outcome: z.literal('failed'),
     finding: FindingSchema,
     skill: z.string().optional(),
+    skillExecutionId: z.string().optional(),
   }),
 ]);
 

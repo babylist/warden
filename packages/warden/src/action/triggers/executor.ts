@@ -115,6 +115,7 @@ export interface TriggerResult {
   triggerId?: string;
   triggerName: string;
   skillName: string;
+  skillExecutionId?: string;
   report?: SkillReport;
   renderResult?: RenderResult;
   failOn?: SeverityThreshold;
@@ -270,6 +271,7 @@ export async function executeTrigger(
           triggerId: trigger.id,
           triggerName: trigger.name,
           skillName: trigger.skill,
+          skillExecutionId: trigger.skillExecutionId,
           report,
           renderResult,
           failOn,
@@ -300,7 +302,7 @@ export async function executeTrigger(
 
         console.error(`::warning::Trigger ${trigger.name} failed: ${error}`);
         logGroupEnd();
-        return { triggerId: trigger.id, triggerName: trigger.name, skillName: trigger.skill, error };
+        return { triggerId: trigger.id, triggerName: trigger.name, skillName: trigger.skill, skillExecutionId: trigger.skillExecutionId, error };
       }
     },
   );

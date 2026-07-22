@@ -82,12 +82,14 @@ function emptyReviewPostResult(
 
 function buildDedupeObservations(
   actions: DeduplicateResult['duplicateActions'],
-  skill: string
+  skill: string,
+  skillExecutionId: string | undefined
 ): FindingObservation[] {
   return actions.map((action) => ({
     outcome: 'deduped',
     finding: action.finding,
     skill,
+    skillExecutionId,
     dedupe: {
       source: action.existingComment.isWarden ? 'warden' : 'external',
       matchType: action.matchType,
@@ -252,6 +254,7 @@ export async function postTriggerReview(
     return emptyReviewPostResult(newComments, activeWardenCommentIds);
   }
   const skill = result.report.skill;
+  const skillExecutionId = result.skillExecutionId;
 
   // Filter findings by reportOn threshold and confidence
   const filteredFindings = filterFindings(result.report.findings, result.reportOn, result.minConfidence);
@@ -296,6 +299,7 @@ export async function postTriggerReview(
           outcome: 'skipped',
           finding,
           skill,
+          skillExecutionId,
           skippedReason: 'duplicate_in_batch',
         });
       }
@@ -330,7 +334,7 @@ export async function postTriggerReview(
       result.report.findings = recenterReportFindingIds(result.report.findings, dedupResult.duplicateActions);
       findingsToPost = dedupResult.newFindings;
       findingsToMarkFailed = findingsToPost;
-      findingObservations.push(...buildDedupeObservations(dedupResult.duplicateActions, skill));
+      findingObservations.push(...buildDedupeObservations(dedupResult.duplicateActions, skill, skillExecutionId));
 
       // Merge dedup usage into the report's auxiliary usage
       if (dedupResult.dedupUsage) {
@@ -428,6 +432,7 @@ export async function postTriggerReview(
           outcome: 'skipped',
           finding,
           skill,
+          skillExecutionId,
           skippedReason: 'max_findings',
         });
       }
@@ -450,7 +455,7 @@ export async function postTriggerReview(
       }
       if (postOutcome === 'checks_only') {
         for (const finding of postedFindings) {
-          findingObservations.push({ outcome: 'skipped', finding, skill, skippedReason: 'no_inline_location' });
+          findingObservations.push({ outcome: 'skipped', finding, skill, skillExecutionId, skippedReason: 'no_inline_location' });
         }
         return emptyReviewPostResult(newComments, activeWardenCommentIds, findingObservations);
       }
@@ -463,10 +468,10 @@ export async function postTriggerReview(
       const bodyStripped = renderResultToPost.review?.event === 'COMMENT';
       for (const finding of postedFindings) {
         if (bodyStripped && !finding.location) {
-          findingObservations.push({ outcome: 'skipped', finding, skill, skippedReason: 'no_inline_location' });
+          findingObservations.push({ outcome: 'skipped', finding, skill, skillExecutionId, skippedReason: 'no_inline_location' });
           continue;
         }
-        findingObservations.push({ outcome: 'posted', finding, skill });
+        findingObservations.push({ outcome: 'posted', finding, skill, skillExecutionId });
         const comment = findingToExistingComment(finding, skill);
         if (comment) {
           newComments.push(comment);
@@ -493,7 +498,7 @@ export async function postTriggerReview(
       activeWardenCommentIds,
       findingObservations: [
         ...findingObservations,
-        ...findingsToMarkFailed.map((finding) => ({ outcome: 'failed' as const, finding, skill })),
+        ...findingsToMarkFailed.map((finding) => ({ outcome: 'failed' as const, finding, skill, skillExecutionId })),
       ],
       shouldFail: false,
     };

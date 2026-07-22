@@ -93,7 +93,7 @@ treat a `runId`/`schemaVersion` mismatch between the two as a hard error.
 |---|---|---|
 | `configuredSkills[]` | `metadata.configuredSkills[]` | moved to metadata file, same shape |
 | `triggerResults[]` | `metadata.triggerResults[]` | moved to metadata file; the embedded `report` field is dropped (that content now lives in `findings.skillExecutions`/`findings`) |
-| *(not tracked)* | `metadata.skippedTriggers[]` | new — `{skillName, triggerId?, triggerName?, reason}`, reason is one of `no_event_match\|path_filter\|draft_state\|label_mismatch\|disabled` |
+| *(not tracked)* | `metadata.skippedTriggers[]` | new — `{skillName, triggerId?, triggerName?, reason}`, reason is one of `no_event_match\|path_filter\|draft_state\|label_mismatch\|no_changes` |
 | `findingObservations[].skill` | `findingObservations[].origin.skillExecutionId/.skillName` | renamed/restructured |
 | `findingObservations[].finding` | `findingObservations[].finding` | unchanged shape |
 | `findingObservations[].dedupe` | `findingObservations[].dedupe` | unchanged, plus new `existingSkills[]` field (cross-skill attribution at the moment of the match) |
@@ -111,7 +111,7 @@ instead of reading the embedded `report`.
 ## Rollout
 
 `output-schema-version` defaults to `'1'`. Setting it to `'2'` writes both
-`warden-metadata.json` and `warden-findings.json` in addition to the v1
+`warden-metadata.json` and `warden-findings-v2.json` in addition to the v1
 `warden-findings.json` (v1's filename is unchanged; nothing currently
 depending on it needs to change). There is no plan to flip the default
 without a separate, explicitly announced deprecation window.
