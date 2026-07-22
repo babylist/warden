@@ -68,6 +68,7 @@ export interface TriggerResult {
     triggerId?: string;
     triggerName: string;
     skillName: string;
+    skillExecutionId?: string;
     report?: SkillReport;
     renderResult?: RenderResult;
     failOn?: SeverityThreshold;

@@ -332,6 +332,7 @@ export declare const FindingsOutputSchema: z.ZodObject<{
             elapsedMs: z.ZodOptional<z.ZodNumber>;
         }, z.core.$strip>;
         skill: z.ZodOptional<z.ZodString>;
+        skillExecutionId: z.ZodOptional<z.ZodString>;
     }, z.core.$strip>, z.ZodObject<{
         outcome: z.ZodLiteral<"deduped">;
         finding: z.ZodObject<{
@@ -375,6 +376,7 @@ export declare const FindingsOutputSchema: z.ZodObject<{
             elapsedMs: z.ZodOptional<z.ZodNumber>;
         }, z.core.$strip>;
         skill: z.ZodOptional<z.ZodString>;
+        skillExecutionId: z.ZodOptional<z.ZodString>;
         dedupe: z.ZodObject<{
             source: z.ZodEnum<{
                 warden: "warden";
@@ -434,6 +436,7 @@ export declare const FindingsOutputSchema: z.ZodObject<{
             elapsedMs: z.ZodOptional<z.ZodNumber>;
         }, z.core.$strip>;
         skill: z.ZodOptional<z.ZodString>;
+        skillExecutionId: z.ZodOptional<z.ZodString>;
         skippedReason: z.ZodEnum<{
             max_findings: "max_findings";
             duplicate_in_batch: "duplicate_in_batch";
@@ -482,6 +485,7 @@ export declare const FindingsOutputSchema: z.ZodObject<{
             elapsedMs: z.ZodOptional<z.ZodNumber>;
         }, z.core.$strip>;
         skill: z.ZodOptional<z.ZodString>;
+        skillExecutionId: z.ZodOptional<z.ZodString>;
         resolvedReason: z.ZodEnum<{
             fix_evaluation: "fix_evaluation";
             stale_check: "stale_check";
@@ -529,6 +533,7 @@ export declare const FindingsOutputSchema: z.ZodObject<{
             elapsedMs: z.ZodOptional<z.ZodNumber>;
         }, z.core.$strip>;
         skill: z.ZodOptional<z.ZodString>;
+        skillExecutionId: z.ZodOptional<z.ZodString>;
     }, z.core.$strip>], "outcome">>;
     configuredSkills: z.ZodOptional<z.ZodArray<z.ZodObject<{
         name: z.ZodString;

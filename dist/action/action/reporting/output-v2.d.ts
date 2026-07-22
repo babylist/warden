@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { EventContext } from '../../types/index.js';
+import type { AuxiliaryUsageAttributionMap, AuxiliaryUsageMap, EventContext } from '../../types/index.js';
 import type { ResolvedTrigger } from '../../config/loader.js';
 import type { TriggerResult } from '../triggers/executor.js';
 import type { FindingObservation } from './outcomes.js';
@@ -14,7 +14,7 @@ export declare const SkippedTriggerReasonSchema: z.ZodEnum<{
     path_filter: "path_filter";
     draft_state: "draft_state";
     label_mismatch: "label_mismatch";
-    disabled: "disabled";
+    no_changes: "no_changes";
 }>;
 export declare const TriggerRunResultV2Schema: z.ZodDiscriminatedUnion<[z.ZodObject<{
     status: z.ZodLiteral<"success">;
@@ -75,7 +75,7 @@ export declare const WardenMetadataSchema: z.ZodObject<{
             path_filter: "path_filter";
             draft_state: "draft_state";
             label_mismatch: "label_mismatch";
-            disabled: "disabled";
+            no_changes: "no_changes";
         }>;
     }, z.core.$strip>>>;
     triggerResults: z.ZodOptional<z.ZodArray<z.ZodDiscriminatedUnion<[z.ZodObject<{
@@ -120,6 +120,21 @@ export declare const WardenMetadataSchema: z.ZodObject<{
     }, z.core.$strip>>;
 }, z.core.$strip>;
 export type WardenMetadata = z.infer<typeof WardenMetadataSchema>;
+declare const AuxiliaryUsageEntrySchema: z.ZodObject<{
+    agent: z.ZodString;
+    model: z.ZodOptional<z.ZodString>;
+    runtime: z.ZodOptional<z.ZodString>;
+    usage: z.ZodObject<{
+        inputTokens: z.ZodNumber;
+        outputTokens: z.ZodNumber;
+        cacheReadInputTokens: z.ZodOptional<z.ZodNumber>;
+        cacheCreationInputTokens: z.ZodOptional<z.ZodNumber>;
+        cacheCreation5mInputTokens: z.ZodOptional<z.ZodNumber>;
+        cacheCreation1hInputTokens: z.ZodOptional<z.ZodNumber>;
+        webSearchRequests: z.ZodOptional<z.ZodNumber>;
+        costUSD: z.ZodNumber;
+    }, z.core.$strip>;
+}, z.core.$strip>;
 export declare const SkillExecutionSchema: z.ZodObject<{
     skillExecutionId: z.ZodString;
     skillName: z.ZodString;
@@ -937,6 +952,11 @@ export declare const WardenFindingsSchemaV2: z.ZodObject<{
     }, z.core.$strip>;
 }, z.core.$strip>;
 export type WardenFindingsV2 = z.infer<typeof WardenFindingsSchemaV2>;
+/** Inverse of {@link toAuxiliaryUsageEntries} — rebuilds the record-keyed shape SkillReport expects. */
+export declare function fromAuxiliaryUsageEntries(entries: z.infer<typeof AuxiliaryUsageEntrySchema>[] | undefined): {
+    usage: AuxiliaryUsageMap | undefined;
+    attribution: AuxiliaryUsageAttributionMap | undefined;
+};
 export interface BuildMetadataOutputV2Options {
     runId: string;
     runAttempt?: string;

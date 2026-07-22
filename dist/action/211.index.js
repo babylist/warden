@@ -1303,6 +1303,7 @@ function setupAuthEnv(inputs) {
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 /* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   A6: () => (/* binding */ fromAuxiliaryUsageEntries),
 /* harmony export */   HT: () => (/* binding */ WardenFindingsSchemaV2),
 /* harmony export */   I2: () => (/* binding */ WardenMetadataSchema),
 /* harmony export */   LE: () => (/* binding */ buildMetadataOutputV2),
@@ -1354,7 +1355,7 @@ const SkippedTriggerReasonSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* ["enum"] *
     'path_filter',
     'draft_state',
     'label_mismatch',
-    'disabled',
+    'no_changes',
 ]);
 const SkippedTriggerSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
     skillName: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
@@ -1589,11 +1590,25 @@ function toAuxiliaryUsageEntries(usage, attribution) {
         };
     });
 }
+/** Inverse of {@link toAuxiliaryUsageEntries} — rebuilds the record-keyed shape SkillReport expects. */
+function fromAuxiliaryUsageEntries(entries) {
+    if (!entries || entries.length === 0)
+        return { usage: undefined, attribution: undefined };
+    const usage = {};
+    const attribution = {};
+    for (const entry of entries) {
+        usage[entry.agent] = entry.usage;
+        if (entry.model || entry.runtime) {
+            attribution[entry.agent] = { model: entry.model, runtime: entry.runtime };
+        }
+    }
+    return { usage, attribution: Object.keys(attribution).length > 0 ? attribution : undefined };
+}
 function deriveSkippedReason(trigger, context) {
     if (trigger.type === 'local')
         return 'no_event_match';
     if (trigger.type === 'schedule') {
-        return context.eventType === 'schedule' ? 'disabled' : 'no_event_match';
+        return context.eventType === 'schedule' ? 'no_changes' : 'no_event_match';
     }
     if (trigger.type === 'pull_request') {
         if (context.eventType !== 'pull_request')
@@ -1613,8 +1628,7 @@ function deriveSkippedReason(trigger, context) {
             return 'draft_state';
         }
     }
-    const filenames = context.pullRequest?.files.map((f) => f.filename);
-    return (0,_triggers_matcher_js__WEBPACK_IMPORTED_MODULE_1__/* .matchPathFilters */ .e8)(trigger.filters, filenames) ? 'disabled' : 'path_filter';
+    return 'path_filter';
 }
 function buildMetadataOutputV2(context, resolvedTriggers, matchedTriggers, results, options) {
     const matchedIds = new Set(matchedTriggers.map((t) => t.id));
@@ -1696,7 +1710,7 @@ function skillExecutionIdByNameFrom(matchedTriggers) {
 function buildFindingObservationsV2(findingObservations, matchedTriggers) {
     const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
     const observations = findingObservations.map((observation) => {
-        const skillExecutionId = skillExecutionIdByName.get(observation.skill ?? '') ?? '';
+        const skillExecutionId = observation.skillExecutionId ?? skillExecutionIdByName.get(observation.skill ?? '') ?? '';
         const origin = { skillExecutionId, skillName: observation.skill ?? '' };
         const findingSnapshot = {
             id: observation.finding.id,
@@ -1734,7 +1748,7 @@ function buildCorroboratingAttributions(findingObservations, matchedTriggers) {
             const winnerId = observation.dedupe.existingFindingId;
             const list = corroboratingById.get(winnerId) ?? [];
             list.push({
-                skillExecutionId: skillExecutionIdByName.get(observation.skill ?? '') ?? '',
+                skillExecutionId: observation.skillExecutionId ?? skillExecutionIdByName.get(observation.skill ?? '') ?? '',
                 skillName: observation.skill ?? '',
                 role: 'corroborating',
                 matchType: observation.dedupe.matchType,
@@ -1945,29 +1959,34 @@ const FindingObservationSchema = schemas/* discriminatedUnion */.gM('outcome', [
         outcome: schemas/* literal */.eu('posted'),
         finding: types/* FindingSchema */.p_,
         skill: schemas/* string */.Yj().optional(),
+        skillExecutionId: schemas/* string */.Yj().optional(),
     }),
     schemas/* object */.Ik({
         outcome: schemas/* literal */.eu('deduped'),
         finding: types/* FindingSchema */.p_,
         skill: schemas/* string */.Yj().optional(),
+        skillExecutionId: schemas/* string */.Yj().optional(),
         dedupe: DedupeDetailSchema,
     }),
     schemas/* object */.Ik({
         outcome: schemas/* literal */.eu('skipped'),
         finding: types/* FindingSchema */.p_,
         skill: schemas/* string */.Yj().optional(),
+        skillExecutionId: schemas/* string */.Yj().optional(),
         skippedReason: schemas/* enum */.k5(['max_findings', 'duplicate_in_batch', 'no_inline_location']),
     }),
     schemas/* object */.Ik({
         outcome: schemas/* literal */.eu('resolved'),
         finding: types/* FindingSchema */.p_,
         skill: schemas/* string */.Yj().optional(),
+        skillExecutionId: schemas/* string */.Yj().optional(),
         resolvedReason: schemas/* enum */.k5(['fix_evaluation', 'stale_check']),
     }),
     schemas/* object */.Ik({
         outcome: schemas/* literal */.eu('failed'),
         finding: types/* FindingSchema */.p_,
         skill: schemas/* string */.Yj().optional(),
+        skillExecutionId: schemas/* string */.Yj().optional(),
     }),
 ]);
 
@@ -2281,11 +2300,12 @@ function shouldResolveStaleComments(results) {
 function emptyReviewPostResult(newComments, activeWardenCommentIds, findingObservations = []) {
     return { posted: false, newComments, activeWardenCommentIds, findingObservations, shouldFail: false };
 }
-function buildDedupeObservations(actions, skill) {
+function buildDedupeObservations(actions, skill, skillExecutionId) {
     return actions.map((action) => ({
         outcome: 'deduped',
         finding: action.finding,
         skill,
+        skillExecutionId,
         dedupe: {
             source: action.existingComment.isWarden ? 'warden' : 'external',
             matchType: action.matchType,
@@ -2408,6 +2428,7 @@ async function postTriggerReview(ctx, deps) {
         return emptyReviewPostResult(newComments, activeWardenCommentIds);
     }
     const skill = result.report.skill;
+    const skillExecutionId = result.skillExecutionId;
     // Filter findings by reportOn threshold and confidence
     const filteredFindings = (0,_types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .filterFindings */ .Ni)(result.report.findings, result.reportOn, result.minConfidence);
     const reportOnSuccess = result.reportOnSuccess ?? false;
@@ -2444,6 +2465,7 @@ async function postTriggerReview(ctx, deps) {
                     outcome: 'skipped',
                     finding,
                     skill,
+                    skillExecutionId,
                     skippedReason: 'duplicate_in_batch',
                 });
             }
@@ -2469,7 +2491,7 @@ async function postTriggerReview(ctx, deps) {
             result.report.findings = recenterReportFindingIds(result.report.findings, dedupResult.duplicateActions);
             findingsToPost = dedupResult.newFindings;
             findingsToMarkFailed = findingsToPost;
-            findingObservations.push(...buildDedupeObservations(dedupResult.duplicateActions, skill));
+            findingObservations.push(...buildDedupeObservations(dedupResult.duplicateActions, skill, skillExecutionId));
             // Merge dedup usage into the report's auxiliary usage
             if (dedupResult.dedupUsage) {
                 const dedupAux = { dedup: dedupResult.dedupUsage };
@@ -2543,6 +2565,7 @@ async function postTriggerReview(ctx, deps) {
                     outcome: 'skipped',
                     finding,
                     skill,
+                    skillExecutionId,
                     skippedReason: 'max_findings',
                 });
             }
@@ -2566,7 +2589,7 @@ async function postTriggerReview(ctx, deps) {
             }
             if (postOutcome === 'checks_only') {
                 for (const finding of postedFindings) {
-                    findingObservations.push({ outcome: 'skipped', finding, skill, skippedReason: 'no_inline_location' });
+                    findingObservations.push({ outcome: 'skipped', finding, skill, skillExecutionId, skippedReason: 'no_inline_location' });
                 }
                 return emptyReviewPostResult(newComments, activeWardenCommentIds, findingObservations);
             }
@@ -2579,10 +2602,10 @@ async function postTriggerReview(ctx, deps) {
             const bodyStripped = renderResultToPost.review?.event === 'COMMENT';
             for (const finding of postedFindings) {
                 if (bodyStripped && !finding.location) {
-                    findingObservations.push({ outcome: 'skipped', finding, skill, skippedReason: 'no_inline_location' });
+                    findingObservations.push({ outcome: 'skipped', finding, skill, skillExecutionId, skippedReason: 'no_inline_location' });
                     continue;
                 }
-                findingObservations.push({ outcome: 'posted', finding, skill });
+                findingObservations.push({ outcome: 'posted', finding, skill, skillExecutionId });
                 const comment = (0,_output_dedup_js__WEBPACK_IMPORTED_MODULE_3__/* .findingToExistingComment */ .Xi)(finding, skill);
                 if (comment) {
                     newComments.push(comment);
@@ -2609,7 +2632,7 @@ async function postTriggerReview(ctx, deps) {
             activeWardenCommentIds,
             findingObservations: [
                 ...findingObservations,
-                ...findingsToMarkFailed.map((finding) => ({ outcome: 'failed', finding, skill })),
+                ...findingsToMarkFailed.map((finding) => ({ outcome: 'failed', finding, skill, skillExecutionId })),
             ],
             shouldFail: false,
         };
@@ -3028,6 +3051,7 @@ async function executeTrigger(trigger, deps) {
                 triggerId: trigger.id,
                 triggerName: trigger.name,
                 skillName: trigger.skill,
+                skillExecutionId: trigger.skillExecutionId,
                 report,
                 renderResult,
                 failOn,
@@ -3059,7 +3083,7 @@ async function executeTrigger(trigger, deps) {
             }
             console.error(`::warning::Trigger ${trigger.name} failed: ${error}`);
             (0,_workflow_base_js__WEBPACK_IMPORTED_MODULE_1__/* .logGroupEnd */ .TN)();
-            return { triggerId: trigger.id, triggerName: trigger.name, skillName: trigger.skill, error };
+            return { triggerId: trigger.id, triggerName: trigger.name, skillName: trigger.skill, skillExecutionId: trigger.skillExecutionId, error };
         }
     });
 }
@@ -4532,6 +4556,7 @@ function buildReportModeResults(output, matchedTriggers, inputs) {
             triggerId: trigger.id,
             triggerName: trigger.name,
             skillName: trigger.skill,
+            skillExecutionId: trigger.skillExecutionId,
             failOn,
             reportOn,
             minConfidence,
@@ -4884,6 +4909,7 @@ function buildReportModeResultsV2(metadata, findingsOutput, matchedTriggers, inp
             triggerId: trigger.id,
             triggerName: trigger.name,
             skillName: trigger.skill,
+            skillExecutionId: trigger.skillExecutionId,
             failOn,
             reportOn,
             minConfidence,
@@ -4906,12 +4932,15 @@ function buildReportModeResultsV2(metadata, findingsOutput, matchedTriggers, inp
             const finding = findingsById.get(id);
             return finding ? [toFindingFromV2(finding)] : [];
         });
+        const { usage: auxiliaryUsage, attribution: auxiliaryUsageAttribution } = (0,_reporting_output_v2_js__WEBPACK_IMPORTED_MODULE_22__/* .fromAuxiliaryUsageEntries */ .A6)(execution.auxiliaryUsage);
         const report = {
             skill: execution.skillName,
             summary: execution.summary,
             findings,
             durationMs: execution.durationMs,
             usage: execution.usage,
+            auxiliaryUsage,
+            auxiliaryUsageAttribution,
             failedHunks: execution.failedHunks,
             failedExtractions: execution.failedExtractions,
             error: execution.error,
@@ -16472,13 +16501,12 @@ async function resolveAgentAsync(nameOrPath, repoRoot, options) {
 /* harmony export */   Lb: () => (/* binding */ filterContextByPaths),
 /* harmony export */   QW: () => (/* binding */ matchTrigger),
 /* harmony export */   W9: () => (/* binding */ shouldFail),
-/* harmony export */   e8: () => (/* binding */ matchPathFilters),
 /* harmony export */   jC: () => (/* binding */ countSeverity),
 /* harmony export */   sB: () => (/* binding */ matchGlob),
 /* harmony export */   tH: () => (/* binding */ countFindingsAtOrAbove),
 /* harmony export */   xf: () => (/* binding */ matchPullRequestState)
 /* harmony export */ });
-/* unused harmony exports clearGlobCache, getGlobCacheSize */
+/* unused harmony exports clearGlobCache, getGlobCacheSize, matchPathFilters */
 /* harmony import */ var _types_index_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(78481);
 
 /** Maximum number of patterns to cache (LRU eviction when exceeded) */

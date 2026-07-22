@@ -25,6 +25,7 @@ export type DedupeDetail = z.infer<typeof DedupeDetailSchema>;
 interface BaseFindingObservation {
     finding: Finding;
     skill?: string;
+    skillExecutionId?: string;
 }
 export interface PostedFindingObservation extends BaseFindingObservation {
     outcome: 'posted';
@@ -88,6 +89,7 @@ export declare const FindingObservationSchema: z.ZodDiscriminatedUnion<[z.ZodObj
         elapsedMs: z.ZodOptional<z.ZodNumber>;
     }, z.core.$strip>;
     skill: z.ZodOptional<z.ZodString>;
+    skillExecutionId: z.ZodOptional<z.ZodString>;
 }, z.core.$strip>, z.ZodObject<{
     outcome: z.ZodLiteral<"deduped">;
     finding: z.ZodObject<{
@@ -131,6 +133,7 @@ export declare const FindingObservationSchema: z.ZodDiscriminatedUnion<[z.ZodObj
         elapsedMs: z.ZodOptional<z.ZodNumber>;
     }, z.core.$strip>;
     skill: z.ZodOptional<z.ZodString>;
+    skillExecutionId: z.ZodOptional<z.ZodString>;
     dedupe: z.ZodObject<{
         source: z.ZodEnum<{
             warden: "warden";
@@ -190,6 +193,7 @@ export declare const FindingObservationSchema: z.ZodDiscriminatedUnion<[z.ZodObj
         elapsedMs: z.ZodOptional<z.ZodNumber>;
     }, z.core.$strip>;
     skill: z.ZodOptional<z.ZodString>;
+    skillExecutionId: z.ZodOptional<z.ZodString>;
     skippedReason: z.ZodEnum<{
         max_findings: "max_findings";
         duplicate_in_batch: "duplicate_in_batch";
@@ -238,6 +242,7 @@ export declare const FindingObservationSchema: z.ZodDiscriminatedUnion<[z.ZodObj
         elapsedMs: z.ZodOptional<z.ZodNumber>;
     }, z.core.$strip>;
     skill: z.ZodOptional<z.ZodString>;
+    skillExecutionId: z.ZodOptional<z.ZodString>;
     resolvedReason: z.ZodEnum<{
         fix_evaluation: "fix_evaluation";
         stale_check: "stale_check";
@@ -285,6 +290,7 @@ export declare const FindingObservationSchema: z.ZodDiscriminatedUnion<[z.ZodObj
         elapsedMs: z.ZodOptional<z.ZodNumber>;
     }, z.core.$strip>;
     skill: z.ZodOptional<z.ZodString>;
+    skillExecutionId: z.ZodOptional<z.ZodString>;
 }, z.core.$strip>], "outcome">;
 export type ParsedFindingObservation = z.infer<typeof FindingObservationSchema>;
 export {};
