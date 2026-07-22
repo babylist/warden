@@ -3,7 +3,6 @@ import type { EventContext } from '../../types/index.js';
 import type { ResolvedTrigger } from '../../config/loader.js';
 import type { TriggerResult } from '../triggers/executor.js';
 import type { FindingObservation } from './outcomes.js';
-export declare const SEVERITY_BREAKDOWN_KEYS: readonly ["high", "medium", "low"];
 export declare const SeverityBreakdownSchema: z.ZodObject<{
     high: z.ZodNumber;
     medium: z.ZodNumber;

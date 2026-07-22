@@ -1305,7 +1305,7 @@ function setupAuthEnv(inputs) {
 /* harmony export */   LE: () => (/* binding */ buildMetadataOutputV2),
 /* harmony export */   WS: () => (/* binding */ buildFindingsOutputV2)
 /* harmony export */ });
-/* unused harmony exports SEVERITY_BREAKDOWN_KEYS, SeverityBreakdownSchema, SkippedTriggerReasonSchema, TriggerRunResultV2Schema, SkillExecutionSchema, ExportedFindingV2Schema, DiscardedFindingSchema, DedupeDetailV2Schema, FindingObservationV2Schema */
+/* unused harmony exports SeverityBreakdownSchema, SkippedTriggerReasonSchema, TriggerRunResultV2Schema, SkillExecutionSchema, ExportedFindingV2Schema, DiscardedFindingSchema, DedupeDetailV2Schema, FindingObservationV2Schema */
 /* harmony import */ var zod__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(53391);
 /* harmony import */ var _types_index_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(78481);
 /* harmony import */ var _triggers_matcher_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(49431);
@@ -1318,7 +1318,6 @@ function setupAuthEnv(inputs) {
 
 
 
-const SEVERITY_BREAKDOWN_KEYS = (/* unused pure expression or super */ null && (['high', 'medium', 'low']));
 const SeverityBreakdownSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
     high: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int().nonnegative(),
     medium: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int().nonnegative(),
@@ -1598,6 +1597,11 @@ function deriveSkippedReason(trigger, context) {
         if (!trigger.actions?.includes(context.action))
             return 'no_event_match';
         if (!(0,_triggers_matcher_js__WEBPACK_IMPORTED_MODULE_1__/* .matchPullRequestState */ .xf)(trigger, context)) {
+            if (context.action === 'labeled' && trigger.labels !== undefined) {
+                const eventLabelMatches = context.label !== undefined && trigger.labels.includes(context.label);
+                if (!eventLabelMatches)
+                    return 'label_mismatch';
+            }
             const labels = context.pullRequest?.labels ?? [];
             const labelMatches = trigger.labels?.some((label) => labels.includes(label));
             if (trigger.labels !== undefined && !labelMatches)
@@ -4135,6 +4139,30 @@ async function dismissPreviousReviewIfResolved(octokit, context, previousReviewI
     }
 }
 /**
+ * Write the schema-v2 metadata/findings pair when opted in. Called from every
+ * v1 findings-file write site, including early-return "no triggers matched"
+ * paths, so v2 consumers never see a missing pair when v1 output exists.
+ */
+function writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, results, findingObservations, onError) {
+    if (inputs.outputSchemaVersion !== '2')
+        return;
+    const runId = process.env['GITHUB_RUN_ID'] ?? '';
+    const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
+    try {
+        const metadataPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeMetadataOutput */ .ym)(context, resolvedTriggers, matchedTriggers, results, {
+            runId,
+            runAttempt,
+            actionRef: inputs.actionRef,
+        });
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Metadata written to ${metadataPath}`);
+        const findingsV2Path = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutputV2 */ .zi)(results, matchedTriggers, findingObservations, context, { runId });
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Findings (v2) written to ${findingsV2Path}`);
+    }
+    catch (error) {
+        onError(`Failed to write schema-v2 output: ${error}`);
+    }
+}
+/**
  * Dismiss review, set outputs, update core check, fail action.
  */
 async function finalizeWorkflow(octokit, context, previousReviewInfo, coreCheckId, results, reports, findingObservations, shouldFailAction, failureReasons, canResolveStale, gate, triggerErrors, matchedTriggers, resolvedTriggers, inputs) {
@@ -4153,23 +4181,7 @@ async function finalizeWorkflow(octokit, context, previousReviewInfo, coreCheckI
     catch (error) {
         (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
     }
-    if (inputs.outputSchemaVersion === '2') {
-        const runId = process.env['GITHUB_RUN_ID'] ?? '';
-        const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
-        try {
-            const metadataPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeMetadataOutput */ .ym)(context, resolvedTriggers, matchedTriggers, results, {
-                runId,
-                runAttempt,
-                actionRef: inputs.actionRef,
-            });
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Metadata written to ${metadataPath}`);
-            const findingsV2Path = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutputV2 */ .zi)(results, matchedTriggers, findingObservations, context, { runId });
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Findings (v2) written to ${findingsV2Path}`);
-        }
-        catch (error) {
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write schema-v2 output: ${error}`);
-        }
-    }
+    writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, results, findingObservations, _cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6);
     // Update core check with overall summary
     if (coreCheckId && context.pullRequest) {
         try {
@@ -4570,7 +4582,7 @@ async function createFailedCoreCheckForReport(octokit, context, error) {
  * Finalize report mode after replay: write outputs, handle review dismissal,
  * create direct completed checks, and fail the action when policy requires it.
  */
-async function finalizeReportWorkflow(octokit, context, previousReviewInfo, results, reports, findingObservations, shouldFailAction, failureReasons, canResolveStale, gate, triggerErrors, options = {}) {
+async function finalizeReportWorkflow(octokit, context, previousReviewInfo, results, reports, findingObservations, shouldFailAction, failureReasons, canResolveStale, gate, triggerErrors, options) {
     await dismissPreviousReviewIfResolved(octokit, context, previousReviewInfo, results, canResolveStale, gate, { failOnWriteError: options.failOnWriteError });
     const outputs = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .computeWorkflowOutputs */ .dV)(reports);
     (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setWorkflowOutputs */ .wZ)(outputs);
@@ -4587,6 +4599,7 @@ async function finalizeReportWorkflow(octokit, context, previousReviewInfo, resu
     catch (error) {
         (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
     }
+    writeSchemaV2Outputs(options.inputs, context, options.resolvedTriggers, options.matchedTriggers, results, findingObservations, _cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6);
     await createCompletedCoreCheckForReport(octokit, context, results, reports, shouldFailAction || triggerErrors.length > 0, outputs);
     if (shouldFailAction) {
         (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(failureReasons.join('; '));
@@ -4678,6 +4691,7 @@ async function runAnalyzeMode(inputs, initResult, span) {
         catch (error) {
             (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(`Failed to write findings output: ${error}`);
         }
+        writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], [], _base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1);
         (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)('Analysis complete: 0 total findings');
         return;
     }
@@ -4700,23 +4714,7 @@ async function runAnalyzeMode(inputs, initResult, span) {
     catch (error) {
         (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(`Failed to write findings output: ${error}`);
     }
-    if (inputs.outputSchemaVersion === '2') {
-        const runId = process.env['GITHUB_RUN_ID'] ?? '';
-        const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
-        try {
-            const metadataPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeMetadataOutput */ .ym)(context, resolvedTriggers, matchedTriggers, results, {
-                runId,
-                runAttempt,
-                actionRef: inputs.actionRef,
-            });
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Metadata written to ${metadataPath}`);
-            const findingsV2Path = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutputV2 */ .zi)(results, matchedTriggers, [], context, { runId });
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Findings (v2) written to ${findingsV2Path}`);
-        }
-        catch (error) {
-            (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(`Failed to write schema-v2 output: ${error}`);
-        }
-    }
+    writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, results, [], _base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1);
     (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .handleTriggerErrors */ .a3)((0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .collectTriggerErrors */ .sl)(results), matchedTriggers.length, { failAll: false });
     (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Analysis complete: ${outputs.findingsCount} total findings`);
 }
@@ -4876,6 +4874,7 @@ async function runReportMode(octokit, inputs, initResult, repoPath, span) {
             catch (error) {
                 (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
             }
+            writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], [], _cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6);
             await createCompletedCoreCheckForReport(octokit, context, [], [], false, outputs, {
                 title: skipCoreCheck.title,
                 message: skipCoreCheck.message,
@@ -4897,6 +4896,7 @@ async function runReportMode(octokit, inputs, initResult, repoPath, span) {
             catch (error) {
                 (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
             }
+            writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], cleanupFindingObservations, _cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6);
             await createCompletedCoreCheckForReport(octokit, context, [], [], false, outputs, {
                 title: 'No triggers matched',
                 message: 'No triggers matched for this event.',
@@ -4923,7 +4923,7 @@ async function runReportMode(octokit, inputs, initResult, repoPath, span) {
             resolveSpan.setAttribute('warden.feedback.auto_resolve.stale_count', resolutionResult.autoResolvedByStaleCheck);
             reviewPhase.findingObservations.push(...resolutionResult.findingObservations);
         });
-        await finalizeReportWorkflow(octokit, context, previousReviewInfo, results, reviewPhase.reports, reviewPhase.findingObservations, reviewPhase.shouldFailAction, reviewPhase.failureReasons, canResolveStale, gate, triggerErrors, { failOnWriteError: true, matchedTriggers, resolvedTriggers });
+        await finalizeReportWorkflow(octokit, context, previousReviewInfo, results, reviewPhase.reports, reviewPhase.findingObservations, reviewPhase.shouldFailAction, reviewPhase.failureReasons, canResolveStale, gate, triggerErrors, { failOnWriteError: true, matchedTriggers, resolvedTriggers, inputs });
     }
     catch (error) {
         if (error instanceof _base_js__WEBPACK_IMPORTED_MODULE_19__/* .ActionFailedError */ .Ah) {
@@ -4986,6 +4986,7 @@ async function runPRWorkflow(octokit, inputs, eventName, eventPath, repoPath) {
             catch (error) {
                 (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
             }
+            writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], [], _cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6);
             await completeSkippedCoreCheck(octokit, context, coreCheckId, skipCoreCheck);
             return;
         }
@@ -5003,6 +5004,7 @@ async function runPRWorkflow(octokit, inputs, eventName, eventPath, repoPath) {
                 catch (error) {
                     (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
                 }
+                writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], cleanupFindingObservations, _cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6);
                 await completeSkippedCoreCheck(octokit, context, coreCheckId, {
                     title: 'No triggers matched',
                     message: 'No triggers matched for this event.',
