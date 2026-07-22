@@ -669,6 +669,25 @@ function wouldPostBlockingReview(result: TriggerResult): boolean {
  * Returns whether all Warden comments are resolved after evaluation.
  * Report mode passes failOnWriteError so GitHub write failures abort delivery.
  */
+/**
+ * skillExecutionId per skill name, restricted to names with exactly one
+ * current execution. A resolved/stale comment's skill name can't otherwise
+ * be safely mapped to one execution when a skill has multiple triggers.
+ */
+function unambiguousSkillExecutionIdByName(matchedTriggers: ResolvedTrigger[]): Map<string, string> {
+  const counts = new Map<string, number>();
+  const idByName = new Map<string, string>();
+  for (const trigger of matchedTriggers) {
+    counts.set(trigger.skill, (counts.get(trigger.skill) ?? 0) + 1);
+    if (!idByName.has(trigger.skill)) idByName.set(trigger.skill, trigger.skillExecutionId);
+  }
+  const result = new Map<string, string>();
+  for (const [name, id] of idByName) {
+    if (counts.get(name) === 1) result.set(name, id);
+  }
+  return result;
+}
+
 async function evaluateFixesAndResolveStale(
   octokit: Octokit,
   context: EventContext,
@@ -679,6 +698,7 @@ async function evaluateFixesAndResolveStale(
   anthropicApiKey: string,
   auxiliaryOptions: AuxiliaryWorkflowOptions,
   gate: ReviewFeedbackGate,
+  matchedTriggers: ResolvedTrigger[],
   options: { failOnWriteError?: boolean } = {}
 ): Promise<{
   allResolved: boolean;
@@ -686,6 +706,7 @@ async function evaluateFixesAndResolveStale(
   autoResolvedByStaleCheck: number;
   findingObservations: FindingObservation[];
 }> {
+  const skillExecutionIdByName = unambiguousSkillExecutionIdByName(matchedTriggers);
   const wardenComments = fetchedComments.filter((c) => c.isWarden);
   const commentsResolvedByFixEval = new Set<number>();
   const commentsEvaluatedByFixEval = new Set<number>();
@@ -809,6 +830,7 @@ async function evaluateFixesAndResolveStale(
             outcome: 'resolved',
             finding: existingCommentToFinding(comment),
             skill: comment.skills?.[0],
+            skillExecutionId: skillExecutionIdByName.get(comment.skills?.[0] ?? ''),
             resolvedReason: 'fix_evaluation',
           });
         }
@@ -909,6 +931,7 @@ async function evaluateFixesAndResolveStale(
             outcome: 'resolved',
             finding: existingCommentToFinding(comment),
             skill: comment.skills?.[0],
+            skillExecutionId: skillExecutionIdByName.get(comment.skills?.[0] ?? ''),
             resolvedReason: 'stale_check',
           });
         }
@@ -1011,6 +1034,8 @@ function writeSchemaV2Outputs(
       runId,
       runAttempt,
       actionRef: inputs.actionRef,
+      failOn: inputs.failOn,
+      reportOn: inputs.reportOn,
     });
     logAction(`Metadata written to ${metadataPath}`);
     const findingsV2Path = writeFindingsOutputV2(results, matchedTriggers, findingObservations, context, { runId });
@@ -1774,7 +1799,7 @@ async function cleanupOrphanedComments(
 
   const { allResolved, autoResolvedByFixEvaluation, autoResolvedByStaleCheck, findingObservations } =
     await evaluateFixesAndResolveStale(
-      octokit, context, existingComments, [], new Set(), true, inputs.anthropicApiKey, auxiliaryOptions, gate, {
+      octokit, context, existingComments, [], new Set(), true, inputs.anthropicApiKey, auxiliaryOptions, gate, [], {
         failOnWriteError: options.failOnWriteError,
       }
     );
@@ -2208,7 +2233,7 @@ async function runReportMode(
           octokit, context, reviewPhase.fetchedComments,
           allFindings, reviewPhase.activeWardenCommentIds,
           canResolveStale, inputs.anthropicApiKey,
-          auxiliaryOptions, gate,
+          auxiliaryOptions, gate, matchedTriggers,
           { failOnWriteError: true },
         );
         resolveSpan.setAttribute(
@@ -2404,7 +2429,7 @@ export async function runPRWorkflow(
               octokit, context, reviewPhase.fetchedComments,
               allFindings, reviewPhase.activeWardenCommentIds,
               canResolveStale, inputs.anthropicApiKey,
-              auxiliaryOptions, gate,
+              auxiliaryOptions, gate, matchedTriggers,
             );
             resolveSpan.setAttribute(
               'warden.feedback.auto_resolve.fix_eval_count',
