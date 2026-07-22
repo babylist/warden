@@ -1963,10 +1963,26 @@ function buildReportModeResultsV2(
   matchedTriggers: ResolvedTrigger[],
   inputs: ActionInputs
 ): TriggerResult[] {
+  const executionsWithTriggerId = findingsOutput.skillExecutions.filter((execution) => execution.triggerId);
+  const duplicateExecutionTriggerIds = new Set<string>();
+  const seenExecutionTriggerIds = new Set<string>();
+  for (const execution of executionsWithTriggerId) {
+    const triggerId = execution.triggerId as string;
+    if (seenExecutionTriggerIds.has(triggerId)) {
+      duplicateExecutionTriggerIds.add(triggerId);
+    }
+    seenExecutionTriggerIds.add(triggerId);
+  }
+  if (duplicateExecutionTriggerIds.size > 0) {
+    const skillNames = executionsWithTriggerId
+      .filter((execution) => duplicateExecutionTriggerIds.has(execution.triggerId as string))
+      .map((execution) => execution.skillName)
+      .join(', ');
+    throw new Error(`Findings file contains ambiguous duplicate trigger result(s): ${skillNames}`);
+  }
+
   const executionsByTriggerId = new Map(
-    findingsOutput.skillExecutions
-      .filter((execution) => execution.triggerId)
-      .map((execution) => [execution.triggerId as string, execution])
+    executionsWithTriggerId.map((execution) => [execution.triggerId as string, execution])
   );
   const findingsByExecutionScopedId = new Map(
     findingsOutput.findings.map((finding) => [`${finding.provenance.originSkillExecutionId}:${finding.id}`, finding])
@@ -1977,7 +1993,9 @@ function buildReportModeResultsV2(
       .map((result) => [result.triggerId as string, (result as { error: { name?: string; message: string } }).error])
   );
 
-  return matchedTriggers.map((trigger) => {
+  const consumedTriggerIds = new Set<string>();
+
+  const results = matchedTriggers.map((trigger) => {
     const failOn = trigger.failOn ?? inputs.failOn;
     const reportOn = trigger.reportOn ?? inputs.reportOn;
     const minConfidence = trigger.minConfidence ?? 'medium';
@@ -2008,6 +2026,7 @@ function buildReportModeResultsV2(
           : new Error(`Findings file has no result for trigger ${trigger.name} (${trigger.skill})`),
       };
     }
+    consumedTriggerIds.add(trigger.id);
 
     const findings = execution.findingIds.flatMap((id) => {
       const finding = findingsByExecutionScopedId.get(`${execution.skillExecutionId}:${id}`);
@@ -2036,6 +2055,18 @@ function buildReportModeResultsV2(
 
     return { ...baseResult, report };
   });
+
+  const unreportedExecutions = executionsWithTriggerId.filter(
+    (execution) => !consumedTriggerIds.has(execution.triggerId as string)
+  );
+  if (unreportedExecutions.length > 0) {
+    const skillNames = unreportedExecutions.map((execution) => execution.skillName).join(', ');
+    throw new Error(
+      `Findings file contains ${unreportedExecutions.length} result(s) that do not match current config: ${skillNames}`
+    );
+  }
+
+  return results;
 }
 
 /**
