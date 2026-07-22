@@ -24,6 +24,7 @@ import type { RuntimeName } from '../../sdk/runtimes/index.js';
 import type { TriggerResult } from '../triggers/executor.js';
 import { logAction, warnAction } from '../../cli/output/tty.js';
 import type { FindingObservation } from '../reporting/outcomes.js';
+import type { FindingProcessingEvent } from '../../sdk/runner.js';
 import type { ReviewFeedbackGate } from './review-feedback-gate.js';
 
 // -----------------------------------------------------------------------------
@@ -103,17 +104,15 @@ function buildDedupeObservations(
   }));
 }
 
-function recenterReportFindingIds(reportFindings: Finding[], actions: DeduplicateResult['duplicateActions']): Finding[] {
-  if (actions.length === 0) {
-    return reportFindings;
-  }
-
-  const ids = new Map(
+function buildFindingIdRecenterMap(actions: DeduplicateResult['duplicateActions']): Map<string, string> {
+  return new Map(
     actions
       .filter((action) => action.originalFindingId !== action.finding.id)
       .map((action) => [action.originalFindingId, action.finding.id])
   );
+}
 
+function recenterReportFindingIds(reportFindings: Finding[], ids: Map<string, string>): Finding[] {
   if (ids.size === 0) {
     return reportFindings;
   }
@@ -121,6 +120,36 @@ function recenterReportFindingIds(reportFindings: Finding[], actions: Deduplicat
   return reportFindings.map((finding) => {
     const recenteredId = ids.get(finding.id);
     return recenteredId ? { ...finding, id: recenteredId } : finding;
+  });
+}
+
+/**
+ * Schema v2 provenance keys verification/merge stages by the finding ids
+ * captured in `findingProcessingEvents` at analysis time. Recentering
+ * `report.findings` without also recentering those events leaves the
+ * provenance maps keyed by ids that no longer appear on any finding.
+ */
+function recenterFindingProcessingEvents(
+  events: FindingProcessingEvent[] | undefined,
+  ids: Map<string, string>
+): FindingProcessingEvent[] | undefined {
+  if (!events || ids.size === 0) {
+    return events;
+  }
+
+  return events.map((event) => {
+    const findingId = ids.get(event.finding.id);
+    const replacementId = event.replacement ? ids.get(event.replacement.id) : undefined;
+    if (!findingId && !replacementId) {
+      return event;
+    }
+
+    return {
+      ...event,
+      finding: findingId ? { ...event.finding, id: findingId } : event.finding,
+      replacement:
+        event.replacement && replacementId ? { ...event.replacement, id: replacementId } : event.replacement,
+    };
   });
 }
 
@@ -331,7 +360,12 @@ export async function postTriggerReview(
         currentSkill: skill,
         maxRetries: ctx.maxRetries,
       });
-      result.report.findings = recenterReportFindingIds(result.report.findings, dedupResult.duplicateActions);
+      const findingIdRecenterMap = buildFindingIdRecenterMap(dedupResult.duplicateActions);
+      result.report.findings = recenterReportFindingIds(result.report.findings, findingIdRecenterMap);
+      result.findingProcessingEvents = recenterFindingProcessingEvents(
+        result.findingProcessingEvents,
+        findingIdRecenterMap
+      );
       findingsToPost = dedupResult.newFindings;
       findingsToMarkFailed = findingsToPost;
       findingObservations.push(...buildDedupeObservations(dedupResult.duplicateActions, skill, skillExecutionId));

@@ -837,6 +837,45 @@ describe('postTriggerReview', () => {
     );
   });
 
+  it('recenters finding ids on findingProcessingEvents alongside report.findings', async () => {
+    const finding = createFinding();
+    const existingComment = createExistingComment({ isWarden: true, findingId: 'WRZ-XPL' });
+    const recenteredFinding = { ...finding, id: 'WRZ-XPL' };
+
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      skillName: 'test-skill',
+      report: {
+        skill: 'test-skill',
+        summary: 'Found 1 issue',
+        findings: [finding],
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: createRenderResult(),
+      reportOn: 'low',
+      findingProcessingEvents: [
+        { stage: 'verification', action: 'kept', finding, model: 'test-model' },
+      ],
+    };
+
+    vi.mocked(deduplicateFindings).mockResolvedValue({
+      newFindings: [],
+      duplicateActions: [{ type: 'react_external', originalFindingId: finding.id, finding: recenteredFinding, existingComment, matchType: 'hash' }],
+    });
+    vi.mocked(processDuplicateActions).mockResolvedValue({ updated: 0, reacted: 1, skipped: 0, failed: 0 });
+
+    const ctx: ReviewPostingContext = {
+      result,
+      existingComments: [existingComment],
+      apiKey: 'test-key',
+    };
+
+    await postTriggerReview(ctx, mockDeps);
+
+    expect(result.report?.findings[0]?.id).toBe('WRZ-XPL');
+    expect(result.findingProcessingEvents?.[0]?.finding.id).toBe('WRZ-XPL');
+  });
+
   it('handles API errors gracefully', async () => {
     const finding = createFinding();
     const result: TriggerResult = {
