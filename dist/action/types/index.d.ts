@@ -538,11 +538,11 @@ export declare const GitHubEventTypeSchema: z.ZodEnum<{
 }>;
 export type GitHubEventType = z.infer<typeof GitHubEventTypeSchema>;
 export declare const PullRequestActionSchema: z.ZodEnum<{
+    labeled: "labeled";
     opened: "opened";
     synchronize: "synchronize";
     reopened: "reopened";
     closed: "closed";
-    labeled: "labeled";
 }>;
 export type PullRequestAction = z.infer<typeof PullRequestActionSchema>;
 export declare const FileChangeSchema: z.ZodObject<{

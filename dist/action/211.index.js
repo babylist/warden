@@ -1748,15 +1748,28 @@ function buildCorroboratingAttributions(findingObservations, matchedTriggers) {
             const winnerId = observation.dedupe.existingFindingId;
             const list = corroboratingById.get(winnerId) ?? [];
             list.push({
-                skillExecutionId: observation.skillExecutionId ?? skillExecutionIdByName.get(observation.skill ?? '') ?? '',
-                skillName: observation.skill ?? '',
-                role: 'corroborating',
-                matchType: observation.dedupe.matchType,
+                attribution: {
+                    skillExecutionId: observation.skillExecutionId ?? skillExecutionIdByName.get(observation.skill ?? '') ?? '',
+                    skillName: observation.skill ?? '',
+                    role: 'corroborating',
+                    matchType: observation.dedupe.matchType,
+                },
+                targetSkills: observation.dedupe.existingSkills,
             });
             corroboratingById.set(winnerId, list);
         }
     }
     return corroboratingById;
+}
+/**
+ * Bare finding ids collide across skills, so a dedupe match against
+ * `existingFindingId` can name a finding shared by unrelated skills. Narrow
+ * to the actual winner using the skill(s) recorded on the dedupe match.
+ */
+function resolveCorroboratingAttributions(candidates, targetSkillName) {
+    return candidates
+        .filter((c) => !c.targetSkills || c.targetSkills.includes(targetSkillName))
+        .map((c) => c.attribution);
 }
 /**
  * Rebuild only the observation-derived parts of a v2 findings payload:
@@ -1774,8 +1787,9 @@ function patchFindingsOutputV2Observations(base, matchedTriggers, findingObserva
     const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, matchedTriggers);
     const corroboratingById = buildCorroboratingAttributions(findingObservations, matchedTriggers);
     const findings = base.findings.map((finding) => {
-        const newCorroborators = corroboratingById.get(finding.id);
-        if (!newCorroborators || newCorroborators.length === 0)
+        const primarySkillName = finding.reportedBy.find((r) => r.role === 'primary')?.skillName ?? '';
+        const newCorroborators = resolveCorroboratingAttributions(corroboratingById.get(finding.id) ?? [], primarySkillName);
+        if (newCorroborators.length === 0)
             return finding;
         const existingSkillExecutionIds = new Set(finding.reportedBy.map((r) => r.skillExecutionId));
         const additions = newCorroborators.filter((c) => !existingSkillExecutionIds.has(c.skillExecutionId));
@@ -1894,7 +1908,7 @@ function buildFindingsOutputV2(results, matchedTriggers, findingObservations, op
                 sourceSnippet: finding.sourceSnippet,
                 reportedBy: [
                     { skillExecutionId, skillName: report.skill, role: 'primary' },
-                    ...(corroboratingById.get(finding.id) ?? []),
+                    ...resolveCorroboratingAttributions(corroboratingById.get(finding.id) ?? [], report.skill),
                 ],
                 provenance: {
                     originSkillExecutionId: skillExecutionId,
@@ -4896,7 +4910,7 @@ function buildReportModeResultsV2(metadata, findingsOutput, matchedTriggers, inp
     const executionsByTriggerId = new Map(findingsOutput.skillExecutions
         .filter((execution) => execution.triggerId)
         .map((execution) => [execution.triggerId, execution]));
-    const findingsById = new Map(findingsOutput.findings.map((finding) => [finding.id, finding]));
+    const findingsByExecutionScopedId = new Map(findingsOutput.findings.map((finding) => [`${finding.provenance.originSkillExecutionId}:${finding.id}`, finding]));
     const errorByTriggerId = new Map((metadata.triggerResults ?? [])
         .filter((result) => result.status === 'error' && result.triggerId)
         .map((result) => [result.triggerId, result.error]));
@@ -4931,7 +4945,7 @@ function buildReportModeResultsV2(metadata, findingsOutput, matchedTriggers, inp
             };
         }
         const findings = execution.findingIds.flatMap((id) => {
-            const finding = findingsById.get(id);
+            const finding = findingsByExecutionScopedId.get(`${execution.skillExecutionId}:${id}`);
             return finding ? [toFindingFromV2(finding)] : [];
         });
         const { usage: auxiliaryUsage, attribution: auxiliaryUsageAttribution } = (0,_reporting_output_v2_js__WEBPACK_IMPORTED_MODULE_22__/* .fromAuxiliaryUsageEntries */ .A6)(execution.auxiliaryUsage);
@@ -5367,6 +5381,7 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
                 remote: resolved.remote,
             });
             const runtimeEnv = await (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .prepareRuntimeEnvironment */ .bZ)([resolved], inputs);
+            const findingProcessingEvents = [];
             const report = await (0,_sdk_runner_js__WEBPACK_IMPORTED_MODULE_2__/* .runSkill */ .pd)(skill, context, {
                 apiKey: inputs.anthropicApiKey,
                 model: resolved.model,
@@ -5384,6 +5399,9 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
                 verifyFindings: resolved.verifyFindings,
                 telemetryTriggerName: resolved.name,
                 pathToClaudeCodeExecutable: runtimeEnv.pathToClaudeCodeExecutable,
+                callbacks: {
+                    onFindingProcessing: (event) => findingProcessingEvents.push(event),
+                },
             });
             console.log(`Found ${report.findings.length} findings`);
             allReports.push(report);
@@ -5394,6 +5412,7 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
                 skillName: resolved.skill,
                 skillExecutionId: resolved.skillExecutionId,
                 report,
+                findingProcessingEvents,
             });
             totalFindings += report.findings.length;
             // Create/update issue with findings
