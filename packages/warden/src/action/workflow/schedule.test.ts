@@ -504,6 +504,41 @@ describe('runScheduleWorkflow', () => {
       }
     });
 
+    it('records verification provenance from onFindingProcessing in schedule v2 output', async () => {
+      const finding = createFinding({ severity: 'high' });
+      mockRunSkill.mockImplementation(async (_skill, _context, options) => {
+        options?.callbacks?.onFindingProcessing?.({
+          stage: 'verification',
+          action: 'kept',
+          finding,
+          reason: 'still real after tracing',
+          model: 'claude-haiku-4-5',
+        });
+        return createSkillReport({ findings: [finding] });
+      });
+
+      const metadataFile = getMetadataOutputPath(SCHEDULE_FIXTURES);
+      const findingsFile = getFindingsOutputPathV2(SCHEDULE_FIXTURES);
+
+      try {
+        await runScheduleWorkflow(
+          mockOctokit,
+          createDefaultInputs({ outputSchemaVersion: '2' }),
+          SCHEDULE_FIXTURES
+        );
+
+        const findings = JSON.parse(readFileSync(findingsFile, 'utf-8'));
+        expect(findings.findings[0]?.provenance.verification).toEqual({
+          outcome: 'kept',
+          model: 'claude-haiku-4-5',
+          runtime: undefined,
+        });
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+      }
+    });
+
     it('records a schedule trigger with no matching files as skipped with reason no_changes', async () => {
       mockBuildContext.mockResolvedValue(
         createScheduleContext({

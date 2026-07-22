@@ -557,6 +557,57 @@ describe('runPRWorkflow', () => {
       );
     });
 
+    it('report mode does not cross-attribute findings that share an id across duplicate trigger executions', async () => {
+      let invocation = 0;
+      mockRunSkillTask.mockImplementation(async (taskOptions) => {
+        invocation++;
+        return {
+          name: taskOptions.name,
+          report: createSkillReport({
+            skill: 'test-skill',
+            findings: [
+              createFinding({
+                id: 'collide',
+                title: `Finding from execution ${invocation}`,
+                location: { path: 'src/test.ts', startLine: invocation },
+              }),
+            ],
+          }),
+        };
+      });
+
+      await runPRWorkflow(
+        mockOctokit,
+        createDefaultInputs({ mode: 'analyze', outputSchemaVersion: '2' }),
+        'pull_request',
+        EVENT_PAYLOAD_PATH,
+        DUPLICATE_TRIGGER_FIXTURES_DIR
+      );
+
+      const metadataFile = getMetadataOutputPath(DUPLICATE_TRIGGER_FIXTURES_DIR);
+      const findingsFile = getFindingsOutputPathV2(DUPLICATE_TRIGGER_FIXTURES_DIR);
+
+      try {
+        await runPRWorkflow(
+          mockOctokit,
+          createDefaultInputs({ mode: 'report', outputSchemaVersion: '2', metadataFile, findingsFile }),
+          'pull_request',
+          EVENT_PAYLOAD_PATH,
+          DUPLICATE_TRIGGER_FIXTURES_DIR
+        );
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+      }
+
+      const postedBodies = vi.mocked(mockOctokit.pulls.createReview).mock.calls
+        .flatMap((call) => call[0]?.comments ?? [])
+        .map((comment) => comment.body);
+
+      expect(postedBodies.some((body) => body.includes('Finding from execution 1'))).toBe(true);
+      expect(postedBodies.some((body) => body.includes('Finding from execution 2'))).toBe(true);
+    });
+
     it('report mode renders checks and reviews from report-step inputs', async () => {
       const report = createSkillReport({
         findings: [

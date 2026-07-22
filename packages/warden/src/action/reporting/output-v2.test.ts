@@ -286,6 +286,65 @@ describe('buildFindingsOutputV2', () => {
     expect(fromSecondSkill?.provenance.verification).toBeUndefined();
   });
 
+  it('does not attach corroboration to an unrelated finding that happens to share an id', () => {
+    const firstTrigger = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
+    const secondTrigger = createTrigger({
+      id: 'trigger-2',
+      skillExecutionId: 'exec-2',
+      name: 'unrelated-skill-trigger',
+      skill: 'unrelated-skill',
+    });
+    const thirdTrigger = createTrigger({
+      id: 'trigger-3',
+      skillExecutionId: 'exec-3',
+      name: 'security-review-trigger',
+      skill: 'security-review',
+    });
+
+    const firstResult = createResult({
+      triggerId: 'trigger-1',
+      report: createReport({ skill: 'code-review', findings: [createFinding({ id: 'WRD-001' })] }),
+    });
+    const secondResult = createResult({
+      triggerId: 'trigger-2',
+      report: createReport({ skill: 'unrelated-skill', findings: [createFinding({ id: 'WRD-001' })] }),
+    });
+
+    // The dedupe match names its skill(s) explicitly, so this corroboration
+    // targets code-review's WRD-001, not unrelated-skill's same-id finding.
+    const observations: FindingObservation[] = [
+      {
+        outcome: 'deduped',
+        finding: createFinding({ id: 'WRD-004' }),
+        skill: 'security-review',
+        dedupe: {
+          source: 'warden',
+          matchType: 'hash',
+          existingFindingId: 'WRD-001',
+          existingSkills: ['code-review'],
+        },
+      },
+    ];
+
+    const output = buildFindingsOutputV2(
+      [firstResult, secondResult],
+      [firstTrigger, secondTrigger, thirdTrigger],
+      observations,
+      { runId: '123' }
+    );
+
+    const fromCodeReview = output.findings.find((f) => f.provenance.originSkillExecutionId === 'exec-1');
+    const fromUnrelated = output.findings.find((f) => f.provenance.originSkillExecutionId === 'exec-2');
+
+    expect(fromCodeReview?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-1', skillName: 'code-review', role: 'primary' },
+      { skillExecutionId: 'exec-3', skillName: 'security-review', role: 'corroborating', matchType: 'hash' },
+    ]);
+    expect(fromUnrelated?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-2', skillName: 'unrelated-skill', role: 'primary' },
+    ]);
+  });
+
   it('records verifier rejections in discardedFindings', () => {
     const trigger = createTrigger();
     const result = createResult({

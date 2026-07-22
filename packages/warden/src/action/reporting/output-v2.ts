@@ -517,26 +517,48 @@ function buildFindingObservationsV2(
   return { observations, byOutcome };
 }
 
+interface CorroboratingCandidate {
+  attribution: FindingAttribution;
+  targetSkills?: string[];
+}
+
 function buildCorroboratingAttributions(
   findingObservations: FindingObservation[],
   matchedTriggers: ResolvedTrigger[]
-): Map<string, FindingAttribution[]> {
+): Map<string, CorroboratingCandidate[]> {
   const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
-  const corroboratingById = new Map<string, FindingAttribution[]>();
+  const corroboratingById = new Map<string, CorroboratingCandidate[]>();
   for (const observation of findingObservations) {
     if (observation.outcome === 'deduped' && observation.dedupe.existingFindingId) {
       const winnerId = observation.dedupe.existingFindingId;
       const list = corroboratingById.get(winnerId) ?? [];
       list.push({
-        skillExecutionId: observation.skillExecutionId ?? skillExecutionIdByName.get(observation.skill ?? '') ?? '',
-        skillName: observation.skill ?? '',
-        role: 'corroborating',
-        matchType: observation.dedupe.matchType,
+        attribution: {
+          skillExecutionId: observation.skillExecutionId ?? skillExecutionIdByName.get(observation.skill ?? '') ?? '',
+          skillName: observation.skill ?? '',
+          role: 'corroborating',
+          matchType: observation.dedupe.matchType,
+        },
+        targetSkills: observation.dedupe.existingSkills,
       });
       corroboratingById.set(winnerId, list);
     }
   }
   return corroboratingById;
+}
+
+/**
+ * Bare finding ids collide across skills, so a dedupe match against
+ * `existingFindingId` can name a finding shared by unrelated skills. Narrow
+ * to the actual winner using the skill(s) recorded on the dedupe match.
+ */
+function resolveCorroboratingAttributions(
+  candidates: CorroboratingCandidate[],
+  targetSkillName: string
+): FindingAttribution[] {
+  return candidates
+    .filter((c) => !c.targetSkills || c.targetSkills.includes(targetSkillName))
+    .map((c) => c.attribution);
 }
 
 /**
@@ -560,8 +582,12 @@ export function patchFindingsOutputV2Observations(
   const corroboratingById = buildCorroboratingAttributions(findingObservations, matchedTriggers);
 
   const findings = base.findings.map((finding) => {
-    const newCorroborators = corroboratingById.get(finding.id);
-    if (!newCorroborators || newCorroborators.length === 0) return finding;
+    const primarySkillName = finding.reportedBy.find((r) => r.role === 'primary')?.skillName ?? '';
+    const newCorroborators = resolveCorroboratingAttributions(
+      corroboratingById.get(finding.id) ?? [],
+      primarySkillName
+    );
+    if (newCorroborators.length === 0) return finding;
 
     const existingSkillExecutionIds = new Set(finding.reportedBy.map((r) => r.skillExecutionId));
     const additions = newCorroborators.filter((c) => !existingSkillExecutionIds.has(c.skillExecutionId));
@@ -695,7 +721,7 @@ export function buildFindingsOutputV2(
         sourceSnippet: finding.sourceSnippet,
         reportedBy: [
           { skillExecutionId, skillName: report.skill, role: 'primary' },
-          ...(corroboratingById.get(finding.id) ?? []),
+          ...resolveCorroboratingAttributions(corroboratingById.get(finding.id) ?? [], report.skill),
         ],
         provenance: {
           originSkillExecutionId: skillExecutionId,
