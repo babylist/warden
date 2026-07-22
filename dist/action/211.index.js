@@ -1768,7 +1768,7 @@ function buildCorroboratingAttributions(findingObservations, matchedTriggers) {
  */
 function resolveCorroboratingAttributions(candidates, targetSkillName) {
     return candidates
-        .filter((c) => !c.targetSkills || c.targetSkills.includes(targetSkillName))
+        .filter((c) => !c.targetSkills || c.targetSkills.length === 0 || c.targetSkills.includes(targetSkillName))
         .map((c) => c.attribution);
 }
 /**
@@ -5223,7 +5223,8 @@ __webpack_require__.a(module, async (__webpack_handle_async_dependencies__, __we
 /* harmony import */ var _types_index_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(78481);
 /* harmony import */ var _sentry_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(30340);
 /* harmony import */ var _base_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(53537);
-/* harmony import */ var _error_reporting_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(29547);
+/* harmony import */ var _reporting_output_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(80961);
+/* harmony import */ var _error_reporting_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(29547);
 var __webpack_async_dependencies__ = __webpack_handle_async_dependencies__([_sdk_runner_js__WEBPACK_IMPORTED_MODULE_2__]);
 _sdk_runner_js__WEBPACK_IMPORTED_MODULE_2__ = (__webpack_async_dependencies__.then ? (await __webpack_async_dependencies__)() : __webpack_async_dependencies__)[0];
 /**
@@ -5231,6 +5232,7 @@ _sdk_runner_js__WEBPACK_IMPORTED_MODULE_2__ = (__webpack_async_dependencies__.th
  *
  * Handles schedule and workflow_dispatch events.
  */
+
 
 
 
@@ -5307,7 +5309,7 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
                 repoPath,
             };
             try {
-                (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)([], emptyContext);
+                (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)([], emptyContext, [], { configuredSkills: [] });
             }
             catch (writeError) {
                 console.error(`::warning::Failed to write findings output: ${writeError}`);
@@ -5339,7 +5341,7 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
             repoPath,
         };
         try {
-            (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)([], emptyContext);
+            (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)([], emptyContext, [], { configuredSkills: [] });
         }
         catch (writeError) {
             console.error(`::warning::Failed to write findings output: ${writeError}`);
@@ -5464,7 +5466,7 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
         catch (error) {
             if (error instanceof _base_js__WEBPACK_IMPORTED_MODULE_9__/* .ActionFailedError */ .Ah)
                 throw error;
-            (0,_error_reporting_js__WEBPACK_IMPORTED_MODULE_10__/* .captureActionTriggerError */ .T)(error, {
+            (0,_error_reporting_js__WEBPACK_IMPORTED_MODULE_11__/* .captureActionTriggerError */ .T)(error, {
                 triggerName: resolved.name,
                 skillName: resolved.skill,
             });
@@ -5497,7 +5499,9 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
         repoPath,
     };
     try {
-        const findingsPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)(allReports, scheduleContext);
+        const findingsPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)(allReports, scheduleContext, [], {
+            configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_10__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: scheduleTriggers, matchedTriggers }),
+        });
         console.log(`Findings written to ${findingsPath}`);
     }
     catch (error) {
