@@ -1968,7 +1968,9 @@ function buildReportModeResultsV2(
       .filter((execution) => execution.triggerId)
       .map((execution) => [execution.triggerId as string, execution])
   );
-  const findingsById = new Map(findingsOutput.findings.map((finding) => [finding.id, finding]));
+  const findingsByExecutionScopedId = new Map(
+    findingsOutput.findings.map((finding) => [`${finding.provenance.originSkillExecutionId}:${finding.id}`, finding])
+  );
   const errorByTriggerId = new Map(
     (metadata.triggerResults ?? [])
       .filter((result) => result.status === 'error' && result.triggerId)
@@ -2008,7 +2010,7 @@ function buildReportModeResultsV2(
     }
 
     const findings = execution.findingIds.flatMap((id) => {
-      const finding = findingsById.get(id);
+      const finding = findingsByExecutionScopedId.get(`${execution.skillExecutionId}:${id}`);
       return finding ? [toFindingFromV2(finding)] : [];
     });
 

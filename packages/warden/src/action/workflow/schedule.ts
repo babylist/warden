@@ -37,6 +37,7 @@ import {
   writeFindingsOutputV2,
 } from './base.js';
 import type { TriggerResult } from '../triggers/executor.js';
+import type { FindingProcessingEvent } from '../../sdk/types.js';
 import { captureActionTriggerError } from '../error-reporting.js';
 
 // -----------------------------------------------------------------------------
@@ -244,6 +245,7 @@ async function runScheduleWorkflowInner(
         remote: resolved.remote,
       });
       const runtimeEnv = await prepareRuntimeEnvironment([resolved], inputs);
+      const findingProcessingEvents: FindingProcessingEvent[] = [];
       const report = await runSkill(skill, context, {
         apiKey: inputs.anthropicApiKey,
         model: resolved.model,
@@ -261,6 +263,9 @@ async function runScheduleWorkflowInner(
         verifyFindings: resolved.verifyFindings,
         triggerName: resolved.name,
         pathToClaudeCodeExecutable: runtimeEnv.pathToClaudeCodeExecutable,
+        callbacks: {
+          onFindingProcessing: (event) => findingProcessingEvents.push(event),
+        },
       });
       console.log(`Found ${report.findings.length} findings`);
 
@@ -272,6 +277,7 @@ async function runScheduleWorkflowInner(
         skillName: resolved.skill,
         skillExecutionId: resolved.skillExecutionId,
         report,
+        findingProcessingEvents,
       });
       totalFindings += report.findings.length;
 
