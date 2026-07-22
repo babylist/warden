@@ -2082,7 +2082,7 @@ async function runReportMode(
       } catch (error) {
         warnAction(`Failed to write findings output: ${error}`);
       }
-      writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], [], warnAction);
+      writeSchemaV2ReportOutputs(metadataOutputV2, findingsOutputV2, context, matchedTriggers, [], warnAction);
       await createCompletedCoreCheckForReport(
         octokit,
         context,
@@ -2119,7 +2119,9 @@ async function runReportMode(
       } catch (error) {
         warnAction(`Failed to write findings output: ${error}`);
       }
-      writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], cleanupFindingObservations, warnAction);
+      writeSchemaV2ReportOutputs(
+        metadataOutputV2, findingsOutputV2, context, matchedTriggers, cleanupFindingObservations, warnAction
+      );
       await createCompletedCoreCheckForReport(
         octokit,
         context,

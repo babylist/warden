@@ -501,13 +501,39 @@ function buildFindingObservationsV2(
   return { observations, byOutcome };
 }
 
+function buildCorroboratingAttributions(
+  findingObservations: FindingObservation[],
+  matchedTriggers: ResolvedTrigger[]
+): Map<string, FindingAttribution[]> {
+  const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
+  const corroboratingById = new Map<string, FindingAttribution[]>();
+  for (const observation of findingObservations) {
+    if (observation.outcome === 'deduped' && observation.dedupe.existingFindingId) {
+      const winnerId = observation.dedupe.existingFindingId;
+      const list = corroboratingById.get(winnerId) ?? [];
+      list.push({
+        skillExecutionId: skillExecutionIdByName.get(observation.skill ?? '') ?? '',
+        skillName: observation.skill ?? '',
+        role: 'corroborating',
+        matchType: observation.dedupe.matchType,
+      });
+      corroboratingById.set(winnerId, list);
+    }
+  }
+  return corroboratingById;
+}
+
 /**
  * Rebuild only the observation-derived parts of a v2 findings payload:
- * `findingObservations` and `summary.byOutcome`. Used by report mode to fold
- * real posting outcomes into an analyze-phase payload without touching
- * `skillExecutions`/`findings`/`discardedFindings`, which can only be
- * reconstructed from the original `findingProcessingEvents` and would
- * otherwise be silently wiped by a full rebuild from replayed results.
+ * `findingObservations`, `summary.byOutcome`, and any newly-discovered
+ * cross-skill corroboration on `findings[].reportedBy`. Used by report mode
+ * to fold real posting outcomes into an analyze-phase payload without
+ * touching `skillExecutions`/`discardedFindings`/`provenance`, which can
+ * only be reconstructed from the original `findingProcessingEvents` and
+ * would otherwise be silently wiped by a full rebuild from replayed
+ * results. Corroboration is additive-only (existing `reportedBy` entries
+ * are never removed) since it can only be discovered once posting/dedup
+ * runs, which analyze mode never does.
  */
 export function patchFindingsOutputV2Observations(
   base: WardenFindingsV2,
@@ -515,9 +541,22 @@ export function patchFindingsOutputV2Observations(
   findingObservations: FindingObservation[]
 ): WardenFindingsV2 {
   const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, matchedTriggers);
+  const corroboratingById = buildCorroboratingAttributions(findingObservations, matchedTriggers);
+
+  const findings = base.findings.map((finding) => {
+    const newCorroborators = corroboratingById.get(finding.id);
+    if (!newCorroborators || newCorroborators.length === 0) return finding;
+
+    const existingSkillExecutionIds = new Set(finding.reportedBy.map((r) => r.skillExecutionId));
+    const additions = newCorroborators.filter((c) => !existingSkillExecutionIds.has(c.skillExecutionId));
+    if (additions.length === 0) return finding;
+
+    return { ...finding, reportedBy: [...finding.reportedBy, ...additions] };
+  });
 
   return WardenFindingsSchemaV2.parse({
     ...base,
+    findings,
     findingObservations: observations,
     summary: { ...base.summary, byOutcome },
   });
@@ -535,21 +574,7 @@ export function buildFindingsOutputV2(
 ): WardenFindingsV2 {
   const triggerById = new Map(matchedTriggers.map((t) => [t.id, t]));
   const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
-
-  const corroboratingById = new Map<string, FindingAttribution[]>();
-  for (const observation of findingObservations) {
-    if (observation.outcome === 'deduped' && observation.dedupe.existingFindingId) {
-      const winnerId = observation.dedupe.existingFindingId;
-      const list = corroboratingById.get(winnerId) ?? [];
-      list.push({
-        skillExecutionId: skillExecutionIdByName.get(observation.skill ?? '') ?? '',
-        skillName: observation.skill ?? '',
-        role: 'corroborating',
-        matchType: observation.dedupe.matchType,
-      });
-      corroboratingById.set(winnerId, list);
-    }
-  }
+  const corroboratingById = buildCorroboratingAttributions(findingObservations, matchedTriggers);
 
   const skillExecutions: SkillExecution[] = [];
   const findings: ExportedFindingV2[] = [];
@@ -577,6 +602,12 @@ export function buildFindingsOutputV2(
             severity: event.finding.severity,
             confidence: event.finding.confidence,
           },
+        });
+      } else if (event.stage === 'verification' && event.action === 'kept') {
+        verificationById.set(event.finding.id, {
+          outcome: 'kept',
+          model: event.model,
+          runtime: event.runtime,
         });
       } else if (event.stage === 'verification' && event.action === 'rejected') {
         discardedFindings.push({
