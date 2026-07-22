@@ -15,6 +15,8 @@ export interface ActionInputs {
     mode: ActionMode;
     /** Structured findings file used by report mode */
     findingsFile?: string;
+    /** Schema-v2 metadata file used by report mode when outputSchemaVersion is '2' */
+    metadataFile?: string;
     /** Optional org-wide base config that is loaded before the repo config */
     baseConfigPath?: string;
     /** Optional repo root containing org-shared local skills for the base config */
@@ -30,6 +32,10 @@ export interface ActionInputs {
     failCheck?: boolean;
     /** Max concurrent trigger executions */
     parallel: number;
+    /** Output schema for the written artifacts. '2' additionally writes warden-metadata.json and warden-findings-v2.json. */
+    outputSchemaVersion: '1' | '2';
+    /** Pinned SHA/ref of the calling workflow's `uses:` line, for harness.actionRef in schema v2. */
+    actionRef?: string;
 }
 /**
  * Parse action inputs from the GitHub Actions environment.

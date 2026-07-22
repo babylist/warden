@@ -26,8 +26,8 @@ __webpack_require__.d(__webpack_exports__, {
 var types = __webpack_require__(78481);
 // EXTERNAL MODULE: ./src/cli/output/formatters.ts
 var formatters = __webpack_require__(43171);
-// EXTERNAL MODULE: ./src/utils/index.ts + 2 modules
-var utils = __webpack_require__(36137);
+// EXTERNAL MODULE: ./src/utils/index.ts + 1 modules
+var utils = __webpack_require__(82272);
 ;// CONCATENATED MODULE: ./src/output/github-checks.ts
 
 
@@ -1169,7 +1169,7 @@ async function evaluateFixAttempts(octokit, comments, context, currentFindings, 
 /* harmony export */   Tw: () => (/* binding */ setupAuthEnv)
 /* harmony export */ });
 /* harmony import */ var _types_index_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(78481);
-/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(36137);
+/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(82272);
 /**
  * Action Input Parsing and Validation
  *
@@ -1239,12 +1239,14 @@ function parseActionInputs() {
     const parallelParsed = parseInt(getInput('parallel') || String(_utils_index_js__WEBPACK_IMPORTED_MODULE_1__/* .DEFAULT_CONCURRENCY */ .WH), 10);
     const requestChanges = parseBooleanInput(getInput('request-changes'));
     const failCheck = parseBooleanInput(getInput('fail-check'));
+    const outputSchemaVersion = getInput('output-schema-version') === '2' ? '2' : '1';
     return {
         anthropicApiKey,
         oauthToken,
         githubToken: getInput('github-token') || process.env['GITHUB_TOKEN'] || '',
         mode: parseModeInput(getInput('mode')),
         findingsFile: getInput('findings-file') || undefined,
+        metadataFile: getInput('metadata-file') || undefined,
         baseConfigPath: getInput('base-config-path') || undefined,
         baseSkillRoot: getInput('base-skill-root') || undefined,
         configPath: getInput('config-path') || 'warden.toml',
@@ -1254,6 +1256,8 @@ function parseActionInputs() {
         requestChanges,
         failCheck,
         parallel: Number.isNaN(parallelParsed) ? _utils_index_js__WEBPACK_IMPORTED_MODULE_1__/* .DEFAULT_CONCURRENCY */ .WH : parallelParsed,
+        outputSchemaVersion,
+        actionRef: getInput('action-ref') || undefined,
     };
 }
 /**
@@ -1292,6 +1296,558 @@ function setupAuthEnv(inputs) {
 
 /***/ }),
 
+/***/ 88391:
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   HT: () => (/* binding */ WardenFindingsSchemaV2),
+/* harmony export */   I2: () => (/* binding */ WardenMetadataSchema),
+/* harmony export */   LE: () => (/* binding */ buildMetadataOutputV2),
+/* harmony export */   WS: () => (/* binding */ buildFindingsOutputV2)
+/* harmony export */ });
+/* unused harmony exports SEVERITY_BREAKDOWN_KEYS, SeverityBreakdownSchema, SkippedTriggerReasonSchema, TriggerRunResultV2Schema, SkillExecutionSchema, ExportedFindingV2Schema, DiscardedFindingSchema, DedupeDetailV2Schema, FindingObservationV2Schema */
+/* harmony import */ var zod__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(53391);
+/* harmony import */ var _types_index_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(78481);
+/* harmony import */ var _triggers_matcher_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(49431);
+/* harmony import */ var _output_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(80961);
+/* harmony import */ var _output_dedup_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(3941);
+/* harmony import */ var _utils_version_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(56317);
+
+
+
+
+
+
+const SEVERITY_BREAKDOWN_KEYS = (/* unused pure expression or super */ null && (['high', 'medium', 'low']));
+const SeverityBreakdownSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    high: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int().nonnegative(),
+    medium: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int().nonnegative(),
+    low: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int().nonnegative(),
+});
+const HarnessSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    name: zod__WEBPACK_IMPORTED_MODULE_5__/* .literal */ .eu('warden'),
+    version: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    actionRef: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+});
+const RepositorySchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    owner: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    name: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    fullName: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+});
+const PullRequestEnvelopeSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    number: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int(),
+    author: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    title: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    baseBranch: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    headBranch: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    headSha: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+});
+const ConfiguredSkillSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    name: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    triggered: zod__WEBPACK_IMPORTED_MODULE_5__/* .boolean */ .zM(),
+});
+const SkippedTriggerReasonSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* ["enum"] */ .k5([
+    'no_event_match',
+    'path_filter',
+    'draft_state',
+    'label_mismatch',
+    'disabled',
+]);
+const SkippedTriggerSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    skillName: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    triggerId: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    triggerName: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    reason: SkippedTriggerReasonSchema,
+});
+const TriggerErrorSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    name: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    message: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+});
+const TriggerRunResultV2Schema = zod__WEBPACK_IMPORTED_MODULE_5__/* .discriminatedUnion */ .gM('status', [
+    zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+        status: zod__WEBPACK_IMPORTED_MODULE_5__/* .literal */ .eu('success'),
+        triggerId: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+        triggerName: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+        skillName: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    }),
+    zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+        status: zod__WEBPACK_IMPORTED_MODULE_5__/* .literal */ .eu('error'),
+        triggerId: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+        triggerName: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+        skillName: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+        error: TriggerErrorSchema,
+    }),
+]);
+const ResolvedDefaultsSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    failOn: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .SeverityThresholdSchema */ .q$.optional(),
+    reportOn: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .SeverityThresholdSchema */ .q$.optional(),
+    minConfidence: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .ConfidenceThresholdSchema */ .HA.optional(),
+    model: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    auxiliaryModel: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    synthesisModel: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    runtime: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    verifyFindings: zod__WEBPACK_IMPORTED_MODULE_5__/* .boolean */ .zM().optional(),
+});
+const WardenMetadataSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    schemaVersion: zod__WEBPACK_IMPORTED_MODULE_5__/* .literal */ .eu('2'),
+    runId: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    runAttempt: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    generatedAt: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().datetime(),
+    harness: HarnessSchema,
+    repository: RepositorySchema,
+    event: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .GitHubEventTypeSchema */ .bN,
+    pullRequest: PullRequestEnvelopeSchema.optional(),
+    configuredSkills: zod__WEBPACK_IMPORTED_MODULE_5__/* .array */ .YO(ConfiguredSkillSchema).optional(),
+    skippedTriggers: zod__WEBPACK_IMPORTED_MODULE_5__/* .array */ .YO(SkippedTriggerSchema).optional(),
+    triggerResults: zod__WEBPACK_IMPORTED_MODULE_5__/* .array */ .YO(TriggerRunResultV2Schema).optional(),
+    resolvedDefaults: ResolvedDefaultsSchema.optional(),
+});
+const AuxiliaryUsageEntrySchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    agent: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    model: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    runtime: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    usage: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .UsageStatsSchema */ .Ur,
+});
+const SkillExecutionSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    skillExecutionId: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    skillName: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    triggerId: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    triggerName: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    model: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    runtime: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    auxiliaryModel: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    synthesisModel: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    summary: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    durationMs: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().nonnegative().optional(),
+    usage: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .UsageStatsSchema */ .Ur.optional(),
+    auxiliaryUsage: zod__WEBPACK_IMPORTED_MODULE_5__/* .array */ .YO(AuxiliaryUsageEntrySchema).optional(),
+    findingsBySeverity: SeverityBreakdownSchema,
+    findingIds: zod__WEBPACK_IMPORTED_MODULE_5__/* .array */ .YO(zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj()),
+    failedHunks: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int().nonnegative().optional(),
+    failedExtractions: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int().nonnegative().optional(),
+    error: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .SkillErrorSchema */ .J1.optional(),
+    verifierRejections: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .VerifierRejectionsSchema */ .IH.optional(),
+});
+const FindingSnapshotSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    title: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    description: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    severity: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .SeveritySchema */ .Rc,
+    confidence: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .ConfidenceSchema */ .m3.optional(),
+});
+const VerificationStageSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .discriminatedUnion */ .gM('outcome', [
+    zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+        outcome: zod__WEBPACK_IMPORTED_MODULE_5__/* .literal */ .eu('kept'),
+        model: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+        runtime: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    }),
+    zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+        outcome: zod__WEBPACK_IMPORTED_MODULE_5__/* .literal */ .eu('revised'),
+        model: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+        runtime: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+        evidence: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+        before: FindingSnapshotSchema,
+    }),
+]);
+const MergeStageSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    model: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    runtime: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    absorbedFindingIds: zod__WEBPACK_IMPORTED_MODULE_5__/* .array */ .YO(zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj()),
+});
+const FindingProvenanceSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    originSkillExecutionId: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    originModel: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    verification: VerificationStageSchema.optional(),
+    merge: MergeStageSchema.optional(),
+});
+const FindingAttributionSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    skillExecutionId: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    skillName: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    role: zod__WEBPACK_IMPORTED_MODULE_5__/* ["enum"] */ .k5(['primary', 'corroborating']),
+    matchType: zod__WEBPACK_IMPORTED_MODULE_5__/* ["enum"] */ .k5(['hash', 'semantic']).optional(),
+});
+const ExportedFindingV2Schema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    id: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    contentHash: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    severity: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .SeveritySchema */ .Rc,
+    confidence: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .ConfidenceSchema */ .m3.optional(),
+    title: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    description: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    verification: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    location: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .LocationSchema */ .TH.optional(),
+    additionalLocations: zod__WEBPACK_IMPORTED_MODULE_5__/* .array */ .YO(_types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .LocationSchema */ .TH).optional(),
+    sourceSnippet: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .SourceSnippetSchema */ .Ot.optional(),
+    reportedBy: zod__WEBPACK_IMPORTED_MODULE_5__/* .array */ .YO(FindingAttributionSchema).min(1),
+    provenance: FindingProvenanceSchema,
+});
+const DiscardedFindingSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    originSkillExecutionId: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    stage: zod__WEBPACK_IMPORTED_MODULE_5__/* ["enum"] */ .k5(['verification_rejected', 'merge_absorbed']),
+    severity: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .SeveritySchema */ .Rc,
+    title: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    location: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .LocationSchema */ .TH.optional(),
+    model: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    reason: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    survivorFindingId: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+});
+const FindingOriginSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    skillExecutionId: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    skillName: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+});
+const DedupeDetailV2Schema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    source: zod__WEBPACK_IMPORTED_MODULE_5__/* ["enum"] */ .k5(['warden', 'external']),
+    matchType: zod__WEBPACK_IMPORTED_MODULE_5__/* ["enum"] */ .k5(['hash', 'semantic']),
+    existingFindingId: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    existingCommentId: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int().positive().optional(),
+    existingThreadId: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+    existingResolved: zod__WEBPACK_IMPORTED_MODULE_5__/* .boolean */ .zM().optional(),
+    existingSkills: zod__WEBPACK_IMPORTED_MODULE_5__/* .array */ .YO(zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj()).optional(),
+    actor: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj().optional(),
+});
+const ObservedFindingSchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    id: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    severity: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .SeveritySchema */ .Rc,
+    confidence: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .ConfidenceSchema */ .m3.optional(),
+    title: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    description: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    location: _types_index_js__WEBPACK_IMPORTED_MODULE_0__/* .LocationSchema */ .TH.optional(),
+    elapsedMs: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().nonnegative().optional(),
+});
+const FindingObservationV2Schema = zod__WEBPACK_IMPORTED_MODULE_5__/* .discriminatedUnion */ .gM('outcome', [
+    zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+        outcome: zod__WEBPACK_IMPORTED_MODULE_5__/* .literal */ .eu('posted'),
+        origin: FindingOriginSchema,
+        finding: ObservedFindingSchema,
+    }),
+    zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+        outcome: zod__WEBPACK_IMPORTED_MODULE_5__/* .literal */ .eu('deduped'),
+        origin: FindingOriginSchema,
+        finding: ObservedFindingSchema,
+        dedupe: DedupeDetailV2Schema,
+    }),
+    zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+        outcome: zod__WEBPACK_IMPORTED_MODULE_5__/* .literal */ .eu('skipped'),
+        origin: FindingOriginSchema,
+        finding: ObservedFindingSchema,
+        skippedReason: zod__WEBPACK_IMPORTED_MODULE_5__/* ["enum"] */ .k5(['max_findings', 'duplicate_in_batch', 'no_inline_location']),
+    }),
+    zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+        outcome: zod__WEBPACK_IMPORTED_MODULE_5__/* .literal */ .eu('resolved'),
+        origin: FindingOriginSchema,
+        finding: ObservedFindingSchema,
+        resolvedReason: zod__WEBPACK_IMPORTED_MODULE_5__/* ["enum"] */ .k5(['fix_evaluation', 'stale_check']),
+    }),
+    zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+        outcome: zod__WEBPACK_IMPORTED_MODULE_5__/* .literal */ .eu('failed'),
+        origin: FindingOriginSchema,
+        finding: ObservedFindingSchema,
+    }),
+]);
+const SummarySchema = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    totalFindings: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int().nonnegative(),
+    totalSkillExecutions: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int().nonnegative(),
+    bySeverity: SeverityBreakdownSchema,
+    byOutcome: zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+        posted: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int().nonnegative(),
+        deduped: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int().nonnegative(),
+        skipped: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int().nonnegative(),
+        resolved: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int().nonnegative(),
+        failed: zod__WEBPACK_IMPORTED_MODULE_5__/* .number */ .ai().int().nonnegative(),
+    }),
+});
+const WardenFindingsSchemaV2 = zod__WEBPACK_IMPORTED_MODULE_5__/* .object */ .Ik({
+    schemaVersion: zod__WEBPACK_IMPORTED_MODULE_5__/* .literal */ .eu('2'),
+    runId: zod__WEBPACK_IMPORTED_MODULE_5__/* .string */ .Yj(),
+    skillExecutions: zod__WEBPACK_IMPORTED_MODULE_5__/* .array */ .YO(SkillExecutionSchema),
+    findings: zod__WEBPACK_IMPORTED_MODULE_5__/* .array */ .YO(ExportedFindingV2Schema),
+    discardedFindings: zod__WEBPACK_IMPORTED_MODULE_5__/* .array */ .YO(DiscardedFindingSchema).optional(),
+    findingObservations: zod__WEBPACK_IMPORTED_MODULE_5__/* .array */ .YO(FindingObservationV2Schema),
+    summary: SummarySchema,
+});
+// -----------------------------------------------------------------------------
+// Builders
+// -----------------------------------------------------------------------------
+function severityBreakdown(items) {
+    return {
+        high: items.filter((i) => i.severity === 'high').length,
+        medium: items.filter((i) => i.severity === 'medium').length,
+        low: items.filter((i) => i.severity === 'low').length,
+    };
+}
+function toAuxiliaryUsageEntries(usage, attribution) {
+    if (!usage)
+        return [];
+    return Object.entries(usage).map(([agent, agentUsage]) => {
+        const agentAttribution = attribution?.[agent];
+        return {
+            agent,
+            model: agentAttribution?.model ?? agentAttribution?.models?.[0],
+            runtime: agentAttribution?.runtime ?? agentAttribution?.runtimes?.[0],
+            usage: agentUsage,
+        };
+    });
+}
+function deriveSkippedReason(trigger, context) {
+    if (trigger.type === 'local')
+        return 'no_event_match';
+    if (trigger.type === 'schedule') {
+        return context.eventType === 'schedule' ? 'disabled' : 'no_event_match';
+    }
+    if (trigger.type === 'pull_request') {
+        if (context.eventType !== 'pull_request')
+            return 'no_event_match';
+        if (!trigger.actions?.includes(context.action))
+            return 'no_event_match';
+        if (!(0,_triggers_matcher_js__WEBPACK_IMPORTED_MODULE_1__/* .matchPullRequestState */ .xf)(trigger, context)) {
+            const labels = context.pullRequest?.labels ?? [];
+            const labelMatches = trigger.labels?.some((label) => labels.includes(label));
+            if (trigger.labels !== undefined && !labelMatches)
+                return 'label_mismatch';
+            return 'draft_state';
+        }
+    }
+    const filenames = context.pullRequest?.files.map((f) => f.filename);
+    return (0,_triggers_matcher_js__WEBPACK_IMPORTED_MODULE_1__/* .matchPathFilters */ .e8)(trigger.filters, filenames) ? 'disabled' : 'path_filter';
+}
+function buildMetadataOutputV2(context, resolvedTriggers, matchedTriggers, results, options) {
+    const matchedIds = new Set(matchedTriggers.map((t) => t.id));
+    const skippedTriggers = resolvedTriggers
+        .filter((t) => !matchedIds.has(t.id))
+        .map((t) => ({
+        skillName: t.skill,
+        triggerId: t.id,
+        triggerName: t.name,
+        reason: deriveSkippedReason(t, context),
+    }));
+    const triggerResults = results.map((r) => r.error
+        ? {
+            status: 'error',
+            triggerId: r.triggerId,
+            triggerName: r.triggerName,
+            skillName: r.skillName,
+            error: (0,_output_js__WEBPACK_IMPORTED_MODULE_2__/* .serializeTriggerError */ .Rx)(r.error),
+        }
+        : {
+            status: 'success',
+            triggerId: r.triggerId,
+            triggerName: r.triggerName,
+            skillName: r.skillName,
+        });
+    const primary = matchedTriggers[0];
+    return WardenMetadataSchema.parse({
+        schemaVersion: '2',
+        runId: options.runId,
+        runAttempt: options.runAttempt,
+        generatedAt: options.generatedAt ?? new Date().toISOString(),
+        harness: {
+            name: 'warden',
+            version: (0,_utils_version_js__WEBPACK_IMPORTED_MODULE_4__/* .getVersion */ .H)(),
+            actionRef: options.actionRef,
+        },
+        repository: {
+            owner: context.repository.owner,
+            name: context.repository.name,
+            fullName: context.repository.fullName,
+        },
+        event: context.eventType,
+        ...(context.pullRequest && {
+            pullRequest: {
+                number: context.pullRequest.number,
+                author: context.pullRequest.author,
+                title: context.pullRequest.title,
+                baseBranch: context.pullRequest.baseBranch,
+                headBranch: context.pullRequest.headBranch,
+                headSha: context.pullRequest.headSha,
+            },
+        }),
+        configuredSkills: (0,_output_js__WEBPACK_IMPORTED_MODULE_2__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: resolvedTriggers, matchedTriggers }),
+        skippedTriggers,
+        triggerResults,
+        ...(primary && {
+            resolvedDefaults: {
+                failOn: primary.failOn,
+                reportOn: primary.reportOn,
+                minConfidence: primary.minConfidence,
+                model: primary.model,
+                auxiliaryModel: primary.auxiliaryModel,
+                synthesisModel: primary.synthesisModel,
+                runtime: primary.runtime,
+                verifyFindings: primary.verifyFindings,
+            },
+        }),
+    });
+}
+function buildFindingsOutputV2(results, matchedTriggers, findingObservations, options) {
+    const triggerById = new Map(matchedTriggers.map((t) => [t.id, t]));
+    const skillExecutionIdByName = new Map();
+    for (const t of matchedTriggers) {
+        if (!skillExecutionIdByName.has(t.skill)) {
+            skillExecutionIdByName.set(t.skill, t.skillExecutionId);
+        }
+    }
+    const corroboratingById = new Map();
+    for (const observation of findingObservations) {
+        if (observation.outcome === 'deduped' && observation.dedupe.existingFindingId) {
+            const winnerId = observation.dedupe.existingFindingId;
+            const list = corroboratingById.get(winnerId) ?? [];
+            list.push({
+                skillExecutionId: skillExecutionIdByName.get(observation.skill ?? '') ?? '',
+                skillName: observation.skill ?? '',
+                role: 'corroborating',
+                matchType: observation.dedupe.matchType,
+            });
+            corroboratingById.set(winnerId, list);
+        }
+    }
+    const skillExecutions = [];
+    const findings = [];
+    const discardedFindings = [];
+    const verificationById = new Map();
+    const mergeById = new Map();
+    for (const result of results) {
+        const report = result.report;
+        if (!report)
+            continue;
+        const trigger = result.triggerId ? triggerById.get(result.triggerId) : undefined;
+        const skillExecutionId = trigger?.skillExecutionId ?? skillExecutionIdByName.get(report.skill) ?? report.skill;
+        for (const event of result.findingProcessingEvents ?? []) {
+            if (event.stage === 'verification' && event.action === 'revised' && event.replacement) {
+                verificationById.set(event.replacement.id, {
+                    outcome: 'revised',
+                    model: event.model,
+                    runtime: event.runtime,
+                    evidence: event.replacement.verification,
+                    before: {
+                        title: event.finding.title,
+                        description: event.finding.description,
+                        severity: event.finding.severity,
+                        confidence: event.finding.confidence,
+                    },
+                });
+            }
+            else if (event.stage === 'verification' && event.action === 'rejected') {
+                discardedFindings.push({
+                    originSkillExecutionId: skillExecutionId,
+                    stage: 'verification_rejected',
+                    severity: event.finding.severity,
+                    title: event.finding.title,
+                    location: event.finding.location,
+                    model: event.model,
+                    reason: event.reason,
+                });
+            }
+            else if (event.stage === 'merge' && event.action === 'merged') {
+                const survivorId = event.replacement?.id;
+                discardedFindings.push({
+                    originSkillExecutionId: skillExecutionId,
+                    stage: 'merge_absorbed',
+                    severity: event.finding.severity,
+                    title: event.finding.title,
+                    location: event.finding.location,
+                    model: event.model,
+                    reason: event.reason,
+                    survivorFindingId: survivorId,
+                });
+                if (survivorId) {
+                    const entry = mergeById.get(survivorId) ?? { model: event.model, runtime: event.runtime, absorbedFindingIds: [] };
+                    entry.absorbedFindingIds.push(event.finding.id);
+                    mergeById.set(survivorId, entry);
+                }
+            }
+        }
+        const auxiliaryUsageEntries = toAuxiliaryUsageEntries(report.auxiliaryUsage, report.auxiliaryUsageAttribution);
+        skillExecutions.push({
+            skillExecutionId,
+            skillName: report.skill,
+            triggerId: result.triggerId,
+            triggerName: result.triggerName,
+            model: report.model,
+            runtime: report.runtime,
+            auxiliaryModel: trigger?.auxiliaryModel,
+            synthesisModel: trigger?.synthesisModel,
+            summary: report.summary,
+            durationMs: report.durationMs,
+            usage: report.usage,
+            auxiliaryUsage: auxiliaryUsageEntries.length > 0 ? auxiliaryUsageEntries : undefined,
+            findingsBySeverity: severityBreakdown(report.findings),
+            findingIds: report.findings.map((f) => f.id),
+            failedHunks: report.failedHunks,
+            failedExtractions: report.failedExtractions,
+            error: report.error,
+            verifierRejections: report.verifierRejections,
+        });
+        for (const finding of report.findings) {
+            findings.push({
+                id: finding.id,
+                contentHash: (0,_output_dedup_js__WEBPACK_IMPORTED_MODULE_3__/* .generateContentHash */ .LQ)(finding.title, finding.description),
+                severity: finding.severity,
+                confidence: finding.confidence,
+                title: finding.title,
+                description: finding.description,
+                verification: finding.verification,
+                location: finding.location,
+                additionalLocations: finding.additionalLocations,
+                sourceSnippet: finding.sourceSnippet,
+                reportedBy: [
+                    { skillExecutionId, skillName: report.skill, role: 'primary' },
+                    ...(corroboratingById.get(finding.id) ?? []),
+                ],
+                provenance: {
+                    originSkillExecutionId: skillExecutionId,
+                    originModel: report.model,
+                    verification: verificationById.get(finding.id),
+                    merge: mergeById.get(finding.id),
+                },
+            });
+        }
+    }
+    const observations = findingObservations.map((observation) => {
+        const skillExecutionId = skillExecutionIdByName.get(observation.skill ?? '') ?? '';
+        const origin = { skillExecutionId, skillName: observation.skill ?? '' };
+        const findingSnapshot = {
+            id: observation.finding.id,
+            severity: observation.finding.severity,
+            confidence: observation.finding.confidence,
+            title: observation.finding.title,
+            description: observation.finding.description,
+            location: observation.finding.location,
+            elapsedMs: observation.finding.elapsedMs,
+        };
+        switch (observation.outcome) {
+            case 'deduped':
+                return { outcome: 'deduped', origin, finding: findingSnapshot, dedupe: observation.dedupe };
+            case 'skipped':
+                return { outcome: 'skipped', origin, finding: findingSnapshot, skippedReason: observation.skippedReason };
+            case 'resolved':
+                return { outcome: 'resolved', origin, finding: findingSnapshot, resolvedReason: observation.resolvedReason };
+            case 'posted':
+                return { outcome: 'posted', origin, finding: findingSnapshot };
+            case 'failed':
+                return { outcome: 'failed', origin, finding: findingSnapshot };
+        }
+    });
+    const byOutcome = { posted: 0, deduped: 0, skipped: 0, resolved: 0, failed: 0 };
+    for (const observation of findingObservations) {
+        byOutcome[observation.outcome]++;
+    }
+    return WardenFindingsSchemaV2.parse({
+        schemaVersion: '2',
+        runId: options.runId,
+        skillExecutions,
+        findings,
+        discardedFindings: discardedFindings.length > 0 ? discardedFindings : undefined,
+        findingObservations: observations,
+        summary: {
+            totalFindings: findings.length,
+            totalSkillExecutions: skillExecutions.length,
+            bySeverity: severityBreakdown(findings),
+            byOutcome,
+        },
+    });
+}
+
+
+/***/ }),
+
 /***/ 80961:
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
@@ -1300,7 +1856,8 @@ function setupAuthEnv(inputs) {
 __webpack_require__.d(__webpack_exports__, {
   DF: () => (/* binding */ FindingsOutputSchema),
   BA: () => (/* binding */ buildConfiguredSkillsList),
-  Cs: () => (/* binding */ buildFindingsOutput)
+  Cs: () => (/* binding */ buildFindingsOutput),
+  Rx: () => (/* binding */ serializeTriggerError)
 });
 
 // UNUSED EXPORTS: TriggerRunResultSchema
@@ -1319,6 +1876,7 @@ const DedupeDetailSchema = schemas/* object */.Ik({
     existingCommentId: schemas/* number */.ai().int().positive().optional(),
     existingThreadId: schemas/* string */.Yj().optional(),
     existingResolved: schemas/* boolean */.zM().optional(),
+    existingSkills: schemas/* array */.YO(schemas/* string */.Yj()).optional(),
     actor: schemas/* string */.Yj().optional(),
 });
 const FindingObservationSchema = schemas/* discriminatedUnion */.gM('outcome', [
@@ -1674,6 +2232,7 @@ function buildDedupeObservations(actions, skill) {
             ...(action.existingComment.id > 0 ? { existingCommentId: action.existingComment.id } : {}),
             existingThreadId: action.existingComment.threadId,
             existingResolved: action.existingComment.isResolved,
+            existingSkills: action.existingComment.skills,
             actor: action.existingComment.actor,
         },
     }));
@@ -2352,7 +2911,15 @@ async function executeTrigger(trigger, deps) {
                     circuitBreaker: deps.circuitBreaker,
                 },
             };
-            const callbacks = (0,_cli_output_tasks_js__WEBPACK_IMPORTED_MODULE_4__/* .createDefaultCallbacks */ .O7)([taskOptions], CI_OUTPUT_MODE, _cli_output_verbosity_js__WEBPACK_IMPORTED_MODULE_7__/* .Verbosity */ .W.Normal);
+            const defaultCallbacks = (0,_cli_output_tasks_js__WEBPACK_IMPORTED_MODULE_4__/* .createDefaultCallbacks */ .O7)([taskOptions], CI_OUTPUT_MODE, _cli_output_verbosity_js__WEBPACK_IMPORTED_MODULE_7__/* .Verbosity */ .W.Normal);
+            const findingProcessingEvents = [];
+            const callbacks = {
+                ...defaultCallbacks,
+                onFindingProcessing: (name, event) => {
+                    findingProcessingEvents.push(event);
+                    defaultCallbacks.onFindingProcessing?.(name, event);
+                },
+            };
             const fileConcurrency = deps.semaphore ? Number.MAX_SAFE_INTEGER : _sdk_types_js__WEBPACK_IMPORTED_MODULE_10__/* .DEFAULT_FILE_CONCURRENCY */ .f;
             const result = await (0,_cli_output_tasks_js__WEBPACK_IMPORTED_MODULE_4__/* .runSkillTask */ .UG)(taskOptions, fileConcurrency, callbacks, deps.semaphore);
             const report = result.report;
@@ -2410,6 +2977,7 @@ async function executeTrigger(trigger, deps) {
                 failCheck,
                 checkRunUrl: skillCheckUrl,
                 maxFindings,
+                findingProcessingEvents,
             };
         }
         catch (error) {
@@ -2457,9 +3025,11 @@ __webpack_async_result__();
 /* harmony export */   dV: () => (/* binding */ computeWorkflowOutputs),
 /* harmony export */   sl: () => (/* binding */ collectTriggerErrors),
 /* harmony export */   uH: () => (/* binding */ setOutput),
-/* harmony export */   wZ: () => (/* binding */ setWorkflowOutputs)
+/* harmony export */   wZ: () => (/* binding */ setWorkflowOutputs),
+/* harmony export */   ym: () => (/* binding */ writeMetadataOutput),
+/* harmony export */   zi: () => (/* binding */ writeFindingsOutputV2)
 /* harmony export */ });
-/* unused harmony exports findClaudeCodeExecutable, getFindingsOutputPath */
+/* unused harmony exports findClaudeCodeExecutable, getFindingsOutputPath, getMetadataOutputPath, getFindingsOutputPathV2 */
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(73024);
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
 /* harmony import */ var node_os__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(48161);
@@ -2471,12 +3041,14 @@ __webpack_async_result__();
 /* harmony import */ var _utils_exec_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(82224);
 /* harmony import */ var _utils_path_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(60702);
 /* harmony import */ var _reporting_output_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(80961);
-/* harmony import */ var _triggers_matcher_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(49431);
+/* harmony import */ var _reporting_output_v2_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(88391);
+/* harmony import */ var _triggers_matcher_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(49431);
 /**
  * Workflow Base
  *
  * Shared infrastructure for PR and schedule workflows.
  */
+
 
 
 
@@ -2683,7 +3255,7 @@ function collectTriggerErrors(results) {
 function computeWorkflowOutputs(reports) {
     return {
         findingsCount: reports.reduce((sum, r) => sum + r.findings.length, 0),
-        highCount: (0,_triggers_matcher_js__WEBPACK_IMPORTED_MODULE_7__/* .countSeverity */ .jC)(reports, 'high'),
+        highCount: (0,_triggers_matcher_js__WEBPACK_IMPORTED_MODULE_8__/* .countSeverity */ .jC)(reports, 'high'),
         summary: reports.map((r) => r.summary).join('\n'),
     };
 }
@@ -2783,6 +3355,40 @@ function writeFindingsOutput(reports, context, findingObservations = [], options
     setOutput('findings-file', getFindingsOutputValue(filePath, context.repoPath));
     return filePath;
 }
+/** Get the path for the schema-v2 metadata output file. */
+function getMetadataOutputPath(repoPath) {
+    if (repoPath && process.env['GITHUB_WORKSPACE']) {
+        return (0,node_path__WEBPACK_IMPORTED_MODULE_2__.join)(repoPath, 'warden-metadata.json');
+    }
+    const tmpDir = process.env['RUNNER_TEMP'] ?? (0,node_os__WEBPACK_IMPORTED_MODULE_1__.tmpdir)();
+    return (0,node_path__WEBPACK_IMPORTED_MODULE_2__.join)(tmpDir, 'warden-metadata.json');
+}
+/** Get the path for the schema-v2 findings output file. */
+function getFindingsOutputPathV2(repoPath) {
+    if (repoPath && process.env['GITHUB_WORKSPACE']) {
+        return (0,node_path__WEBPACK_IMPORTED_MODULE_2__.join)(repoPath, 'warden-findings-v2.json');
+    }
+    const tmpDir = process.env['RUNNER_TEMP'] ?? (0,node_os__WEBPACK_IMPORTED_MODULE_1__.tmpdir)();
+    return (0,node_path__WEBPACK_IMPORTED_MODULE_2__.join)(tmpDir, 'warden-findings-v2.json');
+}
+/** Write the schema-v2 metadata file, gated separately from the v1 findings-file write. */
+function writeMetadataOutput(context, resolvedTriggers, matchedTriggers, results, options) {
+    const filePath = getMetadataOutputPath(context.repoPath);
+    const output = (0,_reporting_output_v2_js__WEBPACK_IMPORTED_MODULE_7__/* .buildMetadataOutputV2 */ .LE)(context, resolvedTriggers, matchedTriggers, results, options);
+    (0,node_fs__WEBPACK_IMPORTED_MODULE_0__.mkdirSync)((0,node_path__WEBPACK_IMPORTED_MODULE_2__.dirname)(filePath), { recursive: true });
+    (0,node_fs__WEBPACK_IMPORTED_MODULE_0__.writeFileSync)(filePath, JSON.stringify(output, null, 2));
+    setOutput('metadata-file', getFindingsOutputValue(filePath, context.repoPath));
+    return filePath;
+}
+/** Write the schema-v2 findings file, gated separately from the v1 findings-file write. */
+function writeFindingsOutputV2(results, matchedTriggers, findingObservations, context, options) {
+    const filePath = getFindingsOutputPathV2(context.repoPath);
+    const output = (0,_reporting_output_v2_js__WEBPACK_IMPORTED_MODULE_7__/* .buildFindingsOutputV2 */ .WS)(results, matchedTriggers, findingObservations, options);
+    (0,node_fs__WEBPACK_IMPORTED_MODULE_0__.mkdirSync)((0,node_path__WEBPACK_IMPORTED_MODULE_2__.dirname)(filePath), { recursive: true });
+    (0,node_fs__WEBPACK_IMPORTED_MODULE_0__.writeFileSync)(filePath, JSON.stringify(output, null, 2));
+    setOutput('findings-file-v2', getFindingsOutputValue(filePath, context.repoPath));
+    return filePath;
+}
 
 
 /***/ }),
@@ -2805,15 +3411,15 @@ __webpack_require__.a(module, async (__webpack_handle_async_dependencies__, __we
 /* harmony import */ var _output_dedup_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(3941);
 /* harmony import */ var _output_stale_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(95768);
 /* harmony import */ var _types_index_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(78481);
-/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(36137);
+/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(82272);
 /* harmony import */ var _fix_evaluation_index_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(45154);
-/* harmony import */ var _sdk_usage_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(44759);
-/* harmony import */ var _cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(80029);
+/* harmony import */ var _sdk_usage_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(44759);
+/* harmony import */ var _cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__ = __webpack_require__(80029);
 /* harmony import */ var _cli_output_formatters_js__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(43171);
 /* harmony import */ var _review_state_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(52552);
 /* harmony import */ var _triggers_executor_js__WEBPACK_IMPORTED_MODULE_13__ = __webpack_require__(19533);
 /* harmony import */ var _review_poster_js__WEBPACK_IMPORTED_MODULE_14__ = __webpack_require__(44602);
-/* harmony import */ var _review_coordination_js__WEBPACK_IMPORTED_MODULE_24__ = __webpack_require__(48352);
+/* harmony import */ var _review_coordination_js__WEBPACK_IMPORTED_MODULE_25__ = __webpack_require__(48352);
 /* harmony import */ var _review_review_feedback_gate_js__WEBPACK_IMPORTED_MODULE_15__ = __webpack_require__(6643);
 /* harmony import */ var _sdk_extract_js__WEBPACK_IMPORTED_MODULE_16__ = __webpack_require__(29709);
 /* harmony import */ var _sdk_circuit_breaker_js__WEBPACK_IMPORTED_MODULE_17__ = __webpack_require__(71794);
@@ -2821,6 +3427,7 @@ __webpack_require__.a(module, async (__webpack_handle_async_dependencies__, __we
 /* harmony import */ var _base_js__WEBPACK_IMPORTED_MODULE_19__ = __webpack_require__(53537);
 /* harmony import */ var _output_renderer_js__WEBPACK_IMPORTED_MODULE_20__ = __webpack_require__(21242);
 /* harmony import */ var _reporting_output_js__WEBPACK_IMPORTED_MODULE_21__ = __webpack_require__(80961);
+/* harmony import */ var _reporting_output_v2_js__WEBPACK_IMPORTED_MODULE_22__ = __webpack_require__(88391);
 var __webpack_async_dependencies__ = __webpack_handle_async_dependencies__([_triggers_executor_js__WEBPACK_IMPORTED_MODULE_13__]);
 _triggers_executor_js__WEBPACK_IMPORTED_MODULE_13__ = (__webpack_async_dependencies__.then ? (await __webpack_async_dependencies__)() : __webpack_async_dependencies__)[0];
 /**
@@ -2831,6 +3438,7 @@ _triggers_executor_js__WEBPACK_IMPORTED_MODULE_13__ = (__webpack_async_dependenc
  * artifact creation, while report owns GitHub writes and must only replay an
  * artifact that matches the current PR context.
  */
+
 
 
 
@@ -2919,13 +3527,13 @@ function logFixEvaluation(ev, index, total) {
     const verdict = ev.verdict;
     const line = `  [${index + 1}/${total}] ${idPrefix}${ev.path}:${ev.line} → ${verdict} (${(0,_cli_output_formatters_js__WEBPACK_IMPORTED_MODULE_11__/* .formatDuration */ .a3)(ev.durationMs)}, ${(0,_cli_output_formatters_js__WEBPACK_IMPORTED_MODULE_11__/* .formatTokens */ ._y)(totalTokens)} tok${costStr})`;
     if (ev.usedFallback) {
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(line);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(line);
     }
     else {
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(line);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(line);
     }
     if (ev.verdict === 'attempted_failed' && ev.reasoning) {
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`        reason: "${ev.reasoning}"`);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`        reason: "${ev.reasoning}"`);
     }
 }
 function groupCommentsForFixEvaluation(comments, headSha) {
@@ -2962,7 +3570,7 @@ function mergeFixEvaluationResults(results) {
         uniqueFindingsEvaluated: results.reduce((total, result) => total + result.uniqueFindingsEvaluated, 0),
         uniqueFindingsCodeChanged: results.reduce((total, result) => total + result.uniqueFindingsCodeChanged, 0),
         uniqueFindingsResolved: results.reduce((total, result) => total + result.uniqueFindingsResolved, 0),
-        usage: (0,_sdk_usage_js__WEBPACK_IMPORTED_MODULE_23__/* .aggregateUsage */ .Z$)(results.map((result) => result.usage)),
+        usage: (0,_sdk_usage_js__WEBPACK_IMPORTED_MODULE_24__/* .aggregateUsage */ .Z$)(results.map((result) => result.usage)),
         evaluations: results.flatMap((result) => result.evaluations),
     };
 }
@@ -3076,7 +3684,7 @@ async function fetchPreviousReviewInfo(octokit, context) {
     try {
         const botLogin = await (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .getAuthenticatedBotLogin */ .Uf)(octokit);
         if (!botLogin) {
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)('Skipping dismiss flow: cannot identify bot (using PAT or GITHUB_TOKEN instead of GitHub App)');
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)('Skipping dismiss flow: cannot identify bot (using PAT or GITHUB_TOKEN instead of GitHub App)');
             return null;
         }
         // Note: No pagination. PRs with 100+ reviews are rare; if Warden's review
@@ -3090,7 +3698,7 @@ async function fetchPreviousReviewInfo(octokit, context) {
         return (0,_review_state_js__WEBPACK_IMPORTED_MODULE_12__/* .findBotReviewState */ .a)(reviews, botLogin);
     }
     catch (error) {
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to fetch previous review info: ${error}`);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to fetch previous review info: ${error}`);
         return null;
     }
 }
@@ -3111,15 +3719,15 @@ async function setupGitHubState(octokit, context) {
             headSha: context.pullRequest.headSha,
         });
         coreCheckId = coreCheck.checkRunId;
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Created core check: ${coreCheck.url}`);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Created core check: ${coreCheck.url}`);
     }
     catch (error) {
         _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.captureException */ .sQ.captureException(error, { tags: { operation: 'create_core_check' } });
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to create core check: ${error}`);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to create core check: ${error}`);
     }
     previousReviewInfo = await fetchPreviousReviewInfo(octokit, context);
     if (previousReviewInfo) {
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Previous Warden review state: ${previousReviewInfo.state}`);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Previous Warden review state: ${previousReviewInfo.state}`);
     }
     return { coreCheckId, previousReviewInfo };
 }
@@ -3186,12 +3794,12 @@ async function postReviewsAndTrackFailures(octokit, context, results, inputs, au
             if (fetchedComments.length > 0) {
                 const wardenCount = fetchedComments.filter((c) => c.isWarden).length;
                 const externalCount = fetchedComments.length - wardenCount;
-                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Found ${fetchedComments.length} existing comments for deduplication (${wardenCount} Warden, ${externalCount} external)`);
+                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Found ${fetchedComments.length} existing comments for deduplication (${wardenCount} Warden, ${externalCount} external)`);
             }
         }
         catch (error) {
             _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.captureException */ .sQ.captureException(error, { tags: { operation: 'fetch_existing_comments' } });
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to fetch existing comments for deduplication: ${error}`);
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to fetch existing comments for deduplication: ${error}`);
         }
     }
     // Post reviews to GitHub (sequentially to avoid rate limits)
@@ -3299,15 +3907,15 @@ async function evaluateFixesAndResolveStale(octokit, context, fetchedComments, a
     let writability = 'blocked';
     if (wardenComments.length > 0) {
         if (!canResolveStale) {
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)('Skipping stale comment resolution due to trigger failures');
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)('Skipping stale comment resolution due to trigger failures');
         }
         else if (context.pullRequest) {
             writability = await gate.check();
             if (writability === 'blocked') {
-                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)('Skipping stale comment resolution because this run is no longer analyzing the current PR head');
+                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)('Skipping stale comment resolution because this run is no longer analyzing the current PR head');
             }
             else if (writability === 'unknown') {
-                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)('Skipping stale comment resolution because the current PR head could not be verified');
+                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)('Skipping stale comment resolution because the current PR head could not be verified');
             }
         }
     }
@@ -3329,10 +3937,10 @@ async function evaluateFixesAndResolveStale(octokit, context, fetchedComments, a
                 .flat()
                 .filter((c) => !c.isResolved && c.threadId).length;
             if (unresolvedCount > 0) {
-                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Fix evaluation: evaluating ${unresolvedCount} unresolved comments`);
+                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Fix evaluation: evaluating ${unresolvedCount} unresolved comments`);
             }
             else {
-                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Fix evaluation: no eligible comments (${currentHeadCount} current head, ` +
+                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Fix evaluation: no eligible comments (${currentHeadCount} current head, ` +
                     `${missingOriginalCommitCount} missing original commit)`);
             }
             const groupResults = [];
@@ -3360,7 +3968,7 @@ async function evaluateFixesAndResolveStale(octokit, context, fetchedComments, a
                     throw error;
                 });
                 if (resolvedCount > 0) {
-                    (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Resolved ${resolvedCount} comments via fix evaluation`);
+                    (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Resolved ${resolvedCount} comments via fix evaluation`);
                 }
                 // Track only actually resolved comments for allResolved check
                 resolvedIds.forEach((id) => commentsResolvedByFixEval.add(id));
@@ -3400,7 +4008,7 @@ async function evaluateFixesAndResolveStale(octokit, context, fetchedComments, a
                 if (totalTokens > 0) {
                     usageStr = `, ${(0,_cli_output_formatters_js__WEBPACK_IMPORTED_MODULE_11__/* .formatTokens */ ._y)(totalTokens)} tok, ${(0,_cli_output_formatters_js__WEBPACK_IMPORTED_MODULE_11__/* .formatCost */ .BD)(fixEvaluation.usage.costUSD)}`;
                 }
-                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Fix evaluation: ${fixEvaluation.toResolve.length} resolved, ` +
+                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Fix evaluation: ${fixEvaluation.toResolve.length} resolved, ` +
                     `${fixEvaluation.toReply.length} need attention, ` +
                     `${fixEvaluation.skipped} skipped` +
                     usageStr);
@@ -3413,7 +4021,7 @@ async function evaluateFixesAndResolveStale(octokit, context, fetchedComments, a
                 (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .logGroupEnd */ .TN)();
                 throw error;
             }
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to evaluate fix attempts: ${error}`);
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to evaluate fix attempts: ${error}`);
             (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .logGroupEnd */ .TN)();
         }
     }
@@ -3437,7 +4045,7 @@ async function evaluateFixesAndResolveStale(octokit, context, fetchedComments, a
                     throw error;
                 });
                 if (resolvedCount > 0) {
-                    (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Resolved ${resolvedCount} stale Warden comments`);
+                    (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Resolved ${resolvedCount} stale Warden comments`);
                     (0,_sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .emitStaleResolutionMetric */ .fL)(resolvedCount);
                     // Emit per-skill breakdown (only count actually resolved comments)
                     const bySkill = new Map();
@@ -3471,7 +4079,7 @@ async function evaluateFixesAndResolveStale(octokit, context, fetchedComments, a
             if (error instanceof ReportWriteError) {
                 throw error;
             }
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to resolve stale comments: ${error}`);
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to resolve stale comments: ${error}`);
         }
     }
     // Determine if all unresolved Warden comments were resolved during this run
@@ -3515,21 +4123,21 @@ async function dismissPreviousReviewIfResolved(octokit, context, previousReviewI
                 review_id: previousReviewInfo.reviewId,
                 message: 'All previously reported issues have been resolved.',
             });
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)('Dismissed previous CHANGES_REQUESTED review');
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)('Dismissed previous CHANGES_REQUESTED review');
         }
         catch (error) {
             _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.captureException */ .sQ.captureException(error, { tags: { operation: 'dismiss_review' } });
             if (options.failOnWriteError) {
                 throw new ReportWriteError('Failed to dismiss previous review', error);
             }
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to dismiss previous review: ${error}`);
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to dismiss previous review: ${error}`);
         }
     }
 }
 /**
  * Dismiss review, set outputs, update core check, fail action.
  */
-async function finalizeWorkflow(octokit, context, previousReviewInfo, coreCheckId, results, reports, findingObservations, shouldFailAction, failureReasons, canResolveStale, gate, triggerErrors, matchedTriggers, resolvedTriggers) {
+async function finalizeWorkflow(octokit, context, previousReviewInfo, coreCheckId, results, reports, findingObservations, shouldFailAction, failureReasons, canResolveStale, gate, triggerErrors, matchedTriggers, resolvedTriggers, inputs) {
     await dismissPreviousReviewIfResolved(octokit, context, previousReviewInfo, results, canResolveStale, gate);
     // Set outputs
     const outputs = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .computeWorkflowOutputs */ .dV)(reports);
@@ -3540,10 +4148,27 @@ async function finalizeWorkflow(octokit, context, previousReviewInfo, coreCheckI
             triggerResults: toReplayTriggerResults(results),
             configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_21__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: resolvedTriggers, matchedTriggers }),
         });
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
     }
     catch (error) {
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
+    }
+    if (inputs.outputSchemaVersion === '2') {
+        const runId = process.env['GITHUB_RUN_ID'] ?? '';
+        const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
+        try {
+            const metadataPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeMetadataOutput */ .ym)(context, resolvedTriggers, matchedTriggers, results, {
+                runId,
+                runAttempt,
+                actionRef: inputs.actionRef,
+            });
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Metadata written to ${metadataPath}`);
+            const findingsV2Path = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutputV2 */ .zi)(results, matchedTriggers, findingObservations, context, { runId });
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Findings (v2) written to ${findingsV2Path}`);
+        }
+        catch (error) {
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write schema-v2 output: ${error}`);
+        }
     }
     // Update core check with overall summary
     if (coreCheckId && context.pullRequest) {
@@ -3557,13 +4182,13 @@ async function finalizeWorkflow(octokit, context, previousReviewInfo, coreCheckI
         }
         catch (error) {
             _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.captureException */ .sQ.captureException(error, { tags: { operation: 'update_core_check' } });
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to update core check: ${error}`);
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to update core check: ${error}`);
         }
     }
     if (shouldFailAction) {
         (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(failureReasons.join('; '));
     }
-    (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Analysis complete: ${outputs.findingsCount} total findings`);
+    (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Analysis complete: ${outputs.findingsCount} total findings`);
 }
 /** Complete the core check for a PR run that intentionally skipped analysis. */
 async function completeSkippedCoreCheck(octokit, context, coreCheckId, skipped) {
@@ -3580,7 +4205,7 @@ async function completeSkippedCoreCheck(octokit, context, coreCheckId, skipped) 
     }
     catch (error) {
         _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.captureException */ .sQ.captureException(error, { tags: { operation: 'update_core_check_skipped' } });
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to update core check: ${error}`);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to update core check: ${error}`);
     }
 }
 /** Complete per-skill checks for configured PR triggers that did not run. */
@@ -3614,7 +4239,7 @@ async function completeSkippedSkillChecks(octokit, context, skippedTriggers) {
                     skill_name: trigger.skill,
                 },
             });
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to update skipped skill check for ${trigger.skill}: ${error}`);
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to update skipped skill check for ${trigger.skill}: ${error}`);
         }
     }
 }
@@ -3639,7 +4264,7 @@ async function failUndispatchedSkillChecks(octokit, context, triggers, error) {
                     skill_name: trigger.skill,
                 },
             });
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to mark skill check as failed for ${trigger.skill}: ${checkError}`);
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to mark skill check as failed for ${trigger.skill}: ${checkError}`);
         }
     }
 }
@@ -3661,7 +4286,7 @@ async function failCoreCheck(octokit, context, coreCheckId, error) {
     }
     catch (checkError) {
         _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.captureException */ .sQ.captureException(checkError, { tags: { operation: 'fail_core_check' } });
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to mark core check as failed: ${checkError}`);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to mark core check as failed: ${checkError}`);
     }
 }
 async function runOrFailCore(octokit, context, coreCheckId, operation) {
@@ -3938,7 +4563,7 @@ async function createFailedCoreCheckForReport(octokit, context, error) {
     }
     catch (checkError) {
         _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.captureException */ .sQ.captureException(checkError, { tags: { operation: 'create_failed_core_check_report' } });
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to create failed core check: ${checkError}`);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to create failed core check: ${checkError}`);
     }
 }
 /**
@@ -3957,16 +4582,16 @@ async function finalizeReportWorkflow(octokit, context, previousReviewInfo, resu
                 matchedTriggers: options.matchedTriggers ?? [],
             }),
         });
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
     }
     catch (error) {
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
     }
     await createCompletedCoreCheckForReport(octokit, context, results, reports, shouldFailAction || triggerErrors.length > 0, outputs);
     if (shouldFailAction) {
         (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(failureReasons.join('; '));
     }
-    (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Analysis complete: ${outputs.findingsCount} total findings`);
+    (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Analysis complete: ${outputs.findingsCount} total findings`);
 }
 /**
  * Clean up orphaned Warden comments when no triggers matched.
@@ -3989,7 +4614,7 @@ async function cleanupOrphanedComments(octokit, context, inputs, auxiliaryOption
         existingComments = await (0,_output_dedup_js__WEBPACK_IMPORTED_MODULE_6__/* .fetchExistingComments */ .kX)(octokit, context.repository.owner, context.repository.name, context.pullRequest.number);
     }
     catch (error) {
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to fetch existing comments for cleanup: ${error}`);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to fetch existing comments for cleanup: ${error}`);
         return [];
     }
     const wardenComments = existingComments.filter((c) => c.isWarden);
@@ -3999,7 +4624,7 @@ async function cleanupOrphanedComments(octokit, context, inputs, auxiliaryOption
     if ((auxiliaryOptions.runtime ?? 'pi') === 'claude') {
         (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .ensureClaudeAuth */ .$m)(inputs);
     }
-    (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`No triggers matched, but found ${wardenComments.length} existing Warden comments. Running cleanup.`);
+    (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`No triggers matched, but found ${wardenComments.length} existing Warden comments. Running cleanup.`);
     const { allResolved, autoResolvedByFixEvaluation, autoResolvedByStaleCheck, findingObservations } = await evaluateFixesAndResolveStale(octokit, context, existingComments, [], new Set(), true, inputs.anthropicApiKey, auxiliaryOptions, gate, {
         failOnWriteError: options.failOnWriteError,
     });
@@ -4021,10 +4646,10 @@ async function cleanupOrphanedComments(octokit, context, inputs, auxiliaryOption
                     review_id: previousReviewInfo.reviewId,
                     message: 'All previously reported issues have been resolved.',
                 });
-                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)('Dismissed previous CHANGES_REQUESTED review');
+                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)('Dismissed previous CHANGES_REQUESTED review');
             }
             catch (error) {
-                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to dismiss previous review: ${error}`);
+                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to dismiss previous review: ${error}`);
                 if (options.failOnWriteError) {
                     throw new ReportWriteError('Failed to dismiss previous review', error);
                 }
@@ -4048,12 +4673,12 @@ async function runAnalyzeMode(inputs, initResult, span) {
                 triggerResults: [],
                 configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_21__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: resolvedTriggers, matchedTriggers }),
             });
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
         }
         catch (error) {
             (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(`Failed to write findings output: ${error}`);
         }
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)('Analysis complete: 0 total findings');
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)('Analysis complete: 0 total findings');
         return;
     }
     const results = await _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.startSpan */ .sQ.startSpan({
@@ -4070,13 +4695,145 @@ async function runAnalyzeMode(inputs, initResult, span) {
             triggerResults: toReplayTriggerResults(results),
             configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_21__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: resolvedTriggers, matchedTriggers }),
         });
-        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
+        (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
     }
     catch (error) {
         (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(`Failed to write findings output: ${error}`);
     }
+    if (inputs.outputSchemaVersion === '2') {
+        const runId = process.env['GITHUB_RUN_ID'] ?? '';
+        const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
+        try {
+            const metadataPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeMetadataOutput */ .ym)(context, resolvedTriggers, matchedTriggers, results, {
+                runId,
+                runAttempt,
+                actionRef: inputs.actionRef,
+            });
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Metadata written to ${metadataPath}`);
+            const findingsV2Path = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutputV2 */ .zi)(results, matchedTriggers, [], context, { runId });
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Findings (v2) written to ${findingsV2Path}`);
+        }
+        catch (error) {
+            (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(`Failed to write schema-v2 output: ${error}`);
+        }
+    }
     (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .handleTriggerErrors */ .a3)((0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .collectTriggerErrors */ .sl)(results), matchedTriggers.length, { failAll: false });
-    (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Analysis complete: ${outputs.findingsCount} total findings`);
+    (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Analysis complete: ${outputs.findingsCount} total findings`);
+}
+function readMetadataFileV2(inputPath, repoPath) {
+    const filePath = resolveFindingsFilePath(inputPath, repoPath);
+    try {
+        return _reporting_output_v2_js__WEBPACK_IMPORTED_MODULE_22__/* .WardenMetadataSchema */ .I2.parse(JSON.parse((0,node_fs__WEBPACK_IMPORTED_MODULE_0__.readFileSync)(filePath, 'utf-8')));
+    }
+    catch (error) {
+        (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(`Failed to read metadata file ${filePath}: ${error}`);
+    }
+}
+function readFindingsFileV2(inputPath, repoPath) {
+    const filePath = resolveFindingsFilePath(inputPath, repoPath);
+    try {
+        return _reporting_output_v2_js__WEBPACK_IMPORTED_MODULE_22__/* .WardenFindingsSchemaV2 */ .HT.parse(JSON.parse((0,node_fs__WEBPACK_IMPORTED_MODULE_0__.readFileSync)(filePath, 'utf-8')));
+    }
+    catch (error) {
+        (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(`Failed to read findings file ${filePath}: ${error}`);
+    }
+}
+function validateV2OutputsMatchContext(metadata, findings, context) {
+    if (metadata.runId !== findings.runId || metadata.schemaVersion !== findings.schemaVersion) {
+        (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)('Metadata file and findings file do not share the same runId/schemaVersion');
+    }
+    if (metadata.repository.fullName !== context.repository.fullName) {
+        (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(`Metadata file is for ${metadata.repository.fullName}, but this workflow is for ${context.repository.fullName}`);
+    }
+    if (metadata.event !== context.eventType) {
+        (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(`Metadata file event ${metadata.event} does not match ${context.eventType}`);
+    }
+    if (!context.pullRequest) {
+        return;
+    }
+    if (!metadata.pullRequest) {
+        (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)('Metadata file is missing pull request metadata');
+    }
+    if (metadata.pullRequest.number !== context.pullRequest.number) {
+        (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(`Metadata file is for PR #${metadata.pullRequest.number}, but this workflow is for PR #${context.pullRequest.number}`);
+    }
+    if (metadata.pullRequest.headSha !== context.pullRequest.headSha) {
+        (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .setFailed */ .C1)(`Metadata file head SHA ${metadata.pullRequest.headSha} does not match current head SHA ${context.pullRequest.headSha}`);
+    }
+}
+function toFindingFromV2(finding) {
+    return {
+        id: finding.id,
+        severity: finding.severity,
+        confidence: finding.confidence,
+        title: finding.title,
+        description: finding.description,
+        verification: finding.verification,
+        location: finding.location,
+        additionalLocations: finding.additionalLocations,
+        sourceSnippet: finding.sourceSnippet,
+    };
+}
+/**
+ * Rebuild report-mode trigger results from schema-v2 metadata/findings artifacts,
+ * mirroring buildReportModeResults's v1 join-by-trigger-identity behavior.
+ */
+function buildReportModeResultsV2(metadata, findingsOutput, matchedTriggers, inputs) {
+    const executionsByTriggerId = new Map(findingsOutput.skillExecutions
+        .filter((execution) => execution.triggerId)
+        .map((execution) => [execution.triggerId, execution]));
+    const findingsById = new Map(findingsOutput.findings.map((finding) => [finding.id, finding]));
+    const errorByTriggerId = new Map((metadata.triggerResults ?? [])
+        .filter((result) => result.status === 'error' && result.triggerId)
+        .map((result) => [result.triggerId, result.error]));
+    return matchedTriggers.map((trigger) => {
+        const failOn = trigger.failOn ?? inputs.failOn;
+        const reportOn = trigger.reportOn ?? inputs.reportOn;
+        const minConfidence = trigger.minConfidence ?? 'medium';
+        const requestChanges = trigger.requestChanges ?? inputs.requestChanges;
+        const failCheck = trigger.failCheck ?? inputs.failCheck;
+        const maxFindings = trigger.maxFindings ?? inputs.maxFindings;
+        const baseResult = {
+            triggerId: trigger.id,
+            triggerName: trigger.name,
+            skillName: trigger.skill,
+            failOn,
+            reportOn,
+            minConfidence,
+            reportOnSuccess: trigger.reportOnSuccess,
+            requestChanges,
+            failCheck,
+            maxFindings,
+        };
+        const execution = executionsByTriggerId.get(trigger.id);
+        if (!execution) {
+            const error = errorByTriggerId.get(trigger.id);
+            return {
+                ...baseResult,
+                error: error
+                    ? deserializeTriggerError(error, `Trigger ${trigger.name} (${trigger.skill}) failed during analysis`)
+                    : new Error(`Findings file has no result for trigger ${trigger.name} (${trigger.skill})`),
+            };
+        }
+        const findings = execution.findingIds.flatMap((id) => {
+            const finding = findingsById.get(id);
+            return finding ? [toFindingFromV2(finding)] : [];
+        });
+        const report = {
+            skill: execution.skillName,
+            summary: execution.summary,
+            findings,
+            durationMs: execution.durationMs,
+            usage: execution.usage,
+            failedHunks: execution.failedHunks,
+            failedExtractions: execution.failedExtractions,
+            error: execution.error,
+            verifierRejections: execution.verifierRejections,
+            model: execution.model,
+            runtime: execution.runtime,
+        };
+        return { ...baseResult, report };
+    });
 }
 /**
  * Run the reporting phase without rerunning skills.
@@ -4084,15 +4841,27 @@ async function runAnalyzeMode(inputs, initResult, span) {
  */
 async function runReportMode(octokit, inputs, initResult, repoPath, span) {
     const { context, auxiliaryOptions, resolvedTriggers, matchedTriggers, skippedTriggers, skipCoreCheck, } = initResult;
-    const findingsOutput = readFindingsFile(inputs.findingsFile, repoPath);
-    validateFindingsMatchContext(findingsOutput, context);
+    let metadataOutputV2;
+    let findingsOutputV2;
+    let findingsOutputV1;
+    if (inputs.outputSchemaVersion === '2') {
+        metadataOutputV2 = readMetadataFileV2(inputs.metadataFile, repoPath);
+        findingsOutputV2 = readFindingsFileV2(inputs.findingsFile, repoPath);
+        validateV2OutputsMatchContext(metadataOutputV2, findingsOutputV2, context);
+    }
+    else {
+        findingsOutputV1 = readFindingsFile(inputs.findingsFile, repoPath);
+        validateFindingsMatchContext(findingsOutputV1, context);
+    }
     let results = [];
     let previousReviewInfo = null;
     let reviewPhase;
     let triggerErrors;
     let canResolveStale;
     try {
-        results = buildReportModeResults(findingsOutput, matchedTriggers, inputs);
+        results = metadataOutputV2 && findingsOutputV2
+            ? buildReportModeResultsV2(metadataOutputV2, findingsOutputV2, matchedTriggers, inputs)
+            : buildReportModeResults(findingsOutputV1, matchedTriggers, inputs);
         await createCompletedSkippedSkillChecks(octokit, context, skippedTriggers);
         if (skipCoreCheck) {
             const outputs = { findingsCount: 0, highCount: 0, summary: skipCoreCheck.title };
@@ -4102,16 +4871,16 @@ async function runReportMode(octokit, inputs, initResult, repoPath, span) {
                     triggerResults: [],
                     configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_21__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: resolvedTriggers, matchedTriggers }),
                 });
-                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
+                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
             }
             catch (error) {
-                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
+                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
             }
             await createCompletedCoreCheckForReport(octokit, context, [], [], false, outputs, {
                 title: skipCoreCheck.title,
                 message: skipCoreCheck.message,
             }, 'neutral');
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)('Analysis complete: 0 total findings');
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)('Analysis complete: 0 total findings');
             return;
         }
         if (matchedTriggers.length === 0) {
@@ -4123,29 +4892,29 @@ async function runReportMode(octokit, inputs, initResult, repoPath, span) {
                     triggerResults: [],
                     configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_21__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: resolvedTriggers, matchedTriggers }),
                 });
-                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
+                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Findings written to ${findingsPath}`);
             }
             catch (error) {
-                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
+                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
             }
             await createCompletedCoreCheckForReport(octokit, context, [], [], false, outputs, {
                 title: 'No triggers matched',
                 message: 'No triggers matched for this event.',
             }, 'neutral');
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)('Analysis complete: 0 total findings');
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)('Analysis complete: 0 total findings');
             return;
         }
         results = await createCompletedSkillChecksForReport(octokit, context, results);
         previousReviewInfo = await fetchPreviousReviewInfo(octokit, context);
         if (previousReviewInfo) {
-            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .logAction */ .d5)(`Previous Warden review state: ${previousReviewInfo.state}`);
+            (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Previous Warden review state: ${previousReviewInfo.state}`);
         }
         const gate = new _review_review_feedback_gate_js__WEBPACK_IMPORTED_MODULE_15__/* .ReviewFeedbackGate */ .d(octokit, context);
         reviewPhase = await _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.startSpan */ .sQ.startSpan({ op: 'workflow.review', name: 'post reviews' }, () => postReviewsAndTrackFailures(octokit, context, results, inputs, auxiliaryOptions, gate, {
             failOnPostError: true,
         }));
         triggerErrors = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .collectTriggerErrors */ .sl)(results);
-        canResolveStale = (0,_review_coordination_js__WEBPACK_IMPORTED_MODULE_24__/* .shouldResolveStaleComments */ .t)(results);
+        canResolveStale = (0,_review_coordination_js__WEBPACK_IMPORTED_MODULE_25__/* .shouldResolveStaleComments */ .t)(results);
         const allFindings = reviewPhase.reports.flatMap((r) => r.findings);
         span.setAttribute('warden.finding.count', allFindings.length);
         await _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.startSpan */ .sQ.startSpan({ op: 'workflow.resolve', name: 'resolve stale comments' }, async (resolveSpan) => {
@@ -4215,7 +4984,7 @@ async function runPRWorkflow(octokit, inputs, eventName, eventPath, repoPath) {
                 });
             }
             catch (error) {
-                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
+                (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
             }
             await completeSkippedCoreCheck(octokit, context, coreCheckId, skipCoreCheck);
             return;
@@ -4232,7 +5001,7 @@ async function runPRWorkflow(octokit, inputs, eventName, eventPath, repoPath) {
                     });
                 }
                 catch (error) {
-                    (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_22__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
+                    (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .warnAction */ .T6)(`Failed to write findings output: ${error}`);
                 }
                 await completeSkippedCoreCheck(octokit, context, coreCheckId, {
                     title: 'No triggers matched',
@@ -4259,7 +5028,7 @@ async function runPRWorkflow(octokit, inputs, eventName, eventPath, repoPath) {
         const gate = new _review_review_feedback_gate_js__WEBPACK_IMPORTED_MODULE_15__/* .ReviewFeedbackGate */ .d(octokit, context);
         const reviewPhase = await runOrFailCore(octokit, context, coreCheckId, () => _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.startSpan */ .sQ.startSpan({ op: 'workflow.review', name: 'post reviews' }, () => postReviewsAndTrackFailures(octokit, context, results, inputs, auxiliaryOptions, gate)));
         const triggerErrors = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .collectTriggerErrors */ .sl)(results);
-        const canResolveStale = (0,_review_coordination_js__WEBPACK_IMPORTED_MODULE_24__/* .shouldResolveStaleComments */ .t)(results);
+        const canResolveStale = (0,_review_coordination_js__WEBPACK_IMPORTED_MODULE_25__/* .shouldResolveStaleComments */ .t)(results);
         const allFindings = reviewPhase.reports.flatMap((r) => r.findings);
         span.setAttribute('warden.finding.count', allFindings.length);
         await runOrFailCore(octokit, context, coreCheckId, () => _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.startSpan */ .sQ.startSpan({ op: 'workflow.resolve', name: 'resolve stale comments' }, async (resolveSpan) => {
@@ -4268,7 +5037,7 @@ async function runPRWorkflow(octokit, inputs, eventName, eventPath, repoPath) {
             resolveSpan.setAttribute('warden.feedback.auto_resolve.stale_count', resolutionResult.autoResolvedByStaleCheck);
             reviewPhase.findingObservations.push(...resolutionResult.findingObservations);
         }));
-        await finalizeWorkflow(octokit, context, previousReviewInfo, coreCheckId, results, reviewPhase.reports, reviewPhase.findingObservations, reviewPhase.shouldFailAction, reviewPhase.failureReasons, canResolveStale, gate, triggerErrors, matchedTriggers, resolvedTriggers);
+        await finalizeWorkflow(octokit, context, previousReviewInfo, coreCheckId, results, reviewPhase.reports, reviewPhase.findingObservations, reviewPhase.shouldFailAction, reviewPhase.failureReasons, canResolveStale, gate, triggerErrors, matchedTriggers, resolvedTriggers, inputs);
         (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .handleTriggerErrors */ .a3)(triggerErrors, matchedTriggers.length);
     });
 }
@@ -5879,7 +6648,7 @@ __webpack_require__.a(module, async (__webpack_handle_async_dependencies__, __we
 /* harmony import */ var ink__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(22687);
 /* harmony import */ var _tasks_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(5836);
 /* harmony import */ var _formatters_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(43171);
-/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(36137);
+/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(82272);
 /* harmony import */ var _verbosity_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(21307);
 /* harmony import */ var _sdk_circuit_breaker_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(71794);
 var __webpack_async_dependencies__ = __webpack_handle_async_dependencies__([ink__WEBPACK_IMPORTED_MODULE_2__, _tasks_js__WEBPACK_IMPORTED_MODULE_3__]);
@@ -7142,7 +7911,7 @@ function parseLogMetadata(filePath) {
 /* harmony import */ var _verbosity_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(21307);
 /* harmony import */ var _formatters_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(43171);
 /* harmony import */ var _box_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(8899);
-/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(36137);
+/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(82272);
 
 
 
@@ -7630,7 +8399,7 @@ __webpack_require__.a(module, async (__webpack_handle_async_dependencies__, __we
 /* harmony import */ var _icons_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(5832);
 /* harmony import */ var _tty_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(80029);
 /* harmony import */ var _formatters_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(43171);
-/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(36137);
+/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(82272);
 var __webpack_async_dependencies__ = __webpack_handle_async_dependencies__([_sdk_runner_js__WEBPACK_IMPORTED_MODULE_2__]);
 _sdk_runner_js__WEBPACK_IMPORTED_MODULE_2__ = (__webpack_async_dependencies__.then ? (await __webpack_async_dependencies__)() : __webpack_async_dependencies__)[0];
 /**
@@ -8619,12 +9388,15 @@ function parseVerbosity(quiet, verboseCount, debug) {
 /* unused harmony exports loadWardenConfigFile, loadWardenConfig, mergeWardenConfigs, resolveSkillConfigs */
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(73024);
 /* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(76760);
-/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_1__);
-/* harmony import */ var smol_toml__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(46394);
-/* harmony import */ var _sentry_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(30340);
-/* harmony import */ var _skills_loader_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(34691);
-/* harmony import */ var _schema_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(96120);
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(77598);
+/* harmony import */ var node_crypto__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_crypto__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(76760);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_2__);
+/* harmony import */ var smol_toml__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(24013);
+/* harmony import */ var _sentry_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(30340);
+/* harmony import */ var _skills_loader_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(34691);
+/* harmony import */ var _schema_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(96120);
+
 
 
 
@@ -8640,7 +9412,7 @@ class ConfigLoadError extends Error {
 function parseConfigContent(content) {
     let rawConfig;
     try {
-        rawConfig = (0,smol_toml__WEBPACK_IMPORTED_MODULE_2__/* .parse */ .qg)(content);
+        rawConfig = (0,smol_toml__WEBPACK_IMPORTED_MODULE_3__/* .parse */ .qg)(content);
     }
     catch (error) {
         throw new ConfigLoadError('Failed to parse TOML configuration', { cause: error });
@@ -8655,7 +9427,7 @@ function parseConfigContent(content) {
             '  actions = [...]                 actions = [...]\n\n' +
             'See the migration guide for details.');
     }
-    const result = _schema_js__WEBPACK_IMPORTED_MODULE_5__/* .WardenConfigSchema */ .Tx.safeParse(rawConfig);
+    const result = _schema_js__WEBPACK_IMPORTED_MODULE_6__/* .WardenConfigSchema */ .Tx.safeParse(rawConfig);
     if (!result.success) {
         const issues = result.error.issues.map(i => `  - ${i.path.join('.')}: ${i.message}`).join('\n');
         throw new ConfigLoadError(`Invalid configuration:\n${issues}`);
@@ -8663,7 +9435,7 @@ function parseConfigContent(content) {
     return result.data;
 }
 function loadWardenConfigFile(configPath) {
-    return _sentry_js__WEBPACK_IMPORTED_MODULE_3__/* .Sentry.startSpan */ .sQ.startSpan({ op: 'config.load', name: 'load config' }, () => {
+    return _sentry_js__WEBPACK_IMPORTED_MODULE_4__/* .Sentry.startSpan */ .sQ.startSpan({ op: 'config.load', name: 'load config' }, () => {
         if (!(0,node_fs__WEBPACK_IMPORTED_MODULE_0__.existsSync)(configPath)) {
             throw new ConfigLoadError(`Configuration file not found: ${configPath}`);
         }
@@ -8796,7 +9568,7 @@ function mergeWardenConfigs(base, overlay, options = {}) {
         runner: mergeRunnerConfig(base.runner, effectiveOverlay.runner),
         logs: mergeLogsConfig(base.logs, effectiveOverlay.logs),
     };
-    const result = _schema_js__WEBPACK_IMPORTED_MODULE_5__/* .WardenConfigSchema */ .Tx.safeParse(mergedConfig);
+    const result = _schema_js__WEBPACK_IMPORTED_MODULE_6__/* .WardenConfigSchema */ .Tx.safeParse(mergedConfig);
     if (!result.success) {
         const issues = result.error.issues.map(i => `  - ${i.path.join('.')}: ${i.message}`).join('\n');
         throw new ConfigLoadError(`Invalid merged configuration:\n${issues}`);
@@ -8808,12 +9580,12 @@ function buildSkillRootsByName(repoPath, layered, baseSkillRoot) {
     const repoRoots = {};
     if (layered.baseConfig) {
         const localBaseSkills = layered.baseConfig.skills.filter((skill) => !skill.remote);
-        const localBaseSkillsRequiringRoot = localBaseSkills.filter((skill) => !(0,_skills_loader_js__WEBPACK_IMPORTED_MODULE_4__/* .isBuiltinSkillName */ .OB)(skill.name));
+        const localBaseSkillsRequiringRoot = localBaseSkills.filter((skill) => !(0,_skills_loader_js__WEBPACK_IMPORTED_MODULE_5__/* .isBuiltinSkillName */ .OB)(skill.name));
         if (localBaseSkillsRequiringRoot.length > 0 && !baseSkillRoot) {
             throw new ConfigLoadError('base-skill-root is required when the base config defines local skills');
         }
         if (baseSkillRoot) {
-            const resolvedBaseSkillRoot = (0,node_path__WEBPACK_IMPORTED_MODULE_1__.join)(repoPath, baseSkillRoot);
+            const resolvedBaseSkillRoot = (0,node_path__WEBPACK_IMPORTED_MODULE_2__.join)(repoPath, baseSkillRoot);
             if (!(0,node_fs__WEBPACK_IMPORTED_MODULE_0__.existsSync)(resolvedBaseSkillRoot)) {
                 throw new ConfigLoadError(`Skill root not found: ${resolvedBaseSkillRoot}`);
             }
@@ -8823,7 +9595,7 @@ function buildSkillRootsByName(repoPath, layered, baseSkillRoot) {
         }
         else {
             for (const skill of localBaseSkills) {
-                if ((0,_skills_loader_js__WEBPACK_IMPORTED_MODULE_4__/* .isBuiltinSkillName */ .OB)(skill.name)) {
+                if ((0,_skills_loader_js__WEBPACK_IMPORTED_MODULE_5__/* .isBuiltinSkillName */ .OB)(skill.name)) {
                     baseRoots[skill.name] = undefined;
                 }
             }
@@ -8846,9 +9618,9 @@ function buildSkillRootsByName(repoPath, layered, baseSkillRoot) {
     return result.base || result.repo ? result : undefined;
 }
 function loadLayeredWardenConfig(repoPath, options = {}) {
-    const repoConfigPath = (0,node_path__WEBPACK_IMPORTED_MODULE_1__.join)(repoPath, options.configPath ?? 'warden.toml');
+    const repoConfigPath = (0,node_path__WEBPACK_IMPORTED_MODULE_2__.join)(repoPath, options.configPath ?? 'warden.toml');
     const baseConfigPath = options.baseConfigPath
-        ? (0,node_path__WEBPACK_IMPORTED_MODULE_1__.join)(repoPath, options.baseConfigPath)
+        ? (0,node_path__WEBPACK_IMPORTED_MODULE_2__.join)(repoPath, options.baseConfigPath)
         : undefined;
     if (baseConfigPath && !(0,node_fs__WEBPACK_IMPORTED_MODULE_0__.existsSync)(baseConfigPath)) {
         throw new ConfigLoadError(`Configuration file not found: ${baseConfigPath}`);
@@ -8857,7 +9629,7 @@ function loadLayeredWardenConfig(repoPath, options = {}) {
         const repoConfig = loadWardenConfigFile(repoConfigPath);
         return { config: repoConfig, repoConfig };
     }
-    if ((0,node_path__WEBPACK_IMPORTED_MODULE_1__.normalize)(baseConfigPath) === (0,node_path__WEBPACK_IMPORTED_MODULE_1__.normalize)(repoConfigPath)) {
+    if ((0,node_path__WEBPACK_IMPORTED_MODULE_2__.normalize)(baseConfigPath) === (0,node_path__WEBPACK_IMPORTED_MODULE_2__.normalize)(repoConfigPath)) {
         throw new ConfigLoadError('base-config-path and config-path must point to different files');
     }
     const baseConfig = loadWardenConfigFile(baseConfigPath);
@@ -8874,6 +9646,9 @@ function loadLayeredWardenConfig(repoPath, options = {}) {
         baseConfig,
         repoConfig,
     };
+}
+function deriveSkillExecutionId(identity) {
+    return (0,node_crypto__WEBPACK_IMPORTED_MODULE_1__.createHash)('sha256').update(identity).digest('hex').slice(0, 12);
 }
 function triggerIdentity(skill, trigger) {
     return JSON.stringify({
@@ -8964,8 +9739,10 @@ function resolveSkillConfigs(config, cliModel, skillRootsByName) {
         };
         if (!skill.triggers || skill.triggers.length === 0) {
             // Wildcard: no triggers means run everywhere
+            const identity = triggerIdentity(skill, undefined);
             result.push({
-                id: triggerIdentity(skill, undefined),
+                id: identity,
+                skillExecutionId: deriveSkillExecutionId(identity),
                 name: skill.name,
                 skill: skill.name,
                 type: '*',
@@ -8996,8 +9773,10 @@ function resolveSkillConfigs(config, cliModel, skillRootsByName) {
         }
         else {
             for (const trigger of skill.triggers) {
+                const identity = triggerIdentity(skill, trigger);
                 result.push({
-                    id: triggerIdentity(skill, trigger),
+                    id: identity,
+                    skillExecutionId: deriveSkillExecutionId(identity),
                     name: skill.name,
                     skill: skill.name,
                     type: trigger.type,
@@ -10991,8 +11770,8 @@ __webpack_require__.d(__webpack_exports__, {
 var types = __webpack_require__(78481);
 // EXTERNAL MODULE: ./src/cli/output/formatters.ts
 var formatters = __webpack_require__(43171);
-// EXTERNAL MODULE: ./src/utils/index.ts + 2 modules
-var utils = __webpack_require__(36137);
+// EXTERNAL MODULE: ./src/utils/index.ts + 1 modules
+var utils = __webpack_require__(82272);
 ;// CONCATENATED MODULE: ./src/output/issue-renderer.ts
 
 
@@ -11210,7 +11989,7 @@ async function findExistingIssue(octokit, owner, repo, title) {
 /* harmony import */ var _types_index_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(78481);
 /* harmony import */ var _cli_output_formatters_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(43171);
 /* harmony import */ var _dedup_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(3941);
-/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(36137);
+/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(82272);
 
 
 
@@ -11616,7 +12395,7 @@ async function resolveStaleComments(octokit, staleComments, options = {}) {
 /* harmony import */ var _runtimes_index_js__WEBPACK_IMPORTED_MODULE_7__ = __webpack_require__(23473);
 /* harmony import */ var _types_js__WEBPACK_IMPORTED_MODULE_12__ = __webpack_require__(88973);
 /* harmony import */ var _prepare_js__WEBPACK_IMPORTED_MODULE_8__ = __webpack_require__(15507);
-/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(36137);
+/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(82272);
 /* harmony import */ var _sentry_trace_js__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(68016);
 
 
@@ -13196,6 +13975,8 @@ Singletons should not appear. Return [] if no findings describe the same issue.`
             finding,
             replacement: findReplacementForAbsorbed(finding, replacements),
             reason: 'same root cause at another location',
+            model: options?.model,
+            runtime: options?.runtime,
         });
     }
     const merged = findings
@@ -14894,7 +15675,7 @@ const LARGE_PROMPT_THRESHOLD_CHARS = 100000;
 /* harmony import */ var _extract_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(29709);
 /* harmony import */ var _errors_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(98229);
 /* harmony import */ var _runtimes_index_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(23473);
-/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(36137);
+/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(82272);
 /* harmony import */ var _prompt_sections_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(49893);
 
 
@@ -15035,6 +15816,8 @@ function notifyVerdict(options, finding, verdict, next) {
             action: 'rejected',
             finding,
             reason: verdict.reason,
+            model: options.model,
+            runtime: options.runtime,
         });
         return;
     }
@@ -15045,6 +15828,8 @@ function notifyVerdict(options, finding, verdict, next) {
             finding,
             replacement: next,
             reason: verdict.reason,
+            model: options.model,
+            runtime: options.runtime,
         });
     }
 }
@@ -15585,9 +16370,11 @@ async function resolveAgentAsync(nameOrPath, repoRoot, options) {
 /* harmony export */   Lb: () => (/* binding */ filterContextByPaths),
 /* harmony export */   QW: () => (/* binding */ matchTrigger),
 /* harmony export */   W9: () => (/* binding */ shouldFail),
+/* harmony export */   e8: () => (/* binding */ matchPathFilters),
 /* harmony export */   jC: () => (/* binding */ countSeverity),
 /* harmony export */   sB: () => (/* binding */ matchGlob),
-/* harmony export */   tH: () => (/* binding */ countFindingsAtOrAbove)
+/* harmony export */   tH: () => (/* binding */ countFindingsAtOrAbove),
+/* harmony export */   xf: () => (/* binding */ matchPullRequestState)
 /* harmony export */ });
 /* unused harmony exports clearGlobCache, getGlobCacheSize */
 /* harmony import */ var _types_index_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(78481);

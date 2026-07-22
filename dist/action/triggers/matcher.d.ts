@@ -11,6 +11,15 @@ export declare function getGlobCacheSize(): number;
  */
 export declare function matchGlob(pattern: string, path: string): boolean;
 /**
+ * Check if a file list matches the path filters.
+ * Returns true if paths match (or no filters), false if all files are excluded.
+ */
+export declare function matchPathFilters(filters: {
+    paths?: string[];
+    ignorePaths?: string[];
+}, filenames: string[] | undefined): boolean;
+export declare function matchPullRequestState(trigger: ResolvedTrigger, context: EventContext): boolean;
+/**
  * Return a copy of the context with only files matching the path filters.
  * If no filters are set, returns the original context unchanged (no copy).
  */

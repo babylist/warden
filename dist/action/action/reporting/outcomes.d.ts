@@ -18,6 +18,7 @@ export declare const DedupeDetailSchema: z.ZodObject<{
     existingCommentId: z.ZodOptional<z.ZodNumber>;
     existingThreadId: z.ZodOptional<z.ZodString>;
     existingResolved: z.ZodOptional<z.ZodBoolean>;
+    existingSkills: z.ZodOptional<z.ZodArray<z.ZodString>>;
     actor: z.ZodOptional<z.ZodString>;
 }, z.core.$strip>;
 export type DedupeDetail = z.infer<typeof DedupeDetailSchema>;
@@ -143,6 +144,7 @@ export declare const FindingObservationSchema: z.ZodDiscriminatedUnion<[z.ZodObj
         existingCommentId: z.ZodOptional<z.ZodNumber>;
         existingThreadId: z.ZodOptional<z.ZodString>;
         existingResolved: z.ZodOptional<z.ZodBoolean>;
+        existingSkills: z.ZodOptional<z.ZodArray<z.ZodString>>;
         actor: z.ZodOptional<z.ZodString>;
     }, z.core.$strip>;
 }, z.core.$strip>, z.ZodObject<{

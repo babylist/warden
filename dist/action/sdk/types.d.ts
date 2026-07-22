@@ -16,6 +16,9 @@ export interface FindingProcessingEvent {
     finding: Finding;
     reason?: string;
     replacement?: Finding;
+    /** Model that produced this stage's verdict/replacement, when known. */
+    model?: string;
+    runtime?: RuntimeName;
 }
 /** Default concurrency for file-level parallel processing (standalone SDK usage only) */
 export declare const DEFAULT_FILE_CONCURRENCY = 5;

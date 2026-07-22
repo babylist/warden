@@ -37,6 +37,8 @@ export declare function loadLayeredWardenConfig(repoPath: string, options?: Laye
 export interface ResolvedTrigger {
     /** Stable replay identity derived from the skill and trigger configuration */
     id: string;
+    /** Short stable hash of `id`, safe to use as a compact cross-artifact key */
+    skillExecutionId: string;
     /** Skill name (used for display and deduplication) */
     name: string;
     /** Skill reference (same as name, for downstream compatibility) */

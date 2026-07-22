@@ -1,6 +1,10 @@
 import { z } from 'zod';
 import type { EventContext, SkillReport } from '../../types/index.js';
 import type { FindingObservation } from './outcomes.js';
+declare const TriggerErrorSchema: z.ZodObject<{
+    name: z.ZodOptional<z.ZodString>;
+    message: z.ZodString;
+}, z.core.$strip>;
 export declare const TriggerRunResultSchema: z.ZodDiscriminatedUnion<[z.ZodObject<{
     triggerId: z.ZodOptional<z.ZodString>;
     triggerName: z.ZodString;
@@ -137,6 +141,7 @@ export declare const FindingsOutputSchema: z.ZodObject<{
         failedExtractions: z.ZodOptional<z.ZodNumber>;
         error: z.ZodOptional<z.ZodObject<{
             code: z.ZodEnum<{
+                unknown: "unknown";
                 auth_failed: "auth_failed";
                 provider_unavailable: "provider_unavailable";
                 sdk_error: "sdk_error";
@@ -154,7 +159,6 @@ export declare const FindingsOutputSchema: z.ZodObject<{
                 extraction_llm_failed: "extraction_llm_failed";
                 extraction_llm_timeout: "extraction_llm_timeout";
                 extraction_no_api_key: "extraction_no_api_key";
-                unknown: "unknown";
             }>;
             message: z.ZodString;
             timestamp: z.ZodOptional<z.ZodString>;
@@ -384,6 +388,7 @@ export declare const FindingsOutputSchema: z.ZodObject<{
             existingCommentId: z.ZodOptional<z.ZodNumber>;
             existingThreadId: z.ZodOptional<z.ZodString>;
             existingResolved: z.ZodOptional<z.ZodBoolean>;
+            existingSkills: z.ZodOptional<z.ZodArray<z.ZodString>>;
             actor: z.ZodOptional<z.ZodString>;
         }, z.core.$strip>;
     }, z.core.$strip>, z.ZodObject<{
@@ -558,6 +563,7 @@ export declare function buildConfiguredSkillsList({ allTriggers, matchedTriggers
     name: string;
     triggered: boolean;
 }[];
+export declare function serializeTriggerError(error: unknown): z.infer<typeof TriggerErrorSchema>;
 /** Build the public findings export payload. */
 export declare function buildFindingsOutput(reports: SkillReport[], context: EventContext, findingObservations?: FindingObservation[], options?: BuildFindingsOutputOptions): FindingsOutput;
 export {};

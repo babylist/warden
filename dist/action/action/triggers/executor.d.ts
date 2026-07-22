@@ -8,6 +8,7 @@
 import type { ResolvedTrigger } from '../../config/loader.js';
 import type { EventContext, SkillReport, SeverityThreshold, ConfidenceThreshold } from '../../types/index.js';
 import type { RenderResult } from '../../output/types.js';
+import type { FindingProcessingEvent } from '../../sdk/runner.js';
 import type { Semaphore } from '../../utils/index.js';
 import type { ProviderFailureCircuitBreaker } from '../../sdk/circuit-breaker.js';
 /**
@@ -78,6 +79,8 @@ export interface TriggerResult {
     checkRunUrl?: string;
     maxFindings?: number;
     error?: unknown;
+    /** Verification/merge events for this run, independent of CLI debug verbosity. */
+    findingProcessingEvents?: FindingProcessingEvent[];
 }
 /**
  * Execute a single trigger and return results.

@@ -1117,7 +1117,7 @@ __webpack_require__.r(__webpack_exports__);
 /* harmony import */ var zod__WEBPACK_IMPORTED_MODULE_9__ = __webpack_require__(7096);
 /* harmony import */ var _sentry_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(30340);
 /* harmony import */ var _sentry_trace_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(68016);
-/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(36137);
+/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(82272);
 /* harmony import */ var _haiku_js__WEBPACK_IMPORTED_MODULE_4__ = __webpack_require__(39026);
 /* harmony import */ var _errors_js__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(98229);
 /* harmony import */ var _otel_js__WEBPACK_IMPORTED_MODULE_6__ = __webpack_require__(85884);
@@ -2195,7 +2195,7 @@ function startTraceRecorder(parentSpan) {
 /* harmony import */ var _sentry_node__WEBPACK_IMPORTED_MODULE_10__ = __webpack_require__(33199);
 /* harmony import */ var _sentry_node__WEBPACK_IMPORTED_MODULE_11__ = __webpack_require__(93545);
 /* harmony import */ var _types_index_js__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(78481);
-/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(36137);
+/* harmony import */ var _utils_index_js__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(82272);
 /* harmony import */ var _sdk_otel_js__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(85884);
 /* harmony import */ var _sdk_pricing_js__WEBPACK_IMPORTED_MODULE_3__ = __webpack_require__(64602);
 
@@ -2589,11 +2589,13 @@ async function flushSentry(timeoutMs = 2000) {
 /* harmony export */   Ne: () => (/* binding */ HunkTraceSchema),
 /* harmony export */   Ni: () => (/* binding */ filterFindings),
 /* harmony export */   Ot: () => (/* binding */ SourceSnippetSchema),
+/* harmony export */   Rc: () => (/* binding */ SeveritySchema),
 /* harmony export */   TH: () => (/* binding */ LocationSchema),
 /* harmony export */   Ur: () => (/* binding */ UsageStatsSchema),
 /* harmony export */   bN: () => (/* binding */ GitHubEventTypeSchema),
 /* harmony export */   hA: () => (/* binding */ EventContextSchema),
 /* harmony export */   kV: () => (/* binding */ countPatchChunks),
+/* harmony export */   m3: () => (/* binding */ ConfidenceSchema),
 /* harmony export */   mC: () => (/* binding */ findingLine),
 /* harmony export */   o2: () => (/* binding */ UsageAttributionSchema),
 /* harmony export */   p_: () => (/* binding */ FindingSchema),
@@ -2601,7 +2603,7 @@ async function flushSentry(timeoutMs = 2000) {
 /* harmony export */   r6: () => (/* binding */ SkillReportSchema),
 /* harmony export */   xb: () => (/* binding */ AuxiliaryUsageMapSchema)
 /* harmony export */ });
-/* unused harmony exports normalizeSeverity, SeveritySchema, ConfidenceSchema, CONFIDENCE_ORDER, filterFindingsBySeverity, filterFindingsByConfidence, SourceSnippetLineSchema, AuxiliaryUsageAttributionMapSchema, FileReportSchema, ErrorCodeSchema, isExtractionErrorCode, HunkFailureSchema, TraceSpanSchema, PullRequestActionSchema, FileChangeSchema, DiffContextSourceSchema, PullRequestContextSchema, RepositoryContextSchema, RetryConfigSchema */
+/* unused harmony exports normalizeSeverity, CONFIDENCE_ORDER, filterFindingsBySeverity, filterFindingsByConfidence, SourceSnippetLineSchema, AuxiliaryUsageAttributionMapSchema, FileReportSchema, ErrorCodeSchema, isExtractionErrorCode, HunkFailureSchema, TraceSpanSchema, PullRequestActionSchema, FileChangeSchema, DiffContextSourceSchema, PullRequestContextSchema, RepositoryContextSchema, RetryConfigSchema */
 /* harmony import */ var zod__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(53391);
 
 /**
@@ -3138,7 +3140,7 @@ function execGitNonInteractive(args, options) {
 
 /***/ }),
 
-/***/ 36137:
+/***/ 82272:
 /***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
 
 
@@ -3148,7 +3150,7 @@ __webpack_require__.d(__webpack_exports__, {
   jf: () => (/* reexport */ Semaphore),
   cw: () => (/* binding */ bridgeWardenProviderApiKeyEnv),
   ZD: () => (/* binding */ escapeHtml),
-  HF: () => (/* reexport */ getVersion),
+  HF: () => (/* reexport */ version/* getVersion */.H),
   kD: () => (/* reexport */ runPool)
 });
 
@@ -3223,29 +3225,8 @@ async function processInBatches(items, fn, batchSize) {
     return runPool(items, batchSize, fn);
 }
 
-// EXTERNAL MODULE: external "node:fs"
-var external_node_fs_ = __webpack_require__(73024);
-// EXTERNAL MODULE: external "node:path"
-var external_node_path_ = __webpack_require__(76760);
-// EXTERNAL MODULE: external "node:url"
-var external_node_url_ = __webpack_require__(73136);
-;// CONCATENATED MODULE: ./src/utils/version.ts
-
-
-
-let cachedVersion;
-function getVersion() {
-    if (cachedVersion)
-        return cachedVersion;
-    const __dirname = (0,external_node_path_.dirname)((0,external_node_url_.fileURLToPath)(import.meta.url));
-    const pkg = JSON.parse((0,external_node_fs_.readFileSync)((0,external_node_path_.join)(__dirname, '..', '..', 'package.json'), 'utf-8'));
-    cachedVersion = pkg.version;
-    return cachedVersion;
-}
-function getMajorVersion() {
-    return getVersion().split('.')[0] ?? '0';
-}
-
+// EXTERNAL MODULE: ./src/utils/version.ts
+var version = __webpack_require__(56317);
 // EXTERNAL MODULE: ./src/utils/exec.ts
 var exec = __webpack_require__(82224);
 // EXTERNAL MODULE: ./src/utils/path.ts
@@ -3381,6 +3362,38 @@ function resolvePathTarget(path, baseDir) {
         return path;
     }
     return baseDir ? (0,node_path__WEBPACK_IMPORTED_MODULE_2__.join)(baseDir, path) : path;
+}
+
+
+/***/ }),
+
+/***/ 56317:
+/***/ ((__unused_webpack_module, __webpack_exports__, __webpack_require__) => {
+
+/* harmony export */ __webpack_require__.d(__webpack_exports__, {
+/* harmony export */   H: () => (/* binding */ getVersion)
+/* harmony export */ });
+/* unused harmony export getMajorVersion */
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0__ = __webpack_require__(73024);
+/* harmony import */ var node_fs__WEBPACK_IMPORTED_MODULE_0___default = /*#__PURE__*/__webpack_require__.n(node_fs__WEBPACK_IMPORTED_MODULE_0__);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1__ = __webpack_require__(76760);
+/* harmony import */ var node_path__WEBPACK_IMPORTED_MODULE_1___default = /*#__PURE__*/__webpack_require__.n(node_path__WEBPACK_IMPORTED_MODULE_1__);
+/* harmony import */ var node_url__WEBPACK_IMPORTED_MODULE_2__ = __webpack_require__(73136);
+/* harmony import */ var node_url__WEBPACK_IMPORTED_MODULE_2___default = /*#__PURE__*/__webpack_require__.n(node_url__WEBPACK_IMPORTED_MODULE_2__);
+
+
+
+let cachedVersion;
+function getVersion() {
+    if (cachedVersion)
+        return cachedVersion;
+    const __dirname = (0,node_path__WEBPACK_IMPORTED_MODULE_1__.dirname)((0,node_url__WEBPACK_IMPORTED_MODULE_2__.fileURLToPath)(import.meta.url));
+    const pkg = JSON.parse((0,node_fs__WEBPACK_IMPORTED_MODULE_0__.readFileSync)((0,node_path__WEBPACK_IMPORTED_MODULE_1__.join)(__dirname, '..', '..', 'package.json'), 'utf-8'));
+    cachedVersion = pkg.version;
+    return cachedVersion;
+}
+function getMajorVersion() {
+    return getVersion().split('.')[0] ?? '0';
 }
 
 
