@@ -66,6 +66,8 @@ function writeSchemaV2ScheduleOutputs(
       runId,
       runAttempt,
       actionRef: inputs.actionRef,
+      failOn: inputs.failOn,
+      reportOn: inputs.reportOn,
     });
     console.log(`Metadata written to ${metadataPath}`);
     const findingsV2Path = writeFindingsOutputV2(results, matchedTriggers, [], context, { runId });

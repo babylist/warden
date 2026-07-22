@@ -681,6 +681,59 @@ describe('runPRWorkflow', () => {
       }
     });
 
+    it('does not guess a skillExecutionId for a resolved comment when multiple triggers share its skill name', async () => {
+      mockRunSkillTask.mockResolvedValue({ name: 'test-trigger', report: createSkillReport() });
+
+      await runPRWorkflow(
+        mockOctokit,
+        createDefaultInputs({ mode: 'analyze', outputSchemaVersion: '2' }),
+        'pull_request',
+        EVENT_PAYLOAD_PATH,
+        DUPLICATE_TRIGGER_FIXTURES_DIR
+      );
+
+      const metadataFile = getMetadataOutputPath(DUPLICATE_TRIGGER_FIXTURES_DIR);
+      const findingsFile = getFindingsOutputPathV2(DUPLICATE_TRIGGER_FIXTURES_DIR);
+
+      mockFetchExistingComments.mockResolvedValue([
+        createExistingWardenComment({ skills: ['test-skill'] }),
+      ]);
+      mockEvaluateFixAttempts.mockResolvedValue({
+        toResolve: [createExistingWardenComment({ skills: ['test-skill'] })],
+        toReply: [],
+        evaluations: [],
+        skipped: 0,
+        evaluated: 1,
+        failedEvaluations: 0,
+        uniqueFindingsEvaluated: 1,
+        uniqueFindingsCodeChanged: 1,
+        uniqueFindingsResolved: 1,
+        usage: { inputTokens: 0, outputTokens: 0, costUSD: 0 },
+      });
+
+      let findingsFileAfterReport: string;
+      try {
+        await runPRWorkflow(
+          mockOctokit,
+          createDefaultInputs({ mode: 'report', outputSchemaVersion: '2', metadataFile, findingsFile }),
+          'pull_request',
+          EVENT_PAYLOAD_PATH,
+          DUPLICATE_TRIGGER_FIXTURES_DIR
+        );
+        findingsFileAfterReport = readFileSync(findingsFile, 'utf-8');
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+      }
+
+      const findingsV2 = JSON.parse(findingsFileAfterReport);
+      const resolved = findingsV2.findingObservations.find(
+        (o: { outcome: string }) => o.outcome === 'resolved'
+      );
+      expect(resolved?.origin.skillName).toBe('test-skill');
+      expect(resolved?.origin.skillExecutionId).toBeFalsy();
+    });
+
     it('report mode renders checks and reviews from report-step inputs', async () => {
       const report = createSkillReport({
         findings: [

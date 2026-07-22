@@ -196,6 +196,22 @@ describe('buildMetadataOutputV2', () => {
       { skillName: 'security-review', triggerId: 'skipped-id', triggerName: 'skipped-trigger', reason: 'no_changes' },
     ]);
   });
+
+  it('falls back to the action-level failOn/reportOn when the primary trigger has no override', () => {
+    const matched = createTrigger({ failOn: undefined, reportOn: undefined });
+
+    const output = buildMetadataOutputV2(
+      createContext(),
+      [matched],
+      [matched],
+      [createResult()],
+      { runId: '123', generatedAt: '2026-01-01T00:00:00.000Z', failOn: 'high', reportOn: 'medium' }
+    );
+
+    expect(output.resolvedDefaults).toEqual(
+      expect.objectContaining({ failOn: 'high', reportOn: 'medium' })
+    );
+  });
 });
 
 describe('buildFindingsOutputV2', () => {

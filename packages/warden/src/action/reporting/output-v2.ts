@@ -16,6 +16,7 @@ import type {
   AuxiliaryUsageMap,
   EventContext,
   Severity,
+  SeverityThreshold,
 } from '../../types/index.js';
 import type { ResolvedTrigger } from '../../config/loader.js';
 import { matchPullRequestState } from '../../triggers/matcher.js';
@@ -384,6 +385,10 @@ export interface BuildMetadataOutputV2Options {
   runAttempt?: string;
   generatedAt?: string;
   actionRef?: string;
+  /** Action-level fallback used by every trigger via `trigger.failOn ?? inputs.failOn`. */
+  failOn?: SeverityThreshold;
+  /** Action-level fallback used by every trigger via `trigger.reportOn ?? inputs.reportOn`. */
+  reportOn?: SeverityThreshold;
 }
 
 export function buildMetadataOutputV2(
@@ -453,8 +458,8 @@ export function buildMetadataOutputV2(
     triggerResults,
     ...(primary && {
       resolvedDefaults: {
-        failOn: primary.failOn,
-        reportOn: primary.reportOn,
+        failOn: primary.failOn ?? options.failOn,
+        reportOn: primary.reportOn ?? options.reportOn,
         minConfidence: primary.minConfidence,
         model: primary.model,
         auxiliaryModel: primary.auxiliaryModel,
@@ -467,11 +472,18 @@ export function buildMetadataOutputV2(
 }
 
 function skillExecutionIdByNameFrom(matchedTriggers: ResolvedTrigger[]): Map<string, string> {
-  const skillExecutionIdByName = new Map<string, string>();
+  const counts = new Map<string, number>();
+  const idByName = new Map<string, string>();
   for (const t of matchedTriggers) {
-    if (!skillExecutionIdByName.has(t.skill)) {
-      skillExecutionIdByName.set(t.skill, t.skillExecutionId);
+    counts.set(t.skill, (counts.get(t.skill) ?? 0) + 1);
+    if (!idByName.has(t.skill)) {
+      idByName.set(t.skill, t.skillExecutionId);
     }
+  }
+
+  const skillExecutionIdByName = new Map<string, string>();
+  for (const [name, id] of idByName) {
+    if (counts.get(name) === 1) skillExecutionIdByName.set(name, id);
   }
   return skillExecutionIdByName;
 }
