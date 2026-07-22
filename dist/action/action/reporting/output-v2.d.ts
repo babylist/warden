@@ -968,6 +968,8 @@ export interface BuildMetadataOutputV2Options {
     reportOn?: SeverityThreshold;
 }
 export declare function buildMetadataOutputV2(context: EventContext, resolvedTriggers: ResolvedTrigger[], matchedTriggers: ResolvedTrigger[], results: TriggerResult[], options: BuildMetadataOutputV2Options): WardenMetadata;
+/** skillExecutionId per skill name, restricted to names with exactly one current execution. */
+export declare function skillExecutionIdByNameFrom(matchedTriggers: ResolvedTrigger[]): Map<string, string>;
 /**
  * Rebuild only the observation-derived parts of a v2 findings payload:
  * `findingObservations`, `summary.byOutcome`, and any newly-discovered

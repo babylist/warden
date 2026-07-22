@@ -1308,7 +1308,8 @@ function setupAuthEnv(inputs) {
 /* harmony export */   I2: () => (/* binding */ WardenMetadataSchema),
 /* harmony export */   LE: () => (/* binding */ buildMetadataOutputV2),
 /* harmony export */   V6: () => (/* binding */ patchFindingsOutputV2Observations),
-/* harmony export */   WS: () => (/* binding */ buildFindingsOutputV2)
+/* harmony export */   WS: () => (/* binding */ buildFindingsOutputV2),
+/* harmony export */   rQ: () => (/* binding */ skillExecutionIdByNameFrom)
 /* harmony export */ });
 /* unused harmony exports SeverityBreakdownSchema, SkippedTriggerReasonSchema, TriggerRunResultV2Schema, SkillExecutionSchema, ExportedFindingV2Schema, DiscardedFindingSchema, DedupeDetailV2Schema, FindingObservationV2Schema */
 /* harmony import */ var zod__WEBPACK_IMPORTED_MODULE_5__ = __webpack_require__(53391);
@@ -1698,6 +1699,7 @@ function buildMetadataOutputV2(context, resolvedTriggers, matchedTriggers, resul
         }),
     });
 }
+/** skillExecutionId per skill name, restricted to names with exactly one current execution. */
 function skillExecutionIdByNameFrom(matchedTriggers) {
     const counts = new Map();
     const idByName = new Map();
@@ -4002,28 +4004,8 @@ function wouldPostBlockingReview(result) {
  * Returns whether all Warden comments are resolved after evaluation.
  * Report mode passes failOnWriteError so GitHub write failures abort delivery.
  */
-/**
- * skillExecutionId per skill name, restricted to names with exactly one
- * current execution. A resolved/stale comment's skill name can't otherwise
- * be safely mapped to one execution when a skill has multiple triggers.
- */
-function unambiguousSkillExecutionIdByName(matchedTriggers) {
-    const counts = new Map();
-    const idByName = new Map();
-    for (const trigger of matchedTriggers) {
-        counts.set(trigger.skill, (counts.get(trigger.skill) ?? 0) + 1);
-        if (!idByName.has(trigger.skill))
-            idByName.set(trigger.skill, trigger.skillExecutionId);
-    }
-    const result = new Map();
-    for (const [name, id] of idByName) {
-        if (counts.get(name) === 1)
-            result.set(name, id);
-    }
-    return result;
-}
 async function evaluateFixesAndResolveStale(octokit, context, fetchedComments, allFindings, activeWardenCommentIds, canResolveStale, anthropicApiKey, auxiliaryOptions, gate, matchedTriggers, options = {}) {
-    const skillExecutionIdByName = unambiguousSkillExecutionIdByName(matchedTriggers);
+    const skillExecutionIdByName = (0,_reporting_output_v2_js__WEBPACK_IMPORTED_MODULE_22__/* .skillExecutionIdByNameFrom */ .rQ)(matchedTriggers);
     const wardenComments = fetchedComments.filter((c) => c.isWarden);
     const commentsResolvedByFixEval = new Set();
     const commentsEvaluatedByFixEval = new Set();
@@ -5313,6 +5295,7 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
     console.log(`Repo config path: ${inputs.configPath}`);
     (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .logGroupEnd */ .TN)();
     let scheduleTriggers;
+    let allResolvedTriggers;
     let skillRootsByName;
     try {
         const layered = (0,_config_loader_js__WEBPACK_IMPORTED_MODULE_0__/* .loadLayeredWardenConfig */ .M3)(repoPath, {
@@ -5321,8 +5304,8 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
             onWarning: (message) => console.log(`::warning::${message}`),
         });
         skillRootsByName = (0,_config_loader_js__WEBPACK_IMPORTED_MODULE_0__/* .buildSkillRootsByName */ .hd)(repoPath, layered, inputs.baseSkillRoot);
-        scheduleTriggers = (0,_config_loader_js__WEBPACK_IMPORTED_MODULE_0__/* .resolveLayeredSkillConfigs */ .Ln)(layered, undefined, skillRootsByName)
-            .filter((t) => t.type === 'schedule');
+        allResolvedTriggers = (0,_config_loader_js__WEBPACK_IMPORTED_MODULE_0__/* .resolveLayeredSkillConfigs */ .Ln)(layered, undefined, skillRootsByName);
+        scheduleTriggers = allResolvedTriggers.filter((t) => t.type === 'schedule');
     }
     catch (error) {
         if (error instanceof _config_loader_js__WEBPACK_IMPORTED_MODULE_0__/* .ConfigLoadError */ .tx &&
@@ -5375,12 +5358,14 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
             repoPath,
         };
         try {
-            (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)([], emptyContext, [], { configuredSkills: [] });
+            (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)([], emptyContext, [], {
+                configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_10__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: allResolvedTriggers, matchedTriggers: [] }),
+            });
         }
         catch (writeError) {
             console.error(`::warning::Failed to write findings output: ${writeError}`);
         }
-        writeSchemaV2ScheduleOutputs(inputs, emptyContext, scheduleTriggers, [], []);
+        writeSchemaV2ScheduleOutputs(inputs, emptyContext, allResolvedTriggers, [], []);
         return;
     }
     // Get repo info from environment
@@ -5534,14 +5519,14 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
     };
     try {
         const findingsPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)(allReports, scheduleContext, [], {
-            configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_10__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: scheduleTriggers, matchedTriggers }),
+            configuredSkills: (0,_reporting_output_js__WEBPACK_IMPORTED_MODULE_10__/* .buildConfiguredSkillsList */ .BA)({ allTriggers: allResolvedTriggers, matchedTriggers }),
         });
         console.log(`Findings written to ${findingsPath}`);
     }
     catch (error) {
         console.error(`::warning::Failed to write findings output: ${error}`);
     }
-    writeSchemaV2ScheduleOutputs(inputs, scheduleContext, scheduleTriggers, matchedTriggers, results);
+    writeSchemaV2ScheduleOutputs(inputs, scheduleContext, allResolvedTriggers, matchedTriggers, results);
     if (shouldFailAction) {
         (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .setFailed */ .C1)(failureReasons.join('; '));
     }
