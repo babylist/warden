@@ -608,6 +608,79 @@ describe('runPRWorkflow', () => {
       expect(postedBodies.some((body) => body.includes('Finding from execution 2'))).toBe(true);
     });
 
+    it('report mode rejects a v2 findings file with ambiguous duplicate execution triggerIds', async () => {
+      mockRunSkillTask.mockResolvedValue({ name: 'test-trigger', report: createSkillReport() });
+
+      await runPRWorkflow(
+        mockOctokit,
+        createDefaultInputs({ mode: 'analyze', outputSchemaVersion: '2' }),
+        'pull_request',
+        EVENT_PAYLOAD_PATH,
+        FIXTURES_DIR
+      );
+
+      const metadataFile = getMetadataOutputPath(FIXTURES_DIR);
+      const findingsFile = getFindingsOutputPathV2(FIXTURES_DIR);
+
+      const findings = JSON.parse(readFileSync(findingsFile, 'utf-8'));
+      findings.skillExecutions.push({ ...findings.skillExecutions[0], skillExecutionId: 'exec-duplicate' });
+      writeFileSync(findingsFile, JSON.stringify(findings, null, 2));
+
+      try {
+        await expect(
+          runPRWorkflow(
+            mockOctokit,
+            createDefaultInputs({ mode: 'report', outputSchemaVersion: '2', metadataFile, findingsFile }),
+            'pull_request',
+            EVENT_PAYLOAD_PATH,
+            FIXTURES_DIR
+          )
+        ).rejects.toThrow('ambiguous duplicate trigger result');
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+      }
+    });
+
+    it('report mode rejects a v2 findings file with executions that no longer match current config', async () => {
+      mockRunSkillTask.mockResolvedValue({ name: 'test-trigger', report: createSkillReport() });
+
+      await runPRWorkflow(
+        mockOctokit,
+        createDefaultInputs({ mode: 'analyze', outputSchemaVersion: '2' }),
+        'pull_request',
+        EVENT_PAYLOAD_PATH,
+        FIXTURES_DIR
+      );
+
+      const metadataFile = getMetadataOutputPath(FIXTURES_DIR);
+      const findingsFile = getFindingsOutputPathV2(FIXTURES_DIR);
+
+      const findings = JSON.parse(readFileSync(findingsFile, 'utf-8'));
+      findings.skillExecutions.push({
+        ...findings.skillExecutions[0],
+        triggerId: 'stale-trigger-removed-from-config',
+        skillExecutionId: 'exec-stale',
+        skillName: 'removed-skill',
+      });
+      writeFileSync(findingsFile, JSON.stringify(findings, null, 2));
+
+      try {
+        await expect(
+          runPRWorkflow(
+            mockOctokit,
+            createDefaultInputs({ mode: 'report', outputSchemaVersion: '2', metadataFile, findingsFile }),
+            'pull_request',
+            EVENT_PAYLOAD_PATH,
+            FIXTURES_DIR
+          )
+        ).rejects.toThrow('do not match current config');
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+      }
+    });
+
     it('report mode renders checks and reviews from report-step inputs', async () => {
       const report = createSkillReport({
         findings: [

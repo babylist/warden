@@ -125,22 +125,22 @@ async function runScheduleWorkflowInner(
       setOutput('findings-count', 0);
       setOutput('high-count', 0);
       setOutput('summary', 'No warden.toml found');
+      const fullName = process.env['GITHUB_REPOSITORY'] ?? '';
+      const [o = '', n = ''] = fullName.split('/');
+      workflowSpan.setAttribute('warden.trigger.count', 0);
+      workflowSpan.setAttribute('warden.finding.count', 0);
+      const emptyContext: EventContext = {
+        eventType: 'schedule',
+        action: 'scheduled',
+        repository: { owner: o, name: n, fullName, defaultBranch: '' },
+        repoPath,
+      };
       try {
-        const fullName = process.env['GITHUB_REPOSITORY'] ?? '';
-        const [o = '', n = ''] = fullName.split('/');
-        workflowSpan.setAttribute('warden.trigger.count', 0);
-        workflowSpan.setAttribute('warden.finding.count', 0);
-        const emptyContext: EventContext = {
-          eventType: 'schedule',
-          action: 'scheduled',
-          repository: { owner: o, name: n, fullName, defaultBranch: '' },
-          repoPath,
-        };
         writeFindingsOutput([], emptyContext);
-        writeSchemaV2ScheduleOutputs(inputs, emptyContext, [], [], []);
       } catch (writeError) {
         console.error(`::warning::Failed to write findings output: ${writeError}`);
       }
+      writeSchemaV2ScheduleOutputs(inputs, emptyContext, [], [], []);
       return;
     }
     throw error;
@@ -160,20 +160,20 @@ async function runScheduleWorkflowInner(
     setOutput('high-count', 0);
     setOutput('summary', 'No schedule triggers configured');
     workflowSpan.setAttribute('warden.finding.count', 0);
+    const fullName = process.env['GITHUB_REPOSITORY'] ?? '';
+    const [o = '', n = ''] = fullName.split('/');
+    const emptyContext: EventContext = {
+      eventType: 'schedule',
+      action: 'scheduled',
+      repository: { owner: o, name: n, fullName, defaultBranch: '' },
+      repoPath,
+    };
     try {
-      const fullName = process.env['GITHUB_REPOSITORY'] ?? '';
-      const [o = '', n = ''] = fullName.split('/');
-      const emptyContext: EventContext = {
-        eventType: 'schedule',
-        action: 'scheduled',
-        repository: { owner: o, name: n, fullName, defaultBranch: '' },
-        repoPath,
-      };
       writeFindingsOutput([], emptyContext);
-      writeSchemaV2ScheduleOutputs(inputs, emptyContext, scheduleTriggers, [], []);
     } catch (writeError) {
       console.error(`::warning::Failed to write findings output: ${writeError}`);
     }
+    writeSchemaV2ScheduleOutputs(inputs, emptyContext, scheduleTriggers, [], []);
     return;
   }
 

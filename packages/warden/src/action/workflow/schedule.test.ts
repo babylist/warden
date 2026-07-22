@@ -34,6 +34,7 @@ vi.mock('./base.js', async () => {
   return {
     ...actual,
     setFailed: mockedSetFailed,
+    writeFindingsOutput: vi.fn(actual['writeFindingsOutput'] as (...args: unknown[]) => unknown),
     ensureClaudeAuth: vi.fn((inputs: ActionInputs): void => {
       if (inputs.anthropicApiKey || inputs.oauthToken) {
         return;
@@ -103,7 +104,7 @@ import { runSkill } from '../../sdk/runner.js';
 import { buildScheduleEventContext } from '../../event/schedule-context.js';
 import { createOrUpdateIssue } from '../../output/github-issues.js';
 import { resolveSkillAsync } from '../../skills/loader.js';
-import { setFailed } from './base.js';
+import { setFailed, writeFindingsOutput } from './base.js';
 import { runScheduleWorkflow } from './schedule.js';
 import { clearSkillsCache } from '../../skills/loader.js';
 
@@ -589,6 +590,29 @@ describe('runScheduleWorkflow', () => {
 
       expect(() => readFileSync(metadataFile, 'utf-8')).toThrow();
       expect(() => readFileSync(findingsFile, 'utf-8')).toThrow();
+    });
+
+    it('still writes schema-v2 files on the no-config early return when the v1 write throws', async () => {
+      vi.mocked(writeFindingsOutput).mockImplementationOnce(() => {
+        throw new Error('disk full');
+      });
+
+      const metadataFile = getMetadataOutputPath(NO_CONFIG_FIXTURES);
+      const findingsFile = getFindingsOutputPathV2(NO_CONFIG_FIXTURES);
+
+      try {
+        await runScheduleWorkflow(
+          mockOctokit,
+          createDefaultInputs({ outputSchemaVersion: '2' }),
+          NO_CONFIG_FIXTURES
+        );
+
+        const metadata = JSON.parse(readFileSync(metadataFile, 'utf-8'));
+        expect(metadata.schemaVersion).toBe('2');
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+      }
     });
   });
 
