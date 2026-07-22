@@ -38,6 +38,7 @@ import {
 } from './base.js';
 import type { TriggerResult } from '../triggers/executor.js';
 import type { FindingProcessingEvent } from '../../sdk/types.js';
+import { buildConfiguredSkillsList } from '../reporting/output.js';
 import { captureActionTriggerError } from '../error-reporting.js';
 
 // -----------------------------------------------------------------------------
@@ -136,7 +137,7 @@ async function runScheduleWorkflowInner(
         repoPath,
       };
       try {
-        writeFindingsOutput([], emptyContext);
+        writeFindingsOutput([], emptyContext, [], { configuredSkills: [] });
       } catch (writeError) {
         console.error(`::warning::Failed to write findings output: ${writeError}`);
       }
@@ -169,7 +170,7 @@ async function runScheduleWorkflowInner(
       repoPath,
     };
     try {
-      writeFindingsOutput([], emptyContext);
+      writeFindingsOutput([], emptyContext, [], { configuredSkills: [] });
     } catch (writeError) {
       console.error(`::warning::Failed to write findings output: ${writeError}`);
     }
@@ -346,7 +347,9 @@ async function runScheduleWorkflowInner(
     repoPath,
   };
   try {
-    const findingsPath = writeFindingsOutput(allReports, scheduleContext);
+    const findingsPath = writeFindingsOutput(allReports, scheduleContext, [], {
+      configuredSkills: buildConfiguredSkillsList({ allTriggers: scheduleTriggers, matchedTriggers }),
+    });
     console.log(`Findings written to ${findingsPath}`);
   } catch (error) {
     console.error(`::warning::Failed to write findings output: ${error}`);
