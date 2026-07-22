@@ -209,6 +209,8 @@ function notifyVerdict(
       action: 'rejected',
       finding,
       reason: verdict.reason,
+      model: options.model,
+      runtime: options.runtime,
     });
     return;
   }
@@ -220,6 +222,8 @@ function notifyVerdict(
       finding,
       replacement: next,
       reason: verdict.reason,
+      model: options.model,
+      runtime: options.runtime,
     });
   }
 }

@@ -77,6 +77,8 @@ import {
   setWorkflowOutputs,
   getAuthenticatedBotLogin,
   writeFindingsOutput,
+  writeMetadataOutput,
+  writeFindingsOutputV2,
 } from './base.js';
 import { renderSkillReport } from '../../output/renderer.js';
 import {
@@ -85,6 +87,13 @@ import {
   type FindingsOutput,
   type ReplayTriggerResult,
 } from '../reporting/output.js';
+import {
+  WardenMetadataSchema,
+  WardenFindingsSchemaV2,
+  type WardenMetadata,
+  type WardenFindingsV2,
+  type ExportedFindingV2,
+} from '../reporting/output-v2.js';
 
 // -----------------------------------------------------------------------------
 // Phase Result Types
@@ -992,7 +1001,8 @@ async function finalizeWorkflow(
   gate: ReviewFeedbackGate,
   triggerErrors: string[],
   matchedTriggers: ResolvedTrigger[],
-  resolvedTriggers: ResolvedTrigger[]
+  resolvedTriggers: ResolvedTrigger[],
+  inputs: ActionInputs
 ): Promise<void> {
   await dismissPreviousReviewIfResolved(
     octokit,
@@ -1016,6 +1026,23 @@ async function finalizeWorkflow(
     logAction(`Findings written to ${findingsPath}`);
   } catch (error) {
     warnAction(`Failed to write findings output: ${error}`);
+  }
+
+  if (inputs.outputSchemaVersion === '2') {
+    const runId = process.env['GITHUB_RUN_ID'] ?? '';
+    const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
+    try {
+      const metadataPath = writeMetadataOutput(context, resolvedTriggers, matchedTriggers, results, {
+        runId,
+        runAttempt,
+        actionRef: inputs.actionRef,
+      });
+      logAction(`Metadata written to ${metadataPath}`);
+      const findingsV2Path = writeFindingsOutputV2(results, matchedTriggers, findingObservations, context, { runId });
+      logAction(`Findings (v2) written to ${findingsV2Path}`);
+    } catch (error) {
+      warnAction(`Failed to write schema-v2 output: ${error}`);
+    }
   }
 
   // Update core check with overall summary
@@ -1779,8 +1806,175 @@ async function runAnalyzeMode(
     setFailed(`Failed to write findings output: ${error}`);
   }
 
+  if (inputs.outputSchemaVersion === '2') {
+    const runId = process.env['GITHUB_RUN_ID'] ?? '';
+    const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
+    try {
+      const metadataPath = writeMetadataOutput(context, resolvedTriggers, matchedTriggers, results, {
+        runId,
+        runAttempt,
+        actionRef: inputs.actionRef,
+      });
+      logAction(`Metadata written to ${metadataPath}`);
+      const findingsV2Path = writeFindingsOutputV2(results, matchedTriggers, [], context, { runId });
+      logAction(`Findings (v2) written to ${findingsV2Path}`);
+    } catch (error) {
+      setFailed(`Failed to write schema-v2 output: ${error}`);
+    }
+  }
+
   handleTriggerErrors(collectTriggerErrors(results), matchedTriggers.length, { failAll: false });
   logAction(`Analysis complete: ${outputs.findingsCount} total findings`);
+}
+
+function readMetadataFileV2(inputPath: string | undefined, repoPath: string): WardenMetadata {
+  const filePath = resolveFindingsFilePath(inputPath, repoPath);
+
+  try {
+    return WardenMetadataSchema.parse(JSON.parse(readFileSync(filePath, 'utf-8')));
+  } catch (error) {
+    setFailed(`Failed to read metadata file ${filePath}: ${error}`);
+  }
+}
+
+function readFindingsFileV2(inputPath: string | undefined, repoPath: string): WardenFindingsV2 {
+  const filePath = resolveFindingsFilePath(inputPath, repoPath);
+
+  try {
+    return WardenFindingsSchemaV2.parse(JSON.parse(readFileSync(filePath, 'utf-8')));
+  } catch (error) {
+    setFailed(`Failed to read findings file ${filePath}: ${error}`);
+  }
+}
+
+function validateV2OutputsMatchContext(
+  metadata: WardenMetadata,
+  findings: WardenFindingsV2,
+  context: EventContext
+): void {
+  if (metadata.runId !== findings.runId || metadata.schemaVersion !== findings.schemaVersion) {
+    setFailed('Metadata file and findings file do not share the same runId/schemaVersion');
+  }
+
+  if (metadata.repository.fullName !== context.repository.fullName) {
+    setFailed(
+      `Metadata file is for ${metadata.repository.fullName}, but this workflow is for ${context.repository.fullName}`
+    );
+  }
+
+  if (metadata.event !== context.eventType) {
+    setFailed(`Metadata file event ${metadata.event} does not match ${context.eventType}`);
+  }
+
+  if (!context.pullRequest) {
+    return;
+  }
+
+  if (!metadata.pullRequest) {
+    setFailed('Metadata file is missing pull request metadata');
+  }
+
+  if (metadata.pullRequest.number !== context.pullRequest.number) {
+    setFailed(
+      `Metadata file is for PR #${metadata.pullRequest.number}, but this workflow is for PR #${context.pullRequest.number}`
+    );
+  }
+
+  if (metadata.pullRequest.headSha !== context.pullRequest.headSha) {
+    setFailed(
+      `Metadata file head SHA ${metadata.pullRequest.headSha} does not match current head SHA ${context.pullRequest.headSha}`
+    );
+  }
+}
+
+function toFindingFromV2(finding: ExportedFindingV2): Finding {
+  return {
+    id: finding.id,
+    severity: finding.severity,
+    confidence: finding.confidence,
+    title: finding.title,
+    description: finding.description,
+    verification: finding.verification,
+    location: finding.location,
+    additionalLocations: finding.additionalLocations,
+    sourceSnippet: finding.sourceSnippet,
+  };
+}
+
+/**
+ * Rebuild report-mode trigger results from schema-v2 metadata/findings artifacts,
+ * mirroring buildReportModeResults's v1 join-by-trigger-identity behavior.
+ */
+function buildReportModeResultsV2(
+  metadata: WardenMetadata,
+  findingsOutput: WardenFindingsV2,
+  matchedTriggers: ResolvedTrigger[],
+  inputs: ActionInputs
+): TriggerResult[] {
+  const executionsByTriggerId = new Map(
+    findingsOutput.skillExecutions
+      .filter((execution) => execution.triggerId)
+      .map((execution) => [execution.triggerId as string, execution])
+  );
+  const findingsById = new Map(findingsOutput.findings.map((finding) => [finding.id, finding]));
+  const errorByTriggerId = new Map(
+    (metadata.triggerResults ?? [])
+      .filter((result) => result.status === 'error' && result.triggerId)
+      .map((result) => [result.triggerId as string, (result as { error: { name?: string; message: string } }).error])
+  );
+
+  return matchedTriggers.map((trigger) => {
+    const failOn = trigger.failOn ?? inputs.failOn;
+    const reportOn = trigger.reportOn ?? inputs.reportOn;
+    const minConfidence = trigger.minConfidence ?? 'medium';
+    const requestChanges = trigger.requestChanges ?? inputs.requestChanges;
+    const failCheck = trigger.failCheck ?? inputs.failCheck;
+    const maxFindings = trigger.maxFindings ?? inputs.maxFindings;
+    const baseResult = {
+      triggerId: trigger.id,
+      triggerName: trigger.name,
+      skillName: trigger.skill,
+      failOn,
+      reportOn,
+      minConfidence,
+      reportOnSuccess: trigger.reportOnSuccess,
+      requestChanges,
+      failCheck,
+      maxFindings,
+    };
+
+    const execution = executionsByTriggerId.get(trigger.id);
+    if (!execution) {
+      const error = errorByTriggerId.get(trigger.id);
+      return {
+        ...baseResult,
+        error: error
+          ? deserializeTriggerError(error, `Trigger ${trigger.name} (${trigger.skill}) failed during analysis`)
+          : new Error(`Findings file has no result for trigger ${trigger.name} (${trigger.skill})`),
+      };
+    }
+
+    const findings = execution.findingIds.flatMap((id) => {
+      const finding = findingsById.get(id);
+      return finding ? [toFindingFromV2(finding)] : [];
+    });
+
+    const report: SkillReport = {
+      skill: execution.skillName,
+      summary: execution.summary,
+      findings,
+      durationMs: execution.durationMs,
+      usage: execution.usage,
+      failedHunks: execution.failedHunks,
+      failedExtractions: execution.failedExtractions,
+      error: execution.error,
+      verifierRejections: execution.verifierRejections,
+      model: execution.model,
+      runtime: execution.runtime,
+    };
+
+    return { ...baseResult, report };
+  });
 }
 
 /**
@@ -1802,8 +1996,17 @@ async function runReportMode(
     skippedTriggers,
     skipCoreCheck,
   } = initResult;
-  const findingsOutput = readFindingsFile(inputs.findingsFile, repoPath);
-  validateFindingsMatchContext(findingsOutput, context);
+  let metadataOutputV2: WardenMetadata | undefined;
+  let findingsOutputV2: WardenFindingsV2 | undefined;
+  let findingsOutputV1: FindingsOutput | undefined;
+  if (inputs.outputSchemaVersion === '2') {
+    metadataOutputV2 = readMetadataFileV2(inputs.metadataFile, repoPath);
+    findingsOutputV2 = readFindingsFileV2(inputs.findingsFile, repoPath);
+    validateV2OutputsMatchContext(metadataOutputV2, findingsOutputV2, context);
+  } else {
+    findingsOutputV1 = readFindingsFile(inputs.findingsFile, repoPath);
+    validateFindingsMatchContext(findingsOutputV1, context);
+  }
 
   let results: TriggerResult[] = [];
   let previousReviewInfo: BotReviewInfo | null = null;
@@ -1812,7 +2015,9 @@ async function runReportMode(
   let canResolveStale!: boolean;
 
   try {
-    results = buildReportModeResults(findingsOutput, matchedTriggers, inputs);
+    results = metadataOutputV2 && findingsOutputV2
+      ? buildReportModeResultsV2(metadataOutputV2, findingsOutputV2, matchedTriggers, inputs)
+      : buildReportModeResults(findingsOutputV1 as FindingsOutput, matchedTriggers, inputs);
     await createCompletedSkippedSkillChecks(octokit, context, skippedTriggers);
 
     if (skipCoreCheck) {
@@ -2126,6 +2331,7 @@ export async function runPRWorkflow(
         triggerErrors,
         matchedTriggers,
         resolvedTriggers,
+        inputs,
       );
 
       handleTriggerErrors(triggerErrors, matchedTriggers.length);

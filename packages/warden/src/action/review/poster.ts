@@ -95,6 +95,7 @@ function buildDedupeObservations(
       ...(action.existingComment.id > 0 ? { existingCommentId: action.existingComment.id } : {}),
       existingThreadId: action.existingComment.threadId,
       existingResolved: action.existingComment.isResolved,
+      existingSkills: action.existingComment.skills,
       actor: action.existingComment.actor,
     },
   }));

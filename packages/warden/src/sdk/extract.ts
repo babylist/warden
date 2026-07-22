@@ -575,6 +575,8 @@ Singletons should not appear. Return [] if no findings describe the same issue.`
       finding,
       replacement: findReplacementForAbsorbed(finding, replacements),
       reason: 'same root cause at another location',
+      model: options?.model,
+      runtime: options?.runtime,
     });
   }
 
