@@ -226,6 +226,18 @@ function notifyVerdict(
       model: options.model,
       runtime: options.runtime,
     });
+    return;
+  }
+
+  if (verdict.verdict === 'keep') {
+    options.onFindingProcessing?.({
+      stage: 'verification',
+      action: 'kept',
+      finding,
+      reason: verdict.reason,
+      model: options.model,
+      runtime: options.runtime,
+    });
   }
 }
 

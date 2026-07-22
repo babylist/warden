@@ -132,6 +132,30 @@ describe('verifyFindings', () => {
     }));
   });
 
+  it('emits a kept processing event when the verifier returns keep', async () => {
+    const runtime = mockRuntime('{"verdict":"keep","reason":"still real after tracing"}');
+    vi.mocked(getRuntime).mockReturnValue(runtime);
+    const onFindingProcessing = vi.fn();
+
+    const finding = makeFinding();
+    const result = await verifyFindings([finding], {
+      repoPath: '/repo',
+      skill: makeSkill(),
+      model: 'claude-haiku-4-5',
+      onFindingProcessing,
+    });
+
+    expect(result.findings).toEqual([finding]);
+    expect(onFindingProcessing).toHaveBeenCalledWith({
+      stage: 'verification',
+      action: 'kept',
+      finding,
+      reason: 'still real after tracing',
+      model: 'claude-haiku-4-5',
+      runtime: undefined,
+    });
+  });
+
   it('keeps the original id when revising a finding', async () => {
     const revised = makeFinding({
       id: 'DIFFERENT',

@@ -308,4 +308,73 @@ describe('patchFindingsOutputV2Observations', () => {
     expect(patched.summary.byOutcome).toEqual({ posted: 1, deduped: 0, skipped: 0, resolved: 0, failed: 0 });
     expect(patched.summary.totalFindings).toBe(analyzePhaseOutput.summary.totalFindings);
   });
+
+  it('adds corroborating attribution discovered at report/post time without touching provenance', () => {
+    const primaryTrigger = createTrigger();
+    const corroboratingTrigger = createTrigger({
+      id: 'trigger-2',
+      skillExecutionId: 'exec-2',
+      name: 'security-review-trigger',
+      skill: 'security-review',
+    });
+    const finding = createFinding({ id: 'WRD-101' });
+
+    const analyzePhaseOutput = buildFindingsOutputV2(
+      [createResult({ report: createReport({ findings: [finding] }) })],
+      [primaryTrigger],
+      [],
+      { runId: '123' }
+    );
+    expect(analyzePhaseOutput.findings[0]?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-1', skillName: 'code-review', role: 'primary' },
+    ]);
+
+    // Cross-skill dedup only happens during posting, so this observation only
+    // becomes known during the report phase, after analyze-phase output exists.
+    const reportPhaseObservations: FindingObservation[] = [
+      {
+        outcome: 'deduped',
+        finding: createFinding({ id: 'WRD-201' }),
+        skill: 'security-review',
+        dedupe: { source: 'warden', matchType: 'semantic', existingFindingId: 'WRD-101' },
+      },
+    ];
+
+    const patched = patchFindingsOutputV2Observations(
+      analyzePhaseOutput, [primaryTrigger, corroboratingTrigger], reportPhaseObservations
+    );
+
+    expect(patched.findings[0]?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-1', skillName: 'code-review', role: 'primary' },
+      { skillExecutionId: 'exec-2', skillName: 'security-review', role: 'corroborating', matchType: 'semantic' },
+    ]);
+    expect(patched.findings[0]?.provenance).toEqual(analyzePhaseOutput.findings[0]?.provenance);
+  });
+});
+
+describe('buildFindingsOutputV2 kept verification provenance', () => {
+  it('records a kept verdict in provenance.verification', () => {
+    const trigger = createTrigger();
+    const finding = createFinding({ id: 'WRD-401' });
+    const result = createResult({
+      report: createReport({ findings: [finding] }),
+      findingProcessingEvents: [
+        {
+          stage: 'verification',
+          action: 'kept',
+          finding,
+          reason: 'still real after tracing',
+          model: 'claude-haiku-4-5',
+        },
+      ],
+    });
+
+    const output = buildFindingsOutputV2([result], [trigger], [], { runId: '123' });
+
+    expect(output.findings[0]?.provenance.verification).toEqual({
+      outcome: 'kept',
+      model: 'claude-haiku-4-5',
+      runtime: undefined,
+    });
+  });
 });
