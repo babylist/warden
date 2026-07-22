@@ -94,6 +94,7 @@ import {
   WardenFindingsSchemaV2,
   patchFindingsOutputV2Observations,
   fromAuxiliaryUsageEntries,
+  skillExecutionIdByNameFrom,
   type WardenMetadata,
   type WardenFindingsV2,
   type ExportedFindingV2,
@@ -669,25 +670,6 @@ function wouldPostBlockingReview(result: TriggerResult): boolean {
  * Returns whether all Warden comments are resolved after evaluation.
  * Report mode passes failOnWriteError so GitHub write failures abort delivery.
  */
-/**
- * skillExecutionId per skill name, restricted to names with exactly one
- * current execution. A resolved/stale comment's skill name can't otherwise
- * be safely mapped to one execution when a skill has multiple triggers.
- */
-function unambiguousSkillExecutionIdByName(matchedTriggers: ResolvedTrigger[]): Map<string, string> {
-  const counts = new Map<string, number>();
-  const idByName = new Map<string, string>();
-  for (const trigger of matchedTriggers) {
-    counts.set(trigger.skill, (counts.get(trigger.skill) ?? 0) + 1);
-    if (!idByName.has(trigger.skill)) idByName.set(trigger.skill, trigger.skillExecutionId);
-  }
-  const result = new Map<string, string>();
-  for (const [name, id] of idByName) {
-    if (counts.get(name) === 1) result.set(name, id);
-  }
-  return result;
-}
-
 async function evaluateFixesAndResolveStale(
   octokit: Octokit,
   context: EventContext,
@@ -706,7 +688,7 @@ async function evaluateFixesAndResolveStale(
   autoResolvedByStaleCheck: number;
   findingObservations: FindingObservation[];
 }> {
-  const skillExecutionIdByName = unambiguousSkillExecutionIdByName(matchedTriggers);
+  const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
   const wardenComments = fetchedComments.filter((c) => c.isWarden);
   const commentsResolvedByFixEval = new Set<number>();
   const commentsEvaluatedByFixEval = new Set<number>();
