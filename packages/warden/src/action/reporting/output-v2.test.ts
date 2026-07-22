@@ -6,6 +6,7 @@ import type { FindingObservation } from './outcomes.js';
 import {
   buildFindingsOutputV2,
   buildMetadataOutputV2,
+  fromAuxiliaryUsageEntries,
   patchFindingsOutputV2Observations,
   WardenFindingsSchemaV2,
   WardenMetadataSchema,
@@ -77,6 +78,7 @@ function createResult(overrides: Partial<TriggerResult> = {}): TriggerResult {
     triggerId: 'trigger-id',
     triggerName: 'test-trigger',
     skillName: 'code-review',
+    skillExecutionId: 'exec-1',
     report: createReport(),
     ...overrides,
   };
@@ -146,6 +148,52 @@ describe('buildMetadataOutputV2', () => {
 
     expect(output.skippedTriggers).toEqual([
       { skillName: 'security-review', triggerId: 'skipped-id', triggerName: 'skipped-trigger', reason: 'label_mismatch' },
+    ]);
+  });
+
+  it('reports path_filter when the event and state match but no changed file satisfies the path filter', () => {
+    const matched = createTrigger();
+    const skipped = createTrigger({
+      id: 'skipped-id',
+      skillExecutionId: 'exec-2',
+      name: 'skipped-trigger',
+      skill: 'security-review',
+      filters: { paths: ['src/**'] },
+    });
+
+    const output = buildMetadataOutputV2(
+      createContext(),
+      [matched, skipped],
+      [matched],
+      [createResult()],
+      { runId: '123', generatedAt: '2026-01-01T00:00:00.000Z' }
+    );
+
+    expect(output.skippedTriggers).toEqual([
+      { skillName: 'security-review', triggerId: 'skipped-id', triggerName: 'skipped-trigger', reason: 'path_filter' },
+    ]);
+  });
+
+  it('reports no_changes when a schedule trigger fires with no changed files to scan', () => {
+    const matched = createTrigger();
+    const skipped = createTrigger({
+      id: 'skipped-id',
+      skillExecutionId: 'exec-2',
+      name: 'skipped-trigger',
+      skill: 'security-review',
+      type: 'schedule',
+    });
+
+    const output = buildMetadataOutputV2(
+      createContext({ eventType: 'schedule' }),
+      [matched, skipped],
+      [matched],
+      [createResult()],
+      { runId: '123', generatedAt: '2026-01-01T00:00:00.000Z' }
+    );
+
+    expect(output.skippedTriggers).toEqual([
+      { skillName: 'security-review', triggerId: 'skipped-id', triggerName: 'skipped-trigger', reason: 'no_changes' },
     ]);
   });
 });
@@ -259,6 +307,61 @@ describe('buildFindingsOutputV2', () => {
       { skillExecutionId: 'exec-2', skillName: 'security-review', role: 'corroborating', matchType: 'hash' },
     ]);
     expect(output.summary.byOutcome.deduped).toBe(1);
+  });
+
+  it('attributes an observation to its own execution when two triggers share a skill name', () => {
+    const firstExecution = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
+    const secondExecution = createTrigger({
+      id: 'trigger-2',
+      skillExecutionId: 'exec-2',
+      name: 'code-review-strict',
+      skill: 'code-review',
+    });
+
+    const observations: FindingObservation[] = [
+      {
+        outcome: 'skipped',
+        finding: createFinding({ id: 'WRD-501' }),
+        skill: 'code-review',
+        skillExecutionId: 'exec-2',
+        skippedReason: 'max_findings',
+      },
+    ];
+
+    const output = buildFindingsOutputV2(
+      [createResult()],
+      [firstExecution, secondExecution],
+      observations,
+      { runId: '123' }
+    );
+
+    expect(output.findingObservations[0]?.origin).toEqual({
+      skillExecutionId: 'exec-2',
+      skillName: 'code-review',
+    });
+  });
+});
+
+describe('fromAuxiliaryUsageEntries', () => {
+  it('round-trips through buildFindingsOutputV2 back into the record-keyed shape SkillReport expects', () => {
+    const trigger = createTrigger();
+    const result = createResult({
+      report: createReport({
+        auxiliaryUsage: { dedup: { inputTokens: 10, outputTokens: 5, costUSD: 0.002 } },
+        auxiliaryUsageAttribution: { dedup: { model: 'claude-haiku-4-5', runtime: 'pi' } },
+      }),
+    });
+
+    const output = buildFindingsOutputV2([result], [trigger], [], { runId: '123' });
+    const { usage, attribution } = fromAuxiliaryUsageEntries(output.skillExecutions[0]?.auxiliaryUsage);
+
+    expect(usage).toEqual({ dedup: { inputTokens: 10, outputTokens: 5, costUSD: 0.002 } });
+    expect(attribution).toEqual({ dedup: { model: 'claude-haiku-4-5', runtime: 'pi' } });
+  });
+
+  it('returns undefined for both when there are no entries', () => {
+    expect(fromAuxiliaryUsageEntries(undefined)).toEqual({ usage: undefined, attribution: undefined });
+    expect(fromAuxiliaryUsageEntries([])).toEqual({ usage: undefined, attribution: undefined });
   });
 });
 

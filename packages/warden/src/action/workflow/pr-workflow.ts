@@ -93,6 +93,7 @@ import {
   WardenMetadataSchema,
   WardenFindingsSchemaV2,
   patchFindingsOutputV2Observations,
+  fromAuxiliaryUsageEntries,
   type WardenMetadata,
   type WardenFindingsV2,
   type ExportedFindingV2,
@@ -1446,6 +1447,7 @@ function buildReportModeResults(
       triggerId: trigger.id,
       triggerName: trigger.name,
       skillName: trigger.skill,
+      skillExecutionId: trigger.skillExecutionId,
       failOn,
       reportOn,
       minConfidence,
@@ -1984,6 +1986,7 @@ function buildReportModeResultsV2(
       triggerId: trigger.id,
       triggerName: trigger.name,
       skillName: trigger.skill,
+      skillExecutionId: trigger.skillExecutionId,
       failOn,
       reportOn,
       minConfidence,
@@ -2009,12 +2012,18 @@ function buildReportModeResultsV2(
       return finding ? [toFindingFromV2(finding)] : [];
     });
 
+    const { usage: auxiliaryUsage, attribution: auxiliaryUsageAttribution } = fromAuxiliaryUsageEntries(
+      execution.auxiliaryUsage
+    );
+
     const report: SkillReport = {
       skill: execution.skillName,
       summary: execution.summary,
       findings,
       durationMs: execution.durationMs,
       usage: execution.usage,
+      auxiliaryUsage,
+      auxiliaryUsageAttribution,
       failedHunks: execution.failedHunks,
       failedExtractions: execution.failedExtractions,
       error: execution.error,

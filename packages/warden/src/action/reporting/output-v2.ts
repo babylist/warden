@@ -18,7 +18,7 @@ import type {
   Severity,
 } from '../../types/index.js';
 import type { ResolvedTrigger } from '../../config/loader.js';
-import { matchPathFilters, matchPullRequestState } from '../../triggers/matcher.js';
+import { matchPullRequestState } from '../../triggers/matcher.js';
 import type { TriggerResult } from '../triggers/executor.js';
 import { buildConfiguredSkillsList, serializeTriggerError } from './output.js';
 import { generateContentHash } from '../../output/dedup.js';
@@ -63,7 +63,7 @@ export const SkippedTriggerReasonSchema = z.enum([
   'path_filter',
   'draft_state',
   'label_mismatch',
-  'disabled',
+  'no_changes',
 ]);
 
 const SkippedTriggerSchema = z.object({
@@ -337,13 +337,30 @@ function toAuxiliaryUsageEntries(
   });
 }
 
+/** Inverse of {@link toAuxiliaryUsageEntries} — rebuilds the record-keyed shape SkillReport expects. */
+export function fromAuxiliaryUsageEntries(
+  entries: z.infer<typeof AuxiliaryUsageEntrySchema>[] | undefined
+): { usage: AuxiliaryUsageMap | undefined; attribution: AuxiliaryUsageAttributionMap | undefined } {
+  if (!entries || entries.length === 0) return { usage: undefined, attribution: undefined };
+
+  const usage: AuxiliaryUsageMap = {};
+  const attribution: AuxiliaryUsageAttributionMap = {};
+  for (const entry of entries) {
+    usage[entry.agent] = entry.usage;
+    if (entry.model || entry.runtime) {
+      attribution[entry.agent] = { model: entry.model, runtime: entry.runtime };
+    }
+  }
+  return { usage, attribution: Object.keys(attribution).length > 0 ? attribution : undefined };
+}
+
 function deriveSkippedReason(
   trigger: ResolvedTrigger,
   context: EventContext
 ): z.infer<typeof SkippedTriggerReasonSchema> {
   if (trigger.type === 'local') return 'no_event_match';
   if (trigger.type === 'schedule') {
-    return context.eventType === 'schedule' ? 'disabled' : 'no_event_match';
+    return context.eventType === 'schedule' ? 'no_changes' : 'no_event_match';
   }
   if (trigger.type === 'pull_request') {
     if (context.eventType !== 'pull_request') return 'no_event_match';
@@ -359,8 +376,7 @@ function deriveSkippedReason(
       return 'draft_state';
     }
   }
-  const filenames = context.pullRequest?.files.map((f) => f.filename);
-  return matchPathFilters(trigger.filters, filenames) ? 'disabled' : 'path_filter';
+  return 'path_filter';
 }
 
 export interface BuildMetadataOutputV2Options {
@@ -467,7 +483,7 @@ function buildFindingObservationsV2(
   const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
 
   const observations: FindingObservationV2[] = findingObservations.map((observation) => {
-    const skillExecutionId = skillExecutionIdByName.get(observation.skill ?? '') ?? '';
+    const skillExecutionId = observation.skillExecutionId ?? skillExecutionIdByName.get(observation.skill ?? '') ?? '';
     const origin = { skillExecutionId, skillName: observation.skill ?? '' };
     const findingSnapshot = {
       id: observation.finding.id,
@@ -512,7 +528,7 @@ function buildCorroboratingAttributions(
       const winnerId = observation.dedupe.existingFindingId;
       const list = corroboratingById.get(winnerId) ?? [];
       list.push({
-        skillExecutionId: skillExecutionIdByName.get(observation.skill ?? '') ?? '',
+        skillExecutionId: observation.skillExecutionId ?? skillExecutionIdByName.get(observation.skill ?? '') ?? '',
         skillName: observation.skill ?? '',
         role: 'corroborating',
         matchType: observation.dedupe.matchType,
