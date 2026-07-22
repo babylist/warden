@@ -20,7 +20,7 @@ import { createOrUpdateIssue } from '../../output/github-issues.js';
 import { shouldFail, countFindingsAtOrAbove, countSeverity } from '../../triggers/matcher.js';
 import { resolveSkillAsync } from '../../skills/loader.js';
 import { filterFindings } from '../../types/index.js';
-import type { SkillReport } from '../../types/index.js';
+import type { EventContext, SkillReport } from '../../types/index.js';
 import { Sentry, logger, setRepositoryScope, emitRunMetric } from '../../sentry.js';
 import type { ActionInputs } from '../inputs.js';
 import {
@@ -33,7 +33,10 @@ import {
   handleTriggerErrors,
   getDefaultBranchFromAPI,
   writeFindingsOutput,
+  writeMetadataOutput,
+  writeFindingsOutputV2,
 } from './base.js';
+import type { TriggerResult } from '../triggers/executor.js';
 import { captureActionTriggerError } from '../error-reporting.js';
 
 // -----------------------------------------------------------------------------
@@ -43,6 +46,31 @@ import { captureActionTriggerError } from '../error-reporting.js';
 interface WorkflowSpan {
   setAttribute(key: string, value: string | number | boolean): void;
   spanContext?: () => { traceId: string };
+}
+
+function writeSchemaV2ScheduleOutputs(
+  inputs: ActionInputs,
+  context: EventContext,
+  resolvedTriggers: ResolvedTrigger[],
+  matchedTriggers: ResolvedTrigger[],
+  results: TriggerResult[]
+): void {
+  if (inputs.outputSchemaVersion !== '2') return;
+
+  const runId = process.env['GITHUB_RUN_ID'] ?? '';
+  const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
+  try {
+    const metadataPath = writeMetadataOutput(context, resolvedTriggers, matchedTriggers, results, {
+      runId,
+      runAttempt,
+      actionRef: inputs.actionRef,
+    });
+    console.log(`Metadata written to ${metadataPath}`);
+    const findingsV2Path = writeFindingsOutputV2(results, matchedTriggers, [], context, { runId });
+    console.log(`Findings (v2) written to ${findingsV2Path}`);
+  } catch (error) {
+    console.error(`::warning::Failed to write schema-v2 output: ${error}`);
+  }
 }
 
 export async function runScheduleWorkflow(
@@ -101,12 +129,14 @@ async function runScheduleWorkflowInner(
         const [o = '', n = ''] = fullName.split('/');
         workflowSpan.setAttribute('warden.trigger.count', 0);
         workflowSpan.setAttribute('warden.finding.count', 0);
-        writeFindingsOutput([], {
+        const emptyContext: EventContext = {
           eventType: 'schedule',
           action: 'scheduled',
           repository: { owner: o, name: n, fullName, defaultBranch: '' },
           repoPath,
-        });
+        };
+        writeFindingsOutput([], emptyContext);
+        writeSchemaV2ScheduleOutputs(inputs, emptyContext, [], [], []);
       } catch (writeError) {
         console.error(`::warning::Failed to write findings output: ${writeError}`);
       }
@@ -132,12 +162,14 @@ async function runScheduleWorkflowInner(
     try {
       const fullName = process.env['GITHUB_REPOSITORY'] ?? '';
       const [o = '', n = ''] = fullName.split('/');
-      writeFindingsOutput([], {
+      const emptyContext: EventContext = {
         eventType: 'schedule',
         action: 'scheduled',
         repository: { owner: o, name: n, fullName, defaultBranch: '' },
         repoPath,
-      });
+      };
+      writeFindingsOutput([], emptyContext);
+      writeSchemaV2ScheduleOutputs(inputs, emptyContext, scheduleTriggers, [], []);
     } catch (writeError) {
       console.error(`::warning::Failed to write findings output: ${writeError}`);
     }
@@ -167,6 +199,8 @@ async function runScheduleWorkflowInner(
   logGroupEnd();
 
   const allReports: SkillReport[] = [];
+  const matchedTriggers: ResolvedTrigger[] = [];
+  const results: TriggerResult[] = [];
   let totalFindings = 0;
   const failureReasons: string[] = [];
   const triggerErrors: string[] = [];
@@ -231,6 +265,14 @@ async function runScheduleWorkflowInner(
       console.log(`Found ${report.findings.length} findings`);
 
       allReports.push(report);
+      matchedTriggers.push(resolved);
+      results.push({
+        triggerId: resolved.id,
+        triggerName: resolved.name,
+        skillName: resolved.skill,
+        skillExecutionId: resolved.skillExecutionId,
+        report,
+      });
       totalFindings += report.findings.length;
 
       // Create/update issue with findings
@@ -267,6 +309,14 @@ async function runScheduleWorkflowInner(
       });
       const errorMessage = error instanceof Error ? error.message : String(error);
       triggerErrors.push(`${resolved.name}: ${errorMessage}`);
+      matchedTriggers.push(resolved);
+      results.push({
+        triggerId: resolved.id,
+        triggerName: resolved.name,
+        skillName: resolved.skill,
+        skillExecutionId: resolved.skillExecutionId,
+        error,
+      });
       console.error(`::warning::Trigger ${resolved.name} failed: ${error}`);
       logGroupEnd();
     }
@@ -283,17 +333,19 @@ async function runScheduleWorkflowInner(
   setOutput('summary', allReports.map((r) => r.summary).join('\n') || 'Scheduled analysis complete');
 
   // Write structured findings to file for external export (GCS, S3, etc.)
+  const scheduleContext: EventContext = {
+    eventType: 'schedule',
+    action: 'scheduled',
+    repository: { owner, name: repo, fullName: `${owner}/${repo}`, defaultBranch },
+    repoPath,
+  };
   try {
-    const findingsPath = writeFindingsOutput(allReports, {
-      eventType: 'schedule',
-      action: 'scheduled',
-      repository: { owner, name: repo, fullName: `${owner}/${repo}`, defaultBranch },
-      repoPath,
-    });
+    const findingsPath = writeFindingsOutput(allReports, scheduleContext);
     console.log(`Findings written to ${findingsPath}`);
   } catch (error) {
     console.error(`::warning::Failed to write findings output: ${error}`);
   }
+  writeSchemaV2ScheduleOutputs(inputs, scheduleContext, scheduleTriggers, matchedTriggers, results);
 
   if (shouldFailAction) {
     setFailed(failureReasons.join('; '));

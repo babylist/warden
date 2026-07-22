@@ -244,6 +244,48 @@ describe('buildFindingsOutputV2', () => {
     });
   });
 
+  it('does not leak verification provenance across skills when finding ids collide', () => {
+    const firstTrigger = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
+    const secondTrigger = createTrigger({
+      id: 'trigger-2',
+      skillExecutionId: 'exec-2',
+      name: 'security-review-trigger',
+      skill: 'security-review',
+    });
+
+    const revisedFinding = createFinding({ id: 'WRD-001', severity: 'medium' });
+    const firstResult = createResult({
+      triggerId: 'trigger-1',
+      report: createReport({ skill: 'code-review', findings: [revisedFinding] }),
+      findingProcessingEvents: [
+        {
+          stage: 'verification',
+          action: 'revised',
+          finding: createFinding({ id: 'WRD-001', severity: 'high', title: 'Original title' }),
+          replacement: revisedFinding,
+          reason: 'narrower scope',
+          model: 'claude-haiku-4-5',
+        },
+      ],
+    });
+
+    const unrelatedFinding = createFinding({ id: 'WRD-001', title: 'Unrelated finding, same id' });
+    const secondResult = createResult({
+      triggerId: 'trigger-2',
+      report: createReport({ skill: 'security-review', findings: [unrelatedFinding] }),
+    });
+
+    const output = buildFindingsOutputV2(
+      [firstResult, secondResult],
+      [firstTrigger, secondTrigger],
+      [],
+      { runId: '123' }
+    );
+
+    const fromSecondSkill = output.findings.find((f) => f.provenance.originSkillExecutionId === 'exec-2');
+    expect(fromSecondSkill?.provenance.verification).toBeUndefined();
+  });
+
   it('records verifier rejections in discardedFindings', () => {
     const trigger = createTrigger();
     const result = createResult({

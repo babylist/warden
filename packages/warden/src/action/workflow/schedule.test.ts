@@ -1,9 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { join } from 'node:path';
+import { readFileSync, rmSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import type { Octokit } from '@octokit/rest';
 import type { ActionInputs } from '../inputs.js';
 import type { SkillReport, Finding, EventContext } from '../../types/index.js';
+import { getMetadataOutputPath, getFindingsOutputPathV2 } from './base.js';
 
 // -----------------------------------------------------------------------------
 // Fixtures Directory
@@ -466,6 +468,92 @@ describe('runScheduleWorkflow', () => {
 
       expect(mockRunSkill).not.toHaveBeenCalled();
       expect(mockCreateOrUpdateIssue).not.toHaveBeenCalled();
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Schema v2 output
+  // ---------------------------------------------------------------------------
+
+  describe('schema v2 output', () => {
+    it('writes schema-v2 metadata and findings for a matched schedule trigger', async () => {
+      const finding = createFinding({ severity: 'high' });
+      mockRunSkill.mockResolvedValue(createSkillReport({ findings: [finding] }));
+
+      const metadataFile = getMetadataOutputPath(SCHEDULE_FIXTURES);
+      const findingsFile = getFindingsOutputPathV2(SCHEDULE_FIXTURES);
+
+      try {
+        await runScheduleWorkflow(
+          mockOctokit,
+          createDefaultInputs({ outputSchemaVersion: '2' }),
+          SCHEDULE_FIXTURES
+        );
+
+        const metadata = JSON.parse(readFileSync(metadataFile, 'utf-8'));
+        const findings = JSON.parse(readFileSync(findingsFile, 'utf-8'));
+
+        expect(metadata.schemaVersion).toBe('2');
+        expect(findings.schemaVersion).toBe('2');
+        expect(findings.skillExecutions).toHaveLength(1);
+        expect(findings.findings).toHaveLength(1);
+        expect(findings.findings[0]?.id).toBe(finding.id);
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+      }
+    });
+
+    it('records a schedule trigger with no matching files as skipped with reason no_changes', async () => {
+      mockBuildContext.mockResolvedValue(
+        createScheduleContext({
+          pullRequest: {
+            number: 0,
+            title: 'Scheduled Analysis',
+            body: null,
+            author: 'warden',
+            baseBranch: 'main',
+            headBranch: 'main',
+            headSha: 'abc123',
+            baseSha: 'abc123',
+            files: [],
+          },
+        })
+      );
+
+      const metadataFile = getMetadataOutputPath(SCHEDULE_FIXTURES);
+      const findingsFile = getFindingsOutputPathV2(SCHEDULE_FIXTURES);
+
+      try {
+        await runScheduleWorkflow(
+          mockOctokit,
+          createDefaultInputs({ outputSchemaVersion: '2' }),
+          SCHEDULE_FIXTURES
+        );
+
+        const metadata = JSON.parse(readFileSync(metadataFile, 'utf-8'));
+
+        expect(metadata.skippedTriggers).toEqual(
+          expect.arrayContaining([expect.objectContaining({ reason: 'no_changes' })])
+        );
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+      }
+    });
+
+    it('does not write schema-v2 files when output-schema-version is 1', async () => {
+      mockRunSkill.mockResolvedValue(createSkillReport({ findings: [] }));
+
+      const metadataFile = getMetadataOutputPath(SCHEDULE_FIXTURES);
+      const findingsFile = getFindingsOutputPathV2(SCHEDULE_FIXTURES);
+      rmSync(metadataFile, { force: true });
+      rmSync(findingsFile, { force: true });
+
+      await runScheduleWorkflow(mockOctokit, createDefaultInputs(), SCHEDULE_FIXTURES);
+
+      expect(() => readFileSync(metadataFile, 'utf-8')).toThrow();
+      expect(() => readFileSync(findingsFile, 'utf-8')).toThrow();
     });
   });
 
