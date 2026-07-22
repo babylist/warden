@@ -291,8 +291,8 @@ export declare const DefaultsSchema: z.ZodObject<{
     model: z.ZodOptional<z.ZodString>;
     maxTurns: z.ZodOptional<z.ZodNumber>;
     runtime: z.ZodOptional<z.ZodEnum<{
-        claude: "claude";
         pi: "pi";
+        claude: "claude";
     }>>;
     agent: z.ZodOptional<z.ZodObject<{
         model: z.ZodOptional<z.ZodString>;
@@ -389,8 +389,8 @@ export declare const WardenConfigSchema: z.ZodObject<{
         model: z.ZodOptional<z.ZodString>;
         maxTurns: z.ZodOptional<z.ZodNumber>;
         runtime: z.ZodOptional<z.ZodEnum<{
-            claude: "claude";
             pi: "pi";
+            claude: "claude";
         }>>;
         agent: z.ZodOptional<z.ZodObject<{
             model: z.ZodOptional<z.ZodString>;

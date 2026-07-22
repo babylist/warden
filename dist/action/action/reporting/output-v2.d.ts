@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { AuxiliaryUsageAttributionMap, AuxiliaryUsageMap, EventContext } from '../../types/index.js';
+import type { AuxiliaryUsageAttributionMap, AuxiliaryUsageMap, EventContext, SeverityThreshold } from '../../types/index.js';
 import type { ResolvedTrigger } from '../../config/loader.js';
 import type { TriggerResult } from '../triggers/executor.js';
 import type { FindingObservation } from './outcomes.js';
@@ -962,6 +962,10 @@ export interface BuildMetadataOutputV2Options {
     runAttempt?: string;
     generatedAt?: string;
     actionRef?: string;
+    /** Action-level fallback used by every trigger via `trigger.failOn ?? inputs.failOn`. */
+    failOn?: SeverityThreshold;
+    /** Action-level fallback used by every trigger via `trigger.reportOn ?? inputs.reportOn`. */
+    reportOn?: SeverityThreshold;
 }
 export declare function buildMetadataOutputV2(context: EventContext, resolvedTriggers: ResolvedTrigger[], matchedTriggers: ResolvedTrigger[], results: TriggerResult[], options: BuildMetadataOutputV2Options): WardenMetadata;
 /**

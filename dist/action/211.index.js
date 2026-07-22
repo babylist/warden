@@ -1686,8 +1686,8 @@ function buildMetadataOutputV2(context, resolvedTriggers, matchedTriggers, resul
         triggerResults,
         ...(primary && {
             resolvedDefaults: {
-                failOn: primary.failOn,
-                reportOn: primary.reportOn,
+                failOn: primary.failOn ?? options.failOn,
+                reportOn: primary.reportOn ?? options.reportOn,
                 minConfidence: primary.minConfidence,
                 model: primary.model,
                 auxiliaryModel: primary.auxiliaryModel,
@@ -1699,11 +1699,18 @@ function buildMetadataOutputV2(context, resolvedTriggers, matchedTriggers, resul
     });
 }
 function skillExecutionIdByNameFrom(matchedTriggers) {
-    const skillExecutionIdByName = new Map();
+    const counts = new Map();
+    const idByName = new Map();
     for (const t of matchedTriggers) {
-        if (!skillExecutionIdByName.has(t.skill)) {
-            skillExecutionIdByName.set(t.skill, t.skillExecutionId);
+        counts.set(t.skill, (counts.get(t.skill) ?? 0) + 1);
+        if (!idByName.has(t.skill)) {
+            idByName.set(t.skill, t.skillExecutionId);
         }
+    }
+    const skillExecutionIdByName = new Map();
+    for (const [name, id] of idByName) {
+        if (counts.get(name) === 1)
+            skillExecutionIdByName.set(name, id);
     }
     return skillExecutionIdByName;
 }
@@ -3995,7 +4002,28 @@ function wouldPostBlockingReview(result) {
  * Returns whether all Warden comments are resolved after evaluation.
  * Report mode passes failOnWriteError so GitHub write failures abort delivery.
  */
-async function evaluateFixesAndResolveStale(octokit, context, fetchedComments, allFindings, activeWardenCommentIds, canResolveStale, anthropicApiKey, auxiliaryOptions, gate, options = {}) {
+/**
+ * skillExecutionId per skill name, restricted to names with exactly one
+ * current execution. A resolved/stale comment's skill name can't otherwise
+ * be safely mapped to one execution when a skill has multiple triggers.
+ */
+function unambiguousSkillExecutionIdByName(matchedTriggers) {
+    const counts = new Map();
+    const idByName = new Map();
+    for (const trigger of matchedTriggers) {
+        counts.set(trigger.skill, (counts.get(trigger.skill) ?? 0) + 1);
+        if (!idByName.has(trigger.skill))
+            idByName.set(trigger.skill, trigger.skillExecutionId);
+    }
+    const result = new Map();
+    for (const [name, id] of idByName) {
+        if (counts.get(name) === 1)
+            result.set(name, id);
+    }
+    return result;
+}
+async function evaluateFixesAndResolveStale(octokit, context, fetchedComments, allFindings, activeWardenCommentIds, canResolveStale, anthropicApiKey, auxiliaryOptions, gate, matchedTriggers, options = {}) {
+    const skillExecutionIdByName = unambiguousSkillExecutionIdByName(matchedTriggers);
     const wardenComments = fetchedComments.filter((c) => c.isWarden);
     const commentsResolvedByFixEval = new Set();
     const commentsEvaluatedByFixEval = new Set();
@@ -4090,6 +4118,7 @@ async function evaluateFixesAndResolveStale(octokit, context, fetchedComments, a
                         outcome: 'resolved',
                         finding: existingCommentToFinding(comment),
                         skill: comment.skills?.[0],
+                        skillExecutionId: skillExecutionIdByName.get(comment.skills?.[0] ?? ''),
                         resolvedReason: 'fix_evaluation',
                     });
                 }
@@ -4180,6 +4209,7 @@ async function evaluateFixesAndResolveStale(octokit, context, fetchedComments, a
                         outcome: 'resolved',
                         finding: existingCommentToFinding(comment),
                         skill: comment.skills?.[0],
+                        skillExecutionId: skillExecutionIdByName.get(comment.skills?.[0] ?? ''),
                         resolvedReason: 'stale_check',
                     });
                 }
@@ -4260,6 +4290,8 @@ function writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers
             runId,
             runAttempt,
             actionRef: inputs.actionRef,
+            failOn: inputs.failOn,
+            reportOn: inputs.reportOn,
         });
         (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`Metadata written to ${metadataPath}`);
         const findingsV2Path = (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .writeFindingsOutputV2 */ .zi)(results, matchedTriggers, findingObservations, context, { runId });
@@ -4768,7 +4800,7 @@ async function cleanupOrphanedComments(octokit, context, inputs, auxiliaryOption
         (0,_base_js__WEBPACK_IMPORTED_MODULE_19__/* .ensureClaudeAuth */ .$m)(inputs);
     }
     (0,_cli_output_tty_js__WEBPACK_IMPORTED_MODULE_23__/* .logAction */ .d5)(`No triggers matched, but found ${wardenComments.length} existing Warden comments. Running cleanup.`);
-    const { allResolved, autoResolvedByFixEvaluation, autoResolvedByStaleCheck, findingObservations } = await evaluateFixesAndResolveStale(octokit, context, existingComments, [], new Set(), true, inputs.anthropicApiKey, auxiliaryOptions, gate, {
+    const { allResolved, autoResolvedByFixEvaluation, autoResolvedByStaleCheck, findingObservations } = await evaluateFixesAndResolveStale(octokit, context, existingComments, [], new Set(), true, inputs.anthropicApiKey, auxiliaryOptions, gate, [], {
         failOnWriteError: options.failOnWriteError,
     });
     const activeSpan = _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.getActiveSpan */ .sQ.getActiveSpan();
@@ -5075,7 +5107,7 @@ async function runReportMode(octokit, inputs, initResult, repoPath, span) {
         const allFindings = reviewPhase.reports.flatMap((r) => r.findings);
         span.setAttribute('warden.finding.count', allFindings.length);
         await _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.startSpan */ .sQ.startSpan({ op: 'workflow.resolve', name: 'resolve stale comments' }, async (resolveSpan) => {
-            const resolutionResult = await evaluateFixesAndResolveStale(octokit, context, reviewPhase.fetchedComments, allFindings, reviewPhase.activeWardenCommentIds, canResolveStale, inputs.anthropicApiKey, auxiliaryOptions, gate, { failOnWriteError: true });
+            const resolutionResult = await evaluateFixesAndResolveStale(octokit, context, reviewPhase.fetchedComments, allFindings, reviewPhase.activeWardenCommentIds, canResolveStale, inputs.anthropicApiKey, auxiliaryOptions, gate, matchedTriggers, { failOnWriteError: true });
             resolveSpan.setAttribute('warden.feedback.auto_resolve.fix_eval_count', resolutionResult.autoResolvedByFixEvaluation);
             resolveSpan.setAttribute('warden.feedback.auto_resolve.stale_count', resolutionResult.autoResolvedByStaleCheck);
             reviewPhase.findingObservations.push(...resolutionResult.findingObservations);
@@ -5191,7 +5223,7 @@ async function runPRWorkflow(octokit, inputs, eventName, eventPath, repoPath) {
         const allFindings = reviewPhase.reports.flatMap((r) => r.findings);
         span.setAttribute('warden.finding.count', allFindings.length);
         await runOrFailCore(octokit, context, coreCheckId, () => _sentry_js__WEBPACK_IMPORTED_MODULE_2__/* .Sentry.startSpan */ .sQ.startSpan({ op: 'workflow.resolve', name: 'resolve stale comments' }, async (resolveSpan) => {
-            const resolutionResult = await evaluateFixesAndResolveStale(octokit, context, reviewPhase.fetchedComments, allFindings, reviewPhase.activeWardenCommentIds, canResolveStale, inputs.anthropicApiKey, auxiliaryOptions, gate);
+            const resolutionResult = await evaluateFixesAndResolveStale(octokit, context, reviewPhase.fetchedComments, allFindings, reviewPhase.activeWardenCommentIds, canResolveStale, inputs.anthropicApiKey, auxiliaryOptions, gate, matchedTriggers);
             resolveSpan.setAttribute('warden.feedback.auto_resolve.fix_eval_count', resolutionResult.autoResolvedByFixEvaluation);
             resolveSpan.setAttribute('warden.feedback.auto_resolve.stale_count', resolutionResult.autoResolvedByStaleCheck);
             reviewPhase.findingObservations.push(...resolutionResult.findingObservations);
@@ -5254,6 +5286,8 @@ function writeSchemaV2ScheduleOutputs(inputs, context, resolvedTriggers, matched
             runId,
             runAttempt,
             actionRef: inputs.actionRef,
+            failOn: inputs.failOn,
+            reportOn: inputs.reportOn,
         });
         console.log(`Metadata written to ${metadataPath}`);
         const findingsV2Path = (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutputV2 */ .zi)(results, matchedTriggers, [], context, { runId });
