@@ -1797,14 +1797,16 @@ function buildFindingsOutputV2(results, matchedTriggers, findingObservations, op
     const skillExecutions = [];
     const findings = [];
     const discardedFindings = [];
-    const verificationById = new Map();
-    const mergeById = new Map();
     for (const result of results) {
         const report = result.report;
         if (!report)
             continue;
         const trigger = result.triggerId ? triggerById.get(result.triggerId) : undefined;
         const skillExecutionId = trigger?.skillExecutionId ?? skillExecutionIdByName.get(report.skill) ?? report.skill;
+        // Finding IDs are model-assigned per skill run and can collide across
+        // skills, so these maps must not survive past this execution's findings.
+        const verificationById = new Map();
+        const mergeById = new Map();
         for (const event of result.findingProcessingEvents ?? []) {
             if (event.stage === 'verification' && event.action === 'revised' && event.replacement) {
                 verificationById.set(event.replacement.id, {
@@ -5203,6 +5205,25 @@ _sdk_runner_js__WEBPACK_IMPORTED_MODULE_2__ = (__webpack_async_dependencies__.th
 
 
 
+function writeSchemaV2ScheduleOutputs(inputs, context, resolvedTriggers, matchedTriggers, results) {
+    if (inputs.outputSchemaVersion !== '2')
+        return;
+    const runId = process.env['GITHUB_RUN_ID'] ?? '';
+    const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
+    try {
+        const metadataPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeMetadataOutput */ .ym)(context, resolvedTriggers, matchedTriggers, results, {
+            runId,
+            runAttempt,
+            actionRef: inputs.actionRef,
+        });
+        console.log(`Metadata written to ${metadataPath}`);
+        const findingsV2Path = (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutputV2 */ .zi)(results, matchedTriggers, [], context, { runId });
+        console.log(`Findings (v2) written to ${findingsV2Path}`);
+    }
+    catch (error) {
+        console.error(`::warning::Failed to write schema-v2 output: ${error}`);
+    }
+}
 async function runScheduleWorkflow(octokit, inputs, repoPath) {
     return _sentry_js__WEBPACK_IMPORTED_MODULE_8__/* .Sentry.startSpan */ .sQ.startSpan({ op: 'workflow.run', name: 'review schedule' }, (span) => runScheduleWorkflowInner(octokit, inputs, repoPath, span));
 }
@@ -5243,12 +5264,14 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
                 const [o = '', n = ''] = fullName.split('/');
                 workflowSpan.setAttribute('warden.trigger.count', 0);
                 workflowSpan.setAttribute('warden.finding.count', 0);
-                (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)([], {
+                const emptyContext = {
                     eventType: 'schedule',
                     action: 'scheduled',
                     repository: { owner: o, name: n, fullName, defaultBranch: '' },
                     repoPath,
-                });
+                };
+                (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)([], emptyContext);
+                writeSchemaV2ScheduleOutputs(inputs, emptyContext, [], [], []);
             }
             catch (writeError) {
                 console.error(`::warning::Failed to write findings output: ${writeError}`);
@@ -5273,12 +5296,14 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
         try {
             const fullName = process.env['GITHUB_REPOSITORY'] ?? '';
             const [o = '', n = ''] = fullName.split('/');
-            (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)([], {
+            const emptyContext = {
                 eventType: 'schedule',
                 action: 'scheduled',
                 repository: { owner: o, name: n, fullName, defaultBranch: '' },
                 repoPath,
-            });
+            };
+            (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)([], emptyContext);
+            writeSchemaV2ScheduleOutputs(inputs, emptyContext, scheduleTriggers, [], []);
         }
         catch (writeError) {
             console.error(`::warning::Failed to write findings output: ${writeError}`);
@@ -5304,6 +5329,8 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
     }
     (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .logGroupEnd */ .TN)();
     const allReports = [];
+    const matchedTriggers = [];
+    const results = [];
     let totalFindings = 0;
     const failureReasons = [];
     const triggerErrors = [];
@@ -5360,6 +5387,14 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
             });
             console.log(`Found ${report.findings.length} findings`);
             allReports.push(report);
+            matchedTriggers.push(resolved);
+            results.push({
+                triggerId: resolved.id,
+                triggerName: resolved.name,
+                skillName: resolved.skill,
+                skillExecutionId: resolved.skillExecutionId,
+                report,
+            });
             totalFindings += report.findings.length;
             // Create/update issue with findings
             const scheduleConfig = resolved.schedule ?? {};
@@ -5393,6 +5428,14 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
             });
             const errorMessage = error instanceof Error ? error.message : String(error);
             triggerErrors.push(`${resolved.name}: ${errorMessage}`);
+            matchedTriggers.push(resolved);
+            results.push({
+                triggerId: resolved.id,
+                triggerName: resolved.name,
+                skillName: resolved.skill,
+                skillExecutionId: resolved.skillExecutionId,
+                error,
+            });
             console.error(`::warning::Trigger ${resolved.name} failed: ${error}`);
             (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .logGroupEnd */ .TN)();
         }
@@ -5405,18 +5448,20 @@ async function runScheduleWorkflowInner(octokit, inputs, repoPath, workflowSpan)
     (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .setOutput */ .uH)('high-count', highCount);
     (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .setOutput */ .uH)('summary', allReports.map((r) => r.summary).join('\n') || 'Scheduled analysis complete');
     // Write structured findings to file for external export (GCS, S3, etc.)
+    const scheduleContext = {
+        eventType: 'schedule',
+        action: 'scheduled',
+        repository: { owner, name: repo, fullName: `${owner}/${repo}`, defaultBranch },
+        repoPath,
+    };
     try {
-        const findingsPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)(allReports, {
-            eventType: 'schedule',
-            action: 'scheduled',
-            repository: { owner, name: repo, fullName: `${owner}/${repo}`, defaultBranch },
-            repoPath,
-        });
+        const findingsPath = (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .writeFindingsOutput */ .JR)(allReports, scheduleContext);
         console.log(`Findings written to ${findingsPath}`);
     }
     catch (error) {
         console.error(`::warning::Failed to write findings output: ${error}`);
     }
+    writeSchemaV2ScheduleOutputs(inputs, scheduleContext, scheduleTriggers, matchedTriggers, results);
     if (shouldFailAction) {
         (0,_base_js__WEBPACK_IMPORTED_MODULE_9__/* .setFailed */ .C1)(failureReasons.join('; '));
     }
