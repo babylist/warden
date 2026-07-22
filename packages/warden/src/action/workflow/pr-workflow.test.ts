@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -411,6 +411,29 @@ describe('runPRWorkflow', () => {
       );
     });
 
+    it('analyze mode writes schema-v2 outputs even when no triggers matched', async () => {
+      await runPRWorkflow(
+        mockOctokit,
+        createDefaultInputs({ mode: 'analyze', outputSchemaVersion: '2' }),
+        'pull_request',
+        EVENT_PAYLOAD_PATH,
+        SCHEDULE_ONLY_FIXTURES_DIR
+      );
+
+      const metadataFile = getMetadataOutputPath(SCHEDULE_ONLY_FIXTURES_DIR);
+      const findingsFile = getFindingsOutputPathV2(SCHEDULE_ONLY_FIXTURES_DIR);
+      try {
+        const metadata = JSON.parse(readFileSync(metadataFile, 'utf-8'));
+        const findings = JSON.parse(readFileSync(findingsFile, 'utf-8'));
+        expect(metadata.configuredSkills).toEqual([{ name: 'test-skill', triggered: false }]);
+        expect(findings.skillExecutions).toEqual([]);
+        expect(findings.findings).toEqual([]);
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+      }
+    });
+
     it('analyze mode fails when the findings artifact cannot be written', async () => {
       const report = createSkillReport({ findings: [createFinding()] });
       mockRunSkillTask.mockResolvedValue({ name: 'test-trigger', report });
@@ -498,6 +521,7 @@ describe('runPRWorkflow', () => {
       const metadataFile = getMetadataOutputPath(FIXTURES_DIR);
       const findingsFile = getFindingsOutputPathV2(FIXTURES_DIR);
 
+      let findingsFileAfterReport: string;
       try {
         await runPRWorkflow(
           mockOctokit,
@@ -506,6 +530,7 @@ describe('runPRWorkflow', () => {
           EVENT_PAYLOAD_PATH,
           FIXTURES_DIR
         );
+        findingsFileAfterReport = readFileSync(findingsFile, 'utf-8');
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });
@@ -522,6 +547,13 @@ describe('runPRWorkflow', () => {
           pull_number: 123,
           commit_id: PR_HEAD_SHA,
         })
+      );
+
+      // Regression: report mode must rewrite the v2 findings file with the
+      // real posting outcome, not leave analyze mode's empty findingObservations.
+      const findingsV2 = JSON.parse(findingsFileAfterReport);
+      expect(findingsV2.findingObservations).toContainEqual(
+        expect.objectContaining({ outcome: 'posted' })
       );
     });
 

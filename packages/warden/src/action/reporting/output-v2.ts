@@ -25,8 +25,6 @@ import { generateContentHash } from '../../output/dedup.js';
 import { getVersion } from '../../utils/version.js';
 import type { FindingObservation } from './outcomes.js';
 
-export const SEVERITY_BREAKDOWN_KEYS = ['high', 'medium', 'low'] as const;
-
 export const SeverityBreakdownSchema = z.object({
   high: z.number().int().nonnegative(),
   medium: z.number().int().nonnegative(),
@@ -351,6 +349,10 @@ function deriveSkippedReason(
     if (context.eventType !== 'pull_request') return 'no_event_match';
     if (!trigger.actions?.includes(context.action)) return 'no_event_match';
     if (!matchPullRequestState(trigger, context)) {
+      if (context.action === 'labeled' && trigger.labels !== undefined) {
+        const eventLabelMatches = context.label !== undefined && trigger.labels.includes(context.label);
+        if (!eventLabelMatches) return 'label_mismatch';
+      }
       const labels = context.pullRequest?.labels ?? [];
       const labelMatches = trigger.labels?.some((label) => labels.includes(label));
       if (trigger.labels !== undefined && !labelMatches) return 'label_mismatch';

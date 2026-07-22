@@ -106,6 +106,47 @@ describe('buildMetadataOutputV2', () => {
       { skillName: 'security-review', triggerId: 'skipped-id', triggerName: 'skipped-trigger', reason: 'no_event_match' },
     ]);
   });
+
+  it('reports label_mismatch, not draft_state, when a labeled event adds a non-matching label', () => {
+    const matched = createTrigger();
+    const skipped = createTrigger({
+      id: 'skipped-id',
+      skillExecutionId: 'exec-2',
+      name: 'skipped-trigger',
+      skill: 'security-review',
+      actions: ['labeled'],
+      labels: ['deploy-ready'],
+    });
+
+    const context = createContext({
+      action: 'labeled',
+      label: 'wont-fix',
+      pullRequest: {
+        number: 4821,
+        title: 'Test PR',
+        body: '',
+        author: 'octocat',
+        baseBranch: 'main',
+        headBranch: 'feature',
+        headSha: 'abc123',
+        baseSha: 'def456',
+        files: [],
+        labels: ['deploy-ready', 'wont-fix'],
+      },
+    });
+
+    const output = buildMetadataOutputV2(
+      context,
+      [matched, skipped],
+      [matched],
+      [createResult()],
+      { runId: '123', generatedAt: '2026-01-01T00:00:00.000Z' }
+    );
+
+    expect(output.skippedTriggers).toEqual([
+      { skillName: 'security-review', triggerId: 'skipped-id', triggerName: 'skipped-trigger', reason: 'label_mismatch' },
+    ]);
+  });
 });
 
 describe('buildFindingsOutputV2', () => {

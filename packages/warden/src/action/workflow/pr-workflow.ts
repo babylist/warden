@@ -985,6 +985,38 @@ async function dismissPreviousReviewIfResolved(
 }
 
 /**
+ * Write the schema-v2 metadata/findings pair when opted in. Called from every
+ * v1 findings-file write site, including early-return "no triggers matched"
+ * paths, so v2 consumers never see a missing pair when v1 output exists.
+ */
+function writeSchemaV2Outputs(
+  inputs: ActionInputs,
+  context: EventContext,
+  resolvedTriggers: ResolvedTrigger[],
+  matchedTriggers: ResolvedTrigger[],
+  results: TriggerResult[],
+  findingObservations: FindingObservation[],
+  onError: (message: string) => void
+): void {
+  if (inputs.outputSchemaVersion !== '2') return;
+
+  const runId = process.env['GITHUB_RUN_ID'] ?? '';
+  const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
+  try {
+    const metadataPath = writeMetadataOutput(context, resolvedTriggers, matchedTriggers, results, {
+      runId,
+      runAttempt,
+      actionRef: inputs.actionRef,
+    });
+    logAction(`Metadata written to ${metadataPath}`);
+    const findingsV2Path = writeFindingsOutputV2(results, matchedTriggers, findingObservations, context, { runId });
+    logAction(`Findings (v2) written to ${findingsV2Path}`);
+  } catch (error) {
+    onError(`Failed to write schema-v2 output: ${error}`);
+  }
+}
+
+/**
  * Dismiss review, set outputs, update core check, fail action.
  */
 async function finalizeWorkflow(
@@ -1028,22 +1060,7 @@ async function finalizeWorkflow(
     warnAction(`Failed to write findings output: ${error}`);
   }
 
-  if (inputs.outputSchemaVersion === '2') {
-    const runId = process.env['GITHUB_RUN_ID'] ?? '';
-    const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
-    try {
-      const metadataPath = writeMetadataOutput(context, resolvedTriggers, matchedTriggers, results, {
-        runId,
-        runAttempt,
-        actionRef: inputs.actionRef,
-      });
-      logAction(`Metadata written to ${metadataPath}`);
-      const findingsV2Path = writeFindingsOutputV2(results, matchedTriggers, findingObservations, context, { runId });
-      logAction(`Findings (v2) written to ${findingsV2Path}`);
-    } catch (error) {
-      warnAction(`Failed to write schema-v2 output: ${error}`);
-    }
-  }
+  writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, results, findingObservations, warnAction);
 
   // Update core check with overall summary
   if (coreCheckId && context.pullRequest) {
@@ -1614,9 +1631,10 @@ async function finalizeReportWorkflow(
   triggerErrors: string[],
   options: {
     failOnWriteError?: boolean;
-    matchedTriggers?: ResolvedTrigger[];
-    resolvedTriggers?: ResolvedTrigger[];
-  } = {}
+    matchedTriggers: ResolvedTrigger[];
+    resolvedTriggers: ResolvedTrigger[];
+    inputs: ActionInputs;
+  }
 ): Promise<void> {
   await dismissPreviousReviewIfResolved(
     octokit,
@@ -1643,6 +1661,11 @@ async function finalizeReportWorkflow(
   } catch (error) {
     warnAction(`Failed to write findings output: ${error}`);
   }
+
+  writeSchemaV2Outputs(
+    options.inputs, context, options.resolvedTriggers, options.matchedTriggers,
+    results, findingObservations, warnAction
+  );
 
   await createCompletedCoreCheckForReport(
     octokit,
@@ -1778,6 +1801,7 @@ async function runAnalyzeMode(
     } catch (error) {
       setFailed(`Failed to write findings output: ${error}`);
     }
+    writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], [], setFailed);
     logAction('Analysis complete: 0 total findings');
     return;
   }
@@ -1806,22 +1830,7 @@ async function runAnalyzeMode(
     setFailed(`Failed to write findings output: ${error}`);
   }
 
-  if (inputs.outputSchemaVersion === '2') {
-    const runId = process.env['GITHUB_RUN_ID'] ?? '';
-    const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
-    try {
-      const metadataPath = writeMetadataOutput(context, resolvedTriggers, matchedTriggers, results, {
-        runId,
-        runAttempt,
-        actionRef: inputs.actionRef,
-      });
-      logAction(`Metadata written to ${metadataPath}`);
-      const findingsV2Path = writeFindingsOutputV2(results, matchedTriggers, [], context, { runId });
-      logAction(`Findings (v2) written to ${findingsV2Path}`);
-    } catch (error) {
-      setFailed(`Failed to write schema-v2 output: ${error}`);
-    }
-  }
+  writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, results, [], setFailed);
 
   handleTriggerErrors(collectTriggerErrors(results), matchedTriggers.length, { failAll: false });
   logAction(`Analysis complete: ${outputs.findingsCount} total findings`);
@@ -2032,6 +2041,7 @@ async function runReportMode(
       } catch (error) {
         warnAction(`Failed to write findings output: ${error}`);
       }
+      writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], [], warnAction);
       await createCompletedCoreCheckForReport(
         octokit,
         context,
@@ -2068,6 +2078,7 @@ async function runReportMode(
       } catch (error) {
         warnAction(`Failed to write findings output: ${error}`);
       }
+      writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], cleanupFindingObservations, warnAction);
       await createCompletedCoreCheckForReport(
         octokit,
         context,
@@ -2135,7 +2146,7 @@ async function runReportMode(
       canResolveStale,
       gate,
       triggerErrors,
-      { failOnWriteError: true, matchedTriggers, resolvedTriggers },
+      { failOnWriteError: true, matchedTriggers, resolvedTriggers, inputs },
     );
   } catch (error) {
     if (error instanceof ActionFailedError) {
@@ -2231,6 +2242,7 @@ export async function runPRWorkflow(
         } catch (error) {
           warnAction(`Failed to write findings output: ${error}`);
         }
+        writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], [], warnAction);
         await completeSkippedCoreCheck(octokit, context, coreCheckId, skipCoreCheck);
         return;
       }
@@ -2253,6 +2265,7 @@ export async function runPRWorkflow(
           } catch (error) {
             warnAction(`Failed to write findings output: ${error}`);
           }
+          writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], cleanupFindingObservations, warnAction);
           await completeSkippedCoreCheck(octokit, context, coreCheckId, {
             title: 'No triggers matched',
             message: 'No triggers matched for this event.',
