@@ -595,8 +595,6 @@ export function buildFindingsOutputV2(
   const skillExecutions: SkillExecution[] = [];
   const findings: ExportedFindingV2[] = [];
   const discardedFindings: DiscardedFinding[] = [];
-  const verificationById = new Map<string, VerificationStage>();
-  const mergeById = new Map<string, MergeStage>();
 
   for (const result of results) {
     const report = result.report;
@@ -604,6 +602,11 @@ export function buildFindingsOutputV2(
 
     const trigger = result.triggerId ? triggerById.get(result.triggerId) : undefined;
     const skillExecutionId = trigger?.skillExecutionId ?? skillExecutionIdByName.get(report.skill) ?? report.skill;
+
+    // Finding IDs are model-assigned per skill run and can collide across
+    // skills, so these maps must not survive past this execution's findings.
+    const verificationById = new Map<string, VerificationStage>();
+    const mergeById = new Map<string, MergeStage>();
 
     for (const event of result.findingProcessingEvents ?? []) {
       if (event.stage === 'verification' && event.action === 'revised' && event.replacement) {
