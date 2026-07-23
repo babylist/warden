@@ -77,6 +77,7 @@ import {
   setWorkflowOutputs,
   getAuthenticatedBotLogin,
   writeFindingsOutput,
+  writeFindingsOutputs,
   writeMetadataOutput,
   writeMetadataOutputObject,
   writeFindingsOutputV2,
@@ -1090,17 +1091,15 @@ async function finalizeWorkflow(
   setWorkflowOutputs(outputs);
 
   // Write structured findings to file for external export (GCS, S3, etc.)
-  try {
-    const findingsPath = writeFindingsOutput(reports, context, findingObservations, {
+  writeFindingsOutputs(
+    () => writeFindingsOutput(reports, context, findingObservations, {
       triggerResults: toReplayTriggerResults(results),
       configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
-    });
-    logAction(`Findings written to ${findingsPath}`);
-  } catch (error) {
-    warnAction(`Failed to write findings output: ${error}`);
-  }
-
-  writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, results, findingObservations, warnAction);
+    }),
+    () => writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, results, findingObservations, warnAction),
+    warnAction,
+    (path) => logAction(`Findings written to ${path}`)
+  );
 
   // Update core check with overall summary
   if (coreCheckId && context.pullRequest) {
@@ -1696,22 +1695,20 @@ async function finalizeReportWorkflow(
   const outputs = computeWorkflowOutputs(reports);
   setWorkflowOutputs(outputs);
 
-  try {
-    const findingsPath = writeFindingsOutput(reports, context, findingObservations, {
+  writeFindingsOutputs(
+    () => writeFindingsOutput(reports, context, findingObservations, {
       triggerResults: toReplayTriggerResults(results),
       configuredSkills: buildConfiguredSkillsList({
         allTriggers: options.resolvedTriggers,
         matchedTriggers: options.matchedTriggers,
       }),
-    });
-    logAction(`Findings written to ${findingsPath}`);
-  } catch (error) {
-    warnAction(`Failed to write findings output: ${error}`);
-  }
-
-  writeSchemaV2ReportOutputs(
-    options.metadataOutputV2, options.findingsOutputV2, context,
-    options.matchedTriggers, findingObservations, warnAction
+    }),
+    () => writeSchemaV2ReportOutputs(
+      options.metadataOutputV2, options.findingsOutputV2, context,
+      options.matchedTriggers, findingObservations, warnAction
+    ),
+    warnAction,
+    (path) => logAction(`Findings written to ${path}`)
   );
 
   await createCompletedCoreCheckForReport(
@@ -1839,16 +1836,15 @@ async function runAnalyzeMode(
     setOutput('findings-count', 0);
     setOutput('high-count', 0);
     setOutput('summary', skipCoreCheck?.title ?? 'No triggers matched');
-    try {
-      const findingsPath = writeFindingsOutput([], context, [], {
+    writeFindingsOutputs(
+      () => writeFindingsOutput([], context, [], {
         triggerResults: [],
         configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
-      });
-      logAction(`Findings written to ${findingsPath}`);
-    } catch (error) {
-      setFailed(`Failed to write findings output: ${error}`);
-    }
-    writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], [], setFailed);
+      }),
+      () => writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], [], setFailed),
+      setFailed,
+      (path) => logAction(`Findings written to ${path}`)
+    );
     logAction('Analysis complete: 0 total findings');
     return;
   }
@@ -1867,17 +1863,15 @@ async function runAnalyzeMode(
   setWorkflowOutputs(outputs);
   span.setAttribute('warden.finding.count', reports.flatMap((r) => r.findings).length);
 
-  try {
-    const findingsPath = writeFindingsOutput(reports, context, [], {
+  writeFindingsOutputs(
+    () => writeFindingsOutput(reports, context, [], {
       triggerResults: toReplayTriggerResults(results),
       configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
-    });
-    logAction(`Findings written to ${findingsPath}`);
-  } catch (error) {
-    setFailed(`Failed to write findings output: ${error}`);
-  }
-
-  writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, results, [], setFailed);
+    }),
+    () => writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, results, [], setFailed),
+    setFailed,
+    (path) => logAction(`Findings written to ${path}`)
+  );
 
   handleTriggerErrors(collectTriggerErrors(results), matchedTriggers.length, { failAll: false });
   logAction(`Analysis complete: ${outputs.findingsCount} total findings`);
@@ -2123,16 +2117,15 @@ async function runReportMode(
     if (skipCoreCheck) {
       const outputs = { findingsCount: 0, highCount: 0, summary: skipCoreCheck.title };
       setWorkflowOutputs(outputs);
-      try {
-        const findingsPath = writeFindingsOutput([], context, [], {
+      writeFindingsOutputs(
+        () => writeFindingsOutput([], context, [], {
           triggerResults: [],
           configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
-        });
-        logAction(`Findings written to ${findingsPath}`);
-      } catch (error) {
-        warnAction(`Failed to write findings output: ${error}`);
-      }
-      writeSchemaV2ReportOutputs(metadataOutputV2, findingsOutputV2, context, matchedTriggers, [], warnAction);
+        }),
+        () => writeSchemaV2ReportOutputs(metadataOutputV2, findingsOutputV2, context, matchedTriggers, [], warnAction),
+        warnAction,
+        (path) => logAction(`Findings written to ${path}`)
+      );
       await createCompletedCoreCheckForReport(
         octokit,
         context,
@@ -2160,17 +2153,16 @@ async function runReportMode(
       );
       const outputs = { findingsCount: 0, highCount: 0, summary: 'No triggers matched' };
       setWorkflowOutputs(outputs);
-      try {
-        const findingsPath = writeFindingsOutput([], context, cleanupFindingObservations, {
+      writeFindingsOutputs(
+        () => writeFindingsOutput([], context, cleanupFindingObservations, {
           triggerResults: [],
           configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
-        });
-        logAction(`Findings written to ${findingsPath}`);
-      } catch (error) {
-        warnAction(`Failed to write findings output: ${error}`);
-      }
-      writeSchemaV2ReportOutputs(
-        metadataOutputV2, findingsOutputV2, context, matchedTriggers, cleanupFindingObservations, warnAction
+        }),
+        () => writeSchemaV2ReportOutputs(
+          metadataOutputV2, findingsOutputV2, context, matchedTriggers, cleanupFindingObservations, warnAction
+        ),
+        warnAction,
+        (path) => logAction(`Findings written to ${path}`)
       );
       await createCompletedCoreCheckForReport(
         octokit,
@@ -2328,14 +2320,13 @@ export async function runPRWorkflow(
         setOutput('findings-count', 0);
         setOutput('high-count', 0);
         setOutput('summary', skipCoreCheck.title);
-        try {
-          writeFindingsOutput([], context, [], {
+        writeFindingsOutputs(
+          () => writeFindingsOutput([], context, [], {
             configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
-          });
-        } catch (error) {
-          warnAction(`Failed to write findings output: ${error}`);
-        }
-        writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], [], warnAction);
+          }),
+          () => writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], [], warnAction),
+          warnAction
+        );
         await completeSkippedCoreCheck(octokit, context, coreCheckId, skipCoreCheck);
         return;
       }
@@ -2351,14 +2342,15 @@ export async function runPRWorkflow(
           setOutput('findings-count', 0);
           setOutput('high-count', 0);
           setOutput('summary', 'No triggers matched');
-          try {
-            writeFindingsOutput([], context, cleanupFindingObservations, {
+          writeFindingsOutputs(
+            () => writeFindingsOutput([], context, cleanupFindingObservations, {
               configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
-            });
-          } catch (error) {
-            warnAction(`Failed to write findings output: ${error}`);
-          }
-          writeSchemaV2Outputs(inputs, context, resolvedTriggers, matchedTriggers, [], cleanupFindingObservations, warnAction);
+            }),
+            () => writeSchemaV2Outputs(
+              inputs, context, resolvedTriggers, matchedTriggers, [], cleanupFindingObservations, warnAction
+            ),
+            warnAction
+          );
           await completeSkippedCoreCheck(octokit, context, coreCheckId, {
             title: 'No triggers matched',
             message: 'No triggers matched for this event.',

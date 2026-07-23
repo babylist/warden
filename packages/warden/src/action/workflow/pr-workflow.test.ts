@@ -458,6 +458,39 @@ describe('runPRWorkflow', () => {
       expect(mockOctokit.pulls.createReview).not.toHaveBeenCalled();
     });
 
+    it('analyze mode still writes schema-v2 outputs when the v1 findings artifact fails to write', async () => {
+      const report = createSkillReport({ findings: [createFinding()] });
+      mockRunSkillTask.mockResolvedValue({ name: 'test-trigger', report });
+      mockWriteFindingsOutput.mockImplementationOnce(() => {
+        throw new Error('Disk full');
+      });
+
+      const metadataFile = getMetadataOutputPath(FIXTURES_DIR);
+      const findingsFile = getFindingsOutputPathV2(FIXTURES_DIR);
+      try {
+        await expect(
+          runPRWorkflow(
+            mockOctokit,
+            createDefaultInputs({ mode: 'analyze', outputSchemaVersion: '2' }),
+            'pull_request',
+            EVENT_PAYLOAD_PATH,
+            FIXTURES_DIR
+          )
+        ).rejects.toThrow('setFailed');
+
+        expect(mockSetFailed).toHaveBeenCalledWith(
+          expect.stringContaining('Failed to write findings output: Error: Disk full')
+        );
+        const metadata = JSON.parse(readFileSync(metadataFile, 'utf-8'));
+        const findings = JSON.parse(readFileSync(findingsFile, 'utf-8'));
+        expect(metadata.configuredSkills).toEqual([{ name: 'test-skill', triggered: true }]);
+        expect(findings.findings).toHaveLength(1);
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+      }
+    });
+
     it('report mode publishes completed checks from the findings file without rerunning skills', async () => {
       const finding = createFinding();
       const report = createSkillReport({ findings: [finding] });

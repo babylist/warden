@@ -19,6 +19,7 @@ import {
   getFindingsOutputPath,
   prepareRuntimeEnvironment,
   writeFindingsOutput,
+  writeFindingsOutputs,
 } from './base.js';
 import { FindingsOutputSchema } from '../reporting/output.js';
 
@@ -105,6 +106,37 @@ describe('findings output', () => {
     process.env['RUNNER_TEMP'] = runnerTemp;
 
     expect(getFindingsOutputPath()).toBe(join(runnerTemp, 'warden-findings.json'));
+  });
+});
+
+describe('writeFindingsOutputs', () => {
+  it('always runs writeV2 even when writeV1 throws, and reports the failure only after', () => {
+    const order: string[] = [];
+    const onFailure = vi.fn();
+
+    writeFindingsOutputs(
+      () => {
+        order.push('v1');
+        throw new Error('disk full');
+      },
+      () => order.push('v2'),
+      onFailure
+    );
+
+    expect(order).toEqual(['v1', 'v2']);
+    expect(onFailure).toHaveBeenCalledWith('Failed to write findings output: Error: disk full');
+  });
+
+  it('reports success and still runs writeV2 when writeV1 succeeds', () => {
+    const onFailure = vi.fn();
+    const onSuccess = vi.fn();
+    const writeV2 = vi.fn();
+
+    writeFindingsOutputs(() => '/tmp/warden-findings.json', writeV2, onFailure, onSuccess);
+
+    expect(writeV2).toHaveBeenCalledOnce();
+    expect(onSuccess).toHaveBeenCalledWith('/tmp/warden-findings.json');
+    expect(onFailure).not.toHaveBeenCalled();
   });
 });
 

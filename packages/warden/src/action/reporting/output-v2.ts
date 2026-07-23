@@ -570,11 +570,23 @@ function buildCorroboratingAttributions(
  * A skill can also dedupe more than one of its own findings against the
  * same winner in one run, so also collapse repeat matches from the same
  * skillExecutionId before returning.
+ *
+ * A posted comment's dedupe match only records the winner's skill *name*
+ * (parsed from the comment footer), not its skillExecutionId. When that name
+ * has more than one execution in the current run, there's no way to tell
+ * which execution the comment actually corroborates, so skip rather than
+ * attach the same corroboration to every same-named execution.
  */
 function resolveCorroboratingAttributions(
   candidates: CorroboratingCandidate[],
-  targetSkillName: string
+  targetSkillName: string,
+  targetSkillExecutionId: string,
+  skillExecutionIdByName: Map<string, string>
 ): FindingAttribution[] {
+  if (skillExecutionIdByName.get(targetSkillName) !== targetSkillExecutionId) {
+    return [];
+  }
+
   const seenSkillExecutionIds = new Set<string>();
   const attributions: FindingAttribution[] = [];
   for (const candidate of candidates) {
@@ -632,6 +644,7 @@ export function patchFindingsOutputV2Observations(
   const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, matchedTriggers);
   const corroboratingById = buildCorroboratingAttributions(findingObservations, matchedTriggers);
   const reportedIdMap = buildReportedIdMap(findingObservations, matchedTriggers);
+  const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
 
   const findings = base.findings.map((original) => {
     const originSkillExecutionId = original.reportedBy.find((r) => r.role === 'primary')?.skillExecutionId ?? '';
@@ -641,7 +654,9 @@ export function patchFindingsOutputV2Observations(
     const primarySkillName = finding.reportedBy.find((r) => r.role === 'primary')?.skillName ?? '';
     const newCorroborators = resolveCorroboratingAttributions(
       corroboratingById.get(finding.reportedId ?? finding.id) ?? [],
-      primarySkillName
+      primarySkillName,
+      originSkillExecutionId,
+      skillExecutionIdByName
     );
     if (newCorroborators.length === 0) return finding;
 
@@ -652,12 +667,24 @@ export function patchFindingsOutputV2Observations(
     return { ...finding, reportedBy: [...finding.reportedBy, ...additions] };
   });
 
-  return WardenFindingsSchemaV2.parse({
-    ...base,
+  // Every field is named explicitly (no `...base` spread) so a new field
+  // added to WardenFindingsV2 fails to compile here until this function
+  // decides whether report mode owns it or must pass it through from base.
+  const patched: WardenFindingsV2 = {
+    schemaVersion: base.schemaVersion,
+    runId: base.runId,
+    skillExecutions: base.skillExecutions,
+    discardedFindings: base.discardedFindings,
     findings,
     findingObservations: observations,
-    summary: { ...base.summary, byOutcome },
-  });
+    summary: {
+      totalFindings: base.summary.totalFindings,
+      totalSkillExecutions: base.summary.totalSkillExecutions,
+      bySeverity: base.summary.bySeverity,
+      byOutcome,
+    },
+  };
+  return WardenFindingsSchemaV2.parse(patched);
 }
 
 export interface BuildFindingsOutputV2Options {
@@ -778,7 +805,12 @@ export function buildFindingsOutputV2(
         sourceSnippet: finding.sourceSnippet,
         reportedBy: [
           { skillExecutionId, skillName: report.skill, role: 'primary' },
-          ...resolveCorroboratingAttributions(corroboratingById.get(finding.reportedId ?? finding.id) ?? [], report.skill),
+          ...resolveCorroboratingAttributions(
+            corroboratingById.get(finding.reportedId ?? finding.id) ?? [],
+            report.skill,
+            skillExecutionId,
+            skillExecutionIdByName
+          ),
         ],
         provenance: {
           originSkillExecutionId: skillExecutionId,

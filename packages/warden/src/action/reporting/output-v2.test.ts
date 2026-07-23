@@ -361,6 +361,62 @@ describe('buildFindingsOutputV2', () => {
     ]);
   });
 
+  it('does not attach corroboration to either finding when the same skill ran twice and their ids collide', () => {
+    const firstExecution = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
+    const secondExecution = createTrigger({
+      id: 'trigger-2',
+      skillExecutionId: 'exec-2',
+      name: 'code-review-strict',
+      skill: 'code-review',
+    });
+    const corroboratingTrigger = createTrigger({
+      id: 'trigger-3',
+      skillExecutionId: 'exec-3',
+      name: 'security-review-trigger',
+      skill: 'security-review',
+    });
+
+    const firstResult = createResult({
+      triggerId: 'trigger-1',
+      report: createReport({ skill: 'code-review', findings: [createFinding({ id: 'WRD-001' })] }),
+    });
+    const secondResult = createResult({
+      triggerId: 'trigger-2',
+      report: createReport({ skill: 'code-review', findings: [createFinding({ id: 'WRD-001' })] }),
+    });
+
+    const observations: FindingObservation[] = [
+      {
+        outcome: 'deduped',
+        finding: createFinding({ id: 'WRD-004' }),
+        skill: 'security-review',
+        dedupe: {
+          source: 'warden',
+          matchType: 'hash',
+          existingFindingId: 'WRD-001',
+          existingSkills: ['code-review'],
+        },
+      },
+    ];
+
+    const output = buildFindingsOutputV2(
+      [firstResult, secondResult],
+      [firstExecution, secondExecution, corroboratingTrigger],
+      observations,
+      { runId: '123' }
+    );
+
+    const fromFirstExecution = output.findings.find((f) => f.provenance.originSkillExecutionId === 'exec-1');
+    const fromSecondExecution = output.findings.find((f) => f.provenance.originSkillExecutionId === 'exec-2');
+
+    expect(fromFirstExecution?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-1', skillName: 'code-review', role: 'primary' },
+    ]);
+    expect(fromSecondExecution?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-2', skillName: 'code-review', role: 'primary' },
+    ]);
+  });
+
   it('attaches corroboration when the existing comment has an empty skills array', () => {
     const firstTrigger = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
     const secondTrigger = createTrigger({
@@ -556,6 +612,29 @@ describe('fromAuxiliaryUsageEntries', () => {
 });
 
 describe('patchFindingsOutputV2Observations', () => {
+  it('is a no-op when patched with no report-phase observations (build/patch parity)', () => {
+    const trigger = createTrigger();
+    const finding = createFinding({ id: 'WRD-002', severity: 'medium' });
+    const result = createResult({
+      report: createReport({ findings: [finding] }),
+      findingProcessingEvents: [
+        {
+          stage: 'verification',
+          action: 'revised',
+          finding: createFinding({ id: 'WRD-002', severity: 'high', title: 'Original title' }),
+          replacement: finding,
+          reason: 'narrower scope',
+          model: 'claude-haiku-4-5',
+        },
+      ],
+    });
+
+    const analyzePhaseOutput = buildFindingsOutputV2([result], [trigger], [], { runId: '123' });
+    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [trigger], []);
+
+    expect(patched).toEqual(analyzePhaseOutput);
+  });
+
   it('preserves skillExecutions/findings/discardedFindings/provenance while updating only observations and byOutcome', () => {
     const trigger = createTrigger();
     const finding = createFinding({ id: 'WRD-002', severity: 'medium' });

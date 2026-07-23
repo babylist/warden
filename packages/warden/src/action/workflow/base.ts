@@ -405,6 +405,33 @@ export function writeFindingsOutput(
   return filePath;
 }
 
+/**
+ * Write the v1 findings file, then always run `writeV2` — even if the v1
+ * write throws — since v2 consumers must never see a missing pair when v1
+ * output was attempted. A v1 failure is reported through `onFailure` only
+ * after `writeV2` has run, so callers that need a hard failure (e.g. analyze
+ * mode, whose output feeds report mode) can pass a throwing handler without
+ * risking the v2 write becoming unreachable.
+ */
+export function writeFindingsOutputs(
+  writeV1: () => string,
+  writeV2: () => void,
+  onFailure: (message: string) => void,
+  onSuccess?: (path: string) => void
+): void {
+  let failureMessage: string | undefined;
+  try {
+    const path = writeV1();
+    onSuccess?.(path);
+  } catch (error) {
+    failureMessage = `Failed to write findings output: ${error}`;
+  }
+  writeV2();
+  if (failureMessage !== undefined) {
+    onFailure(failureMessage);
+  }
+}
+
 /** Get the path for the schema-v2 metadata output file. */
 export function getMetadataOutputPath(repoPath?: string): string {
   if (repoPath && process.env['GITHUB_WORKSPACE']) {

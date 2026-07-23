@@ -33,6 +33,7 @@ import {
   handleTriggerErrors,
   getDefaultBranchFromAPI,
   writeFindingsOutput,
+  writeFindingsOutputs,
   writeMetadataOutput,
   writeFindingsOutputV2,
 } from './base.js';
@@ -139,12 +140,11 @@ async function runScheduleWorkflowInner(
         repository: { owner: o, name: n, fullName, defaultBranch: '' },
         repoPath,
       };
-      try {
-        writeFindingsOutput([], emptyContext, [], { configuredSkills: [] });
-      } catch (writeError) {
-        console.error(`::warning::Failed to write findings output: ${writeError}`);
-      }
-      writeSchemaV2ScheduleOutputs(inputs, emptyContext, [], [], []);
+      writeFindingsOutputs(
+        () => writeFindingsOutput([], emptyContext, [], { configuredSkills: [] }),
+        () => writeSchemaV2ScheduleOutputs(inputs, emptyContext, [], [], []),
+        (message) => console.error(`::warning::${message}`)
+      );
       return;
     }
     throw error;
@@ -172,14 +172,13 @@ async function runScheduleWorkflowInner(
       repository: { owner: o, name: n, fullName, defaultBranch: '' },
       repoPath,
     };
-    try {
-      writeFindingsOutput([], emptyContext, [], {
+    writeFindingsOutputs(
+      () => writeFindingsOutput([], emptyContext, [], {
         configuredSkills: buildConfiguredSkillsList({ allTriggers: allResolvedTriggers, matchedTriggers: [] }),
-      });
-    } catch (writeError) {
-      console.error(`::warning::Failed to write findings output: ${writeError}`);
-    }
-    writeSchemaV2ScheduleOutputs(inputs, emptyContext, allResolvedTriggers, [], []);
+      }),
+      () => writeSchemaV2ScheduleOutputs(inputs, emptyContext, allResolvedTriggers, [], []),
+      (message) => console.error(`::warning::${message}`)
+    );
     return;
   }
 
@@ -349,15 +348,14 @@ async function runScheduleWorkflowInner(
     repository: { owner, name: repo, fullName: `${owner}/${repo}`, defaultBranch },
     repoPath,
   };
-  try {
-    const findingsPath = writeFindingsOutput(allReports, scheduleContext, [], {
+  writeFindingsOutputs(
+    () => writeFindingsOutput(allReports, scheduleContext, [], {
       configuredSkills: buildConfiguredSkillsList({ allTriggers: allResolvedTriggers, matchedTriggers }),
-    });
-    console.log(`Findings written to ${findingsPath}`);
-  } catch (error) {
-    console.error(`::warning::Failed to write findings output: ${error}`);
-  }
-  writeSchemaV2ScheduleOutputs(inputs, scheduleContext, allResolvedTriggers, matchedTriggers, results);
+    }),
+    () => writeSchemaV2ScheduleOutputs(inputs, scheduleContext, allResolvedTriggers, matchedTriggers, results),
+    (message) => console.error(`::warning::${message}`),
+    (path) => console.log(`Findings written to ${path}`)
+  );
 
   // Both outputs are written above, so a total-failure or threshold exit below
   // never discards artifacts that already reflect this run's results.
