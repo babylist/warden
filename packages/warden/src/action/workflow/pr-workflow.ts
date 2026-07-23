@@ -78,10 +78,8 @@ import {
   getAuthenticatedBotLogin,
   writeFindingsOutput,
   writeFindingsOutputs,
-  writeMetadataOutput,
-  writeMetadataOutputObject,
-  writeFindingsOutputV2,
-  writeFindingsOutputV2Object,
+  writeSchemaV2Output,
+  writeSchemaV2OutputPair,
 } from './base.js';
 import { renderSkillReport } from '../../output/renderer.js';
 import {
@@ -1013,16 +1011,12 @@ function writeSchemaV2Outputs(
   const runId = process.env['GITHUB_RUN_ID'] ?? '';
   const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
   try {
-    const metadataPath = writeMetadataOutput(context, resolvedTriggers, matchedTriggers, results, {
-      runId,
-      runAttempt,
-      actionRef: inputs.actionRef,
-      failOn: inputs.failOn,
-      reportOn: inputs.reportOn,
-    });
+    const { metadataPath, findingsPath } = writeSchemaV2Output(
+      context, resolvedTriggers, matchedTriggers, results, findingObservations,
+      { runId, runAttempt, actionRef: inputs.actionRef, failOn: inputs.failOn, reportOn: inputs.reportOn }
+    );
     logAction(`Metadata written to ${metadataPath}`);
-    const findingsV2Path = writeFindingsOutputV2(results, matchedTriggers, findingObservations, context, { runId });
-    logAction(`Findings (v2) written to ${findingsV2Path}`);
+    logAction(`Findings (v2) written to ${findingsPath}`);
   } catch (error) {
     onError(`Failed to write schema-v2 output: ${error}`);
   }
@@ -1040,6 +1034,7 @@ function writeSchemaV2ReportOutputs(
   metadataOutputV2: WardenMetadata | undefined,
   findingsOutputV2: WardenFindingsV2 | undefined,
   context: EventContext,
+  results: TriggerResult[],
   matchedTriggers: ResolvedTrigger[],
   findingObservations: FindingObservation[],
   onError: (message: string) => void
@@ -1047,11 +1042,10 @@ function writeSchemaV2ReportOutputs(
   if (!metadataOutputV2 || !findingsOutputV2) return;
 
   try {
-    const metadataPath = writeMetadataOutputObject(metadataOutputV2, context);
+    const patched = patchFindingsOutputV2Observations(findingsOutputV2, results, matchedTriggers, findingObservations);
+    const { metadataPath, findingsPath } = writeSchemaV2OutputPair(metadataOutputV2, patched, context);
     logAction(`Metadata written to ${metadataPath}`);
-    const patched = patchFindingsOutputV2Observations(findingsOutputV2, matchedTriggers, findingObservations);
-    const findingsV2Path = writeFindingsOutputV2Object(patched, context);
-    logAction(`Findings (v2) written to ${findingsV2Path}`);
+    logAction(`Findings (v2) written to ${findingsPath}`);
   } catch (error) {
     onError(`Failed to write schema-v2 output: ${error}`);
   }
@@ -1704,7 +1698,7 @@ async function finalizeReportWorkflow(
       }),
     }),
     () => writeSchemaV2ReportOutputs(
-      options.metadataOutputV2, options.findingsOutputV2, context,
+      options.metadataOutputV2, options.findingsOutputV2, context, results,
       options.matchedTriggers, findingObservations, warnAction
     ),
     warnAction,
@@ -2122,7 +2116,7 @@ async function runReportMode(
           triggerResults: [],
           configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
         }),
-        () => writeSchemaV2ReportOutputs(metadataOutputV2, findingsOutputV2, context, matchedTriggers, [], warnAction),
+        () => writeSchemaV2ReportOutputs(metadataOutputV2, findingsOutputV2, context, [], matchedTriggers, [], warnAction),
         warnAction,
         (path) => logAction(`Findings written to ${path}`)
       );
@@ -2159,7 +2153,7 @@ async function runReportMode(
           configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
         }),
         () => writeSchemaV2ReportOutputs(
-          metadataOutputV2, findingsOutputV2, context, matchedTriggers, cleanupFindingObservations, warnAction
+          metadataOutputV2, findingsOutputV2, context, [], matchedTriggers, cleanupFindingObservations, warnAction
         ),
         warnAction,
         (path) => logAction(`Findings written to ${path}`)

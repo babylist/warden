@@ -34,8 +34,7 @@ import {
   getDefaultBranchFromAPI,
   writeFindingsOutput,
   writeFindingsOutputs,
-  writeMetadataOutput,
-  writeFindingsOutputV2,
+  writeSchemaV2Output,
 } from './base.js';
 import type { TriggerResult } from '../triggers/executor.js';
 import type { FindingProcessingEvent } from '../../sdk/types.js';
@@ -63,16 +62,12 @@ function writeSchemaV2ScheduleOutputs(
   const runId = process.env['GITHUB_RUN_ID'] ?? '';
   const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
   try {
-    const metadataPath = writeMetadataOutput(context, resolvedTriggers, matchedTriggers, results, {
-      runId,
-      runAttempt,
-      actionRef: inputs.actionRef,
-      failOn: inputs.failOn,
-      reportOn: inputs.reportOn,
-    });
+    const { metadataPath, findingsPath } = writeSchemaV2Output(
+      context, resolvedTriggers, matchedTriggers, results, [],
+      { runId, runAttempt, actionRef: inputs.actionRef, failOn: inputs.failOn, reportOn: inputs.reportOn }
+    );
     console.log(`Metadata written to ${metadataPath}`);
-    const findingsV2Path = writeFindingsOutputV2(results, matchedTriggers, [], context, { runId });
-    console.log(`Findings (v2) written to ${findingsV2Path}`);
+    console.log(`Findings (v2) written to ${findingsPath}`);
   } catch (error) {
     console.error(`::warning::Failed to write schema-v2 output: ${error}`);
   }

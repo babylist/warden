@@ -780,9 +780,42 @@ describe('patchFindingsOutputV2Observations', () => {
     });
 
     const analyzePhaseOutput = buildFindingsOutputV2([result], [trigger], [], { runId: '123' });
-    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [trigger], []);
+    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [result], [trigger], []);
 
     expect(patched).toEqual(analyzePhaseOutput);
+  });
+
+  it('backfills skillExecutions usage/auxiliaryUsage from live report-phase posting costs', () => {
+    const trigger = createTrigger();
+    const finding = createFinding({ id: 'WRD-401' });
+
+    const analyzePhaseOutput = buildFindingsOutputV2(
+      [createResult({ report: createReport({ findings: [finding] }) })],
+      [trigger],
+      [],
+      { runId: '123' }
+    );
+    expect(analyzePhaseOutput.skillExecutions[0]?.auxiliaryUsage).toBeUndefined();
+
+    // Posting (dedupe/consolidate) merges auxiliary usage onto the live report
+    // after the analyze-phase payload above was already built (see poster.ts).
+    const postedResult = createResult({
+      report: createReport({
+        findings: [finding],
+        auxiliaryUsage: { dedupe: { inputTokens: 100, outputTokens: 20, costUSD: 0.01 } },
+        auxiliaryUsageAttribution: { dedupe: { model: 'claude-haiku-4-5' } },
+      }),
+    });
+
+    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [postedResult], [trigger], []);
+
+    expect(patched.skillExecutions[0]?.auxiliaryUsage).toEqual([
+      {
+        agent: 'dedupe',
+        model: 'claude-haiku-4-5',
+        usage: { inputTokens: 100, outputTokens: 20, costUSD: 0.01 },
+      },
+    ]);
   });
 
   it('preserves skillExecutions/findings/discardedFindings/provenance while updating only observations and byOutcome', () => {
@@ -814,7 +847,7 @@ describe('patchFindingsOutputV2Observations', () => {
     const reportPhaseObservations: FindingObservation[] = [
       { outcome: 'posted', finding, skill: 'code-review' },
     ];
-    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [trigger], reportPhaseObservations);
+    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [result], [trigger], reportPhaseObservations);
 
     // The parts that can only be reconstructed from findingProcessingEvents
     // (unavailable during report-mode replay) must survive unchanged.
@@ -863,7 +896,7 @@ describe('patchFindingsOutputV2Observations', () => {
     ];
 
     const patched = patchFindingsOutputV2Observations(
-      analyzePhaseOutput, [primaryTrigger, corroboratingTrigger], reportPhaseObservations
+      analyzePhaseOutput, [], [primaryTrigger, corroboratingTrigger], reportPhaseObservations
     );
 
     expect(patched.findings[0]?.reportedBy).toEqual([
@@ -899,7 +932,7 @@ describe('patchFindingsOutputV2Observations', () => {
       },
     ];
 
-    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [trigger], reportPhaseObservations);
+    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [], [trigger], reportPhaseObservations);
 
     expect(patched.findings[0]?.id).toBe('WRD-301');
     expect(patched.findings[0]?.reportedId).toBe('WRZ-XPL');
@@ -935,7 +968,7 @@ describe('patchFindingsOutputV2Observations', () => {
       },
     ];
 
-    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [triggerA, triggerB], reportPhaseObservations);
+    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [], [triggerA, triggerB], reportPhaseObservations);
 
     const patchedA = patched.findings.find((f) => f.reportedBy.some((r) => r.skillName === 'skill-a'));
     const patchedB = patched.findings.find((f) => f.reportedBy.some((r) => r.skillName === 'skill-b'));

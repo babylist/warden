@@ -17,7 +17,6 @@ import { buildFindingsOutput } from '../reporting/output.js';
 import type { ReplayTriggerResult } from '../reporting/output.js';
 import { buildFindingsOutputV2, buildMetadataOutputV2 } from '../reporting/output-v2.js';
 import type {
-  BuildFindingsOutputV2Options,
   BuildMetadataOutputV2Options,
   WardenFindingsV2,
   WardenMetadata,
@@ -452,28 +451,6 @@ export function getFindingsOutputPathV2(repoPath?: string): string {
   return join(tmpDir, 'warden-findings-v2.json');
 }
 
-/** Write an already-built schema-v2 metadata object as-is, with no rebuild. */
-export function writeMetadataOutputObject(metadata: WardenMetadata, context: EventContext): string {
-  const filePath = getMetadataOutputPath(context.repoPath);
-
-  mkdirSync(dirname(filePath), { recursive: true });
-  writeFileSync(filePath, JSON.stringify(metadata, null, 2));
-  setOutput('metadata-file', getFindingsOutputValue(filePath, context.repoPath));
-  return filePath;
-}
-
-/** Write the schema-v2 metadata file, gated separately from the v1 findings-file write. */
-export function writeMetadataOutput(
-  context: EventContext,
-  resolvedTriggers: ResolvedTrigger[],
-  matchedTriggers: ResolvedTrigger[],
-  results: TriggerResult[],
-  options: BuildMetadataOutputV2Options
-): string {
-  const output = buildMetadataOutputV2(context, resolvedTriggers, matchedTriggers, results, options);
-  return writeMetadataOutputObject(output, context);
-}
-
 /**
  * Write an already-built schema-v2 findings object as-is, with no rebuild.
  *
@@ -494,14 +471,49 @@ export function writeFindingsOutputV2Object(findings: WardenFindingsV2, context:
   return filePath;
 }
 
-/** Write the schema-v2 findings file, gated separately from the v1 findings-file write. */
-export function writeFindingsOutputV2(
-  results: TriggerResult[],
-  matchedTriggers: ResolvedTrigger[],
-  findingObservations: FindingObservation[],
+/**
+ * Write both schema-v2 files, then set their action outputs together.
+ *
+ * `metadata-file` and `findings-file` must never disagree on which schema
+ * version they point at. Writing the two files independently (each setting
+ * its own outputs as it goes) can leave `metadata-file` pointed at v2 while
+ * a subsequent findings-file write failure leaves `findings-file` on
+ * whatever v1 already set — a schema mismatch downstream consumers treat as
+ * a hard error. Serializing both files to disk before setting any output
+ * means a failure here leaves neither v2 output set, so a prior v1
+ * `findings-file` output remains the last consistent value.
+ */
+export function writeSchemaV2OutputPair(
+  metadata: WardenMetadata,
+  findings: WardenFindingsV2,
+  context: EventContext
+): { metadataPath: string; findingsPath: string } {
+  const metadataPath = getMetadataOutputPath(context.repoPath);
+  const findingsPath = getFindingsOutputPathV2(context.repoPath);
+
+  mkdirSync(dirname(metadataPath), { recursive: true });
+  writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
+  mkdirSync(dirname(findingsPath), { recursive: true });
+  writeFileSync(findingsPath, JSON.stringify(findings, null, 2));
+
+  setOutput('metadata-file', getFindingsOutputValue(metadataPath, context.repoPath));
+  const findingsOutputValue = getFindingsOutputValue(findingsPath, context.repoPath);
+  setOutput('findings-file-v2', findingsOutputValue);
+  setOutput('findings-file', findingsOutputValue);
+
+  return { metadataPath, findingsPath };
+}
+
+/** Build and write the schema-v2 metadata/findings pair from raw trigger results. */
+export function writeSchemaV2Output(
   context: EventContext,
-  options: BuildFindingsOutputV2Options
-): string {
-  const output = buildFindingsOutputV2(results, matchedTriggers, findingObservations, options);
-  return writeFindingsOutputV2Object(output, context);
+  resolvedTriggers: ResolvedTrigger[],
+  matchedTriggers: ResolvedTrigger[],
+  results: TriggerResult[],
+  findingObservations: FindingObservation[],
+  options: BuildMetadataOutputV2Options
+): { metadataPath: string; findingsPath: string } {
+  const metadata = buildMetadataOutputV2(context, resolvedTriggers, matchedTriggers, results, options);
+  const findings = buildFindingsOutputV2(results, matchedTriggers, findingObservations, { runId: options.runId });
+  return writeSchemaV2OutputPair(metadata, findings, context);
 }

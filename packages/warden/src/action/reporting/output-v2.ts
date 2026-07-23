@@ -666,21 +666,62 @@ function buildReportedIdMap(
   return reportedIds;
 }
 
+interface SkillExecutionUsageUpdate {
+  usage: SkillExecution['usage'];
+  auxiliaryUsage: SkillExecution['auxiliaryUsage'];
+}
+
+/**
+ * Report-phase posting (dedupe/consolidate) merges auxiliary usage onto
+ * `result.report` (see poster.ts) after the analyze-phase payload being
+ * patched here was already built. Unlike verification/merge provenance,
+ * this isn't data that only `findingProcessingEvents` can reconstruct -
+ * `results` carries the live, already-mutated report at patch time, the
+ * same source v1's write reads from, so it can be folded in directly.
+ */
+function buildSkillExecutionUsageUpdates(
+  results: TriggerResult[],
+  matchedTriggers: ResolvedTrigger[]
+): Map<string, SkillExecutionUsageUpdate> {
+  const triggerById = new Map(matchedTriggers.map((t) => [t.id, t]));
+  const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
+  const updates = new Map<string, SkillExecutionUsageUpdate>();
+
+  for (const result of results) {
+    const report = result.report;
+    if (!report) continue;
+
+    const trigger = result.triggerId ? triggerById.get(result.triggerId) : undefined;
+    const skillExecutionId = trigger?.skillExecutionId ?? skillExecutionIdByName.get(report.skill) ?? report.skill;
+    const auxiliaryUsageEntries = toAuxiliaryUsageEntries(report.auxiliaryUsage, report.auxiliaryUsageAttribution);
+
+    updates.set(skillExecutionId, {
+      usage: report.usage,
+      auxiliaryUsage: auxiliaryUsageEntries.length > 0 ? auxiliaryUsageEntries : undefined,
+    });
+  }
+
+  return updates;
+}
+
 /**
  * Rebuild only the observation-derived parts of a v2 findings payload:
  * `findingObservations`, `summary.byOutcome`, any newly-discovered
- * `reportedId` (continuity with an existing comment), and any
- * newly-discovered cross-skill corroboration on `findings[].reportedBy`.
- * Used by report mode to fold real posting outcomes into an analyze-phase
- * payload without touching `skillExecutions`/`discardedFindings`/
- * `provenance`, which can only be reconstructed from the original
- * `findingProcessingEvents` and would otherwise be silently wiped by a full
- * rebuild from replayed results. Corroboration is additive-only (existing
- * `reportedBy` entries are never removed) since it can only be discovered
- * once posting/dedup runs, which analyze mode never does.
+ * `reportedId` (continuity with an existing comment), any newly-discovered
+ * cross-skill corroboration on `findings[].reportedBy`, and each skill
+ * execution's `usage`/`auxiliaryUsage` (report-phase posting costs). Used
+ * by report mode to fold real posting outcomes into an analyze-phase
+ * payload without touching `skillExecutions[].findingIds`/verification/
+ * merge provenance or `discardedFindings`, which can only be reconstructed
+ * from the original `findingProcessingEvents` and would otherwise be
+ * silently wiped by a full rebuild from replayed results. Corroboration is
+ * additive-only (existing `reportedBy` entries are never removed) since it
+ * can only be discovered once posting/dedup runs, which analyze mode never
+ * does.
  */
 export function patchFindingsOutputV2Observations(
   base: WardenFindingsV2,
+  results: TriggerResult[],
   matchedTriggers: ResolvedTrigger[],
   findingObservations: FindingObservation[]
 ): WardenFindingsV2 {
@@ -688,6 +729,13 @@ export function patchFindingsOutputV2Observations(
   const corroboratingById = buildCorroboratingAttributions(findingObservations, matchedTriggers);
   const reportedIdMap = buildReportedIdMap(findingObservations, matchedTriggers);
   const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
+  const usageUpdates = buildSkillExecutionUsageUpdates(results, matchedTriggers);
+
+  const skillExecutions = base.skillExecutions.map((execution) => {
+    const update = usageUpdates.get(execution.skillExecutionId);
+    if (!update) return execution;
+    return { ...execution, usage: update.usage, auxiliaryUsage: update.auxiliaryUsage };
+  });
 
   const findings = base.findings.map((original) => {
     const originSkillExecutionId = original.reportedBy.find((r) => r.role === 'primary')?.skillExecutionId ?? '';
@@ -717,7 +765,7 @@ export function patchFindingsOutputV2Observations(
   const patched: WardenFindingsV2 = {
     schemaVersion: base.schemaVersion,
     runId: base.runId,
-    skillExecutions: base.skillExecutions,
+    skillExecutions,
     discardedFindings: base.discardedFindings,
     findings,
     findingObservations: observations,
