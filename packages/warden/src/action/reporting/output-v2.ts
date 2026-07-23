@@ -564,14 +564,25 @@ function buildCorroboratingAttributions(
  * Bare finding ids collide across skills, so a dedupe match against
  * `existingFindingId` can name a finding shared by unrelated skills. Narrow
  * to the actual winner using the skill(s) recorded on the dedupe match.
+ * A skill can also dedupe more than one of its own findings against the
+ * same winner in one run, so also collapse repeat matches from the same
+ * skillExecutionId before returning.
  */
 function resolveCorroboratingAttributions(
   candidates: CorroboratingCandidate[],
   targetSkillName: string
 ): FindingAttribution[] {
-  return candidates
-    .filter((c) => !c.targetSkills || c.targetSkills.length === 0 || c.targetSkills.includes(targetSkillName))
-    .map((c) => c.attribution);
+  const seenSkillExecutionIds = new Set<string>();
+  const attributions: FindingAttribution[] = [];
+  for (const candidate of candidates) {
+    if (candidate.targetSkills && candidate.targetSkills.length > 0 && !candidate.targetSkills.includes(targetSkillName)) {
+      continue;
+    }
+    if (seenSkillExecutionIds.has(candidate.attribution.skillExecutionId)) continue;
+    seenSkillExecutionIds.add(candidate.attribution.skillExecutionId);
+    attributions.push(candidate.attribution);
+  }
+  return attributions;
 }
 
 /**

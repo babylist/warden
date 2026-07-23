@@ -462,6 +462,43 @@ describe('buildFindingsOutputV2', () => {
     expect(output.summary.byOutcome.deduped).toBe(1);
   });
 
+  it('collapses repeat corroboration from the same skill execution into one reportedBy entry', () => {
+    const primaryTrigger = createTrigger();
+    const corroboratingTrigger = createTrigger({
+      id: 'trigger-2',
+      skillExecutionId: 'exec-2',
+      name: 'security-review-trigger',
+      skill: 'security-review',
+    });
+
+    const observations: FindingObservation[] = [
+      {
+        outcome: 'deduped',
+        finding: createFinding({ id: 'WRD-004' }),
+        skill: 'security-review',
+        dedupe: { source: 'warden', matchType: 'hash', existingFindingId: 'WRD-001' },
+      },
+      {
+        outcome: 'deduped',
+        finding: createFinding({ id: 'WRD-005' }),
+        skill: 'security-review',
+        dedupe: { source: 'warden', matchType: 'hash', existingFindingId: 'WRD-001' },
+      },
+    ];
+
+    const output = buildFindingsOutputV2(
+      [createResult()],
+      [primaryTrigger, corroboratingTrigger],
+      observations,
+      { runId: '123' }
+    );
+
+    expect(output.findings[0]?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-1', skillName: 'code-review', role: 'primary' },
+      { skillExecutionId: 'exec-2', skillName: 'security-review', role: 'corroborating', matchType: 'hash' },
+    ]);
+  });
+
   it('attributes an observation to its own execution when two triggers share a skill name', () => {
     const firstExecution = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
     const secondExecution = createTrigger({

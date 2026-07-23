@@ -89,6 +89,9 @@ describe('findings output schema', () => {
       metadata: { internal: true },
       runtime: 'pi',
       failedHunks: 1,
+      failedExtractions: 2,
+      error: { code: 'sdk_error', message: 'partial failure' },
+      verifierRejections: { count: 1, reasons: ['not reproducible'] },
     });
     const output = buildFindingsOutput([report], createContext(), [], {
       timestamp: '2026-01-01T00:00:00.000Z',
@@ -107,11 +110,14 @@ describe('findings output schema', () => {
       report: {
         skill: 'test-skill',
         summary: 'Found 1 issue',
+        failedHunks: 1,
+        failedExtractions: 2,
+        error: { code: 'sdk_error', message: 'partial failure' },
+        verifierRejections: { count: 1, reasons: ['not reproducible'] },
       },
     });
     expect(output.triggerResults?.[0]).not.toHaveProperty('report.metadata');
     expect(output.triggerResults?.[0]).not.toHaveProperty('report.runtime');
-    expect(output.triggerResults?.[0]).not.toHaveProperty('report.failedHunks');
   });
 
   it('requires status-specific trigger result data', () => {

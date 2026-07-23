@@ -46,6 +46,10 @@ const ReplaySkillReportSchema = z.object({
   usage: UsageStatsSchema.optional(),
   auxiliaryUsage: AuxiliaryUsageMapSchema.optional(),
   model: z.string().optional(),
+  failedHunks: z.number().int().nonnegative().optional(),
+  failedExtractions: z.number().int().nonnegative().optional(),
+  error: SkillErrorSchema.optional(),
+  verifierRejections: VerifierRejectionsSchema.optional(),
 });
 
 export const TriggerRunResultSchema = z.discriminatedUnion('status', [
@@ -166,6 +170,10 @@ function serializeReplayReport(report: SkillReport): z.infer<typeof ReplaySkillR
     usage: report.usage,
     auxiliaryUsage: report.auxiliaryUsage,
     model: report.model,
+    failedHunks: report.failedHunks,
+    failedExtractions: report.failedExtractions,
+    error: report.error,
+    verifierRejections: report.verifierRejections,
   };
 }
 
