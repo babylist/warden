@@ -534,108 +534,112 @@ function buildFindingObservationsV2(
   return { observations, byOutcome };
 }
 
-interface CorroboratingCandidate {
+interface HeuristicCorroboratingCandidate {
   attribution: FindingAttribution;
   targetSkills?: string[];
-  exact: boolean;
 }
 
-function corroborationKey(findingId: string, skillExecutionId?: string): string {
-  return skillExecutionId ? `${skillExecutionId}:${findingId}` : findingId;
+/**
+ * Split by match basis rather than commingled in one list, so a filter
+ * written for one basis structurally cannot see candidates of the other.
+ * `exact` candidates were matched via a dedupe's `existingSkillExecutionId`
+ * (known whenever the match is against a comment posted earlier in the same
+ * run) and need no further narrowing - a bare-id collision from an unrelated
+ * execution physically cannot share that compound key. `heuristic`
+ * candidates are all a match against a comment from a *prior* run can ever
+ * produce, since a comment footer only ever records the winner's skill
+ * *name*, not its skillExecutionId - these still need the name-based
+ * narrowing `resolveCorroboratingAttributions` applies.
+ */
+interface CorroboratingCandidates {
+  exact: Map<string, FindingAttribution[]>;
+  heuristic: Map<string, HeuristicCorroboratingCandidate[]>;
+}
+
+function exactCorroborationKey(skillExecutionId: string, findingId: string): string {
+  return `${skillExecutionId}:${findingId}`;
 }
 
 function buildCorroboratingAttributions(
   findingObservations: FindingObservation[],
   matchedTriggers: ResolvedTrigger[]
-): Map<string, CorroboratingCandidate[]> {
+): CorroboratingCandidates {
   const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
-  const corroboratingById = new Map<string, CorroboratingCandidate[]>();
+  const exact = new Map<string, FindingAttribution[]>();
+  const heuristic = new Map<string, HeuristicCorroboratingCandidate[]>();
+
   for (const observation of findingObservations) {
-    if (observation.outcome === 'deduped' && observation.dedupe.existingFindingId) {
-      const key = corroborationKey(observation.dedupe.existingFindingId, observation.dedupe.existingSkillExecutionId);
-      const list = corroboratingById.get(key) ?? [];
-      list.push({
-        attribution: {
-          skillExecutionId: observation.skillExecutionId ?? skillExecutionIdByName.get(observation.skill ?? '') ?? '',
-          skillName: observation.skill ?? '',
-          role: 'corroborating',
-          matchType: observation.dedupe.matchType,
-        },
-        targetSkills: observation.dedupe.existingSkills,
-        exact: Boolean(observation.dedupe.existingSkillExecutionId),
-      });
-      corroboratingById.set(key, list);
+    if (observation.outcome !== 'deduped' || !observation.dedupe.existingFindingId) continue;
+
+    const attribution: FindingAttribution = {
+      skillExecutionId: observation.skillExecutionId ?? skillExecutionIdByName.get(observation.skill ?? '') ?? '',
+      skillName: observation.skill ?? '',
+      role: 'corroborating',
+      matchType: observation.dedupe.matchType,
+    };
+
+    if (observation.dedupe.existingSkillExecutionId) {
+      const key = exactCorroborationKey(observation.dedupe.existingSkillExecutionId, observation.dedupe.existingFindingId);
+      const list = exact.get(key) ?? [];
+      list.push(attribution);
+      exact.set(key, list);
+    } else {
+      const key = observation.dedupe.existingFindingId;
+      const list = heuristic.get(key) ?? [];
+      list.push({ attribution, targetSkills: observation.dedupe.existingSkills });
+      heuristic.set(key, list);
     }
   }
-  return corroboratingById;
+
+  return { exact, heuristic };
 }
 
 /**
- * `existingSkillExecutionId` pins a dedupe match to the exact execution that
- * produced the winning finding (known whenever the match is against a
- * comment posted earlier in the same run). When present, only the compound
- * key can match - a bare-id collision from an unrelated execution physically
- * cannot share it. When absent (a match against a comment from a prior run,
- * which only ever records the winner's skill *name*), fall back to the bare
- * id and let `resolveCorroboratingAttributions`'s name-based narrowing do
- * the best it can with what a GitHub comment footer actually preserves.
- */
-function corroboratingCandidatesFor(
-  corroboratingById: Map<string, CorroboratingCandidate[]>,
-  findingId: string,
-  originSkillExecutionId: string
-): CorroboratingCandidate[] {
-  return [
-    ...(corroboratingById.get(corroborationKey(findingId, originSkillExecutionId)) ?? []),
-    ...(corroboratingById.get(findingId) ?? []),
-  ];
-}
-
-/**
- * Bare finding ids collide across skills, so a dedupe match against
- * `existingFindingId` can name a finding shared by unrelated skills. Narrow
- * to the actual winner using the skill(s) recorded on the dedupe match.
- * A skill can also dedupe more than one of its own findings against the
- * same winner in one run, so also collapse repeat matches from the same
- * skillExecutionId before returning.
+ * Bare finding ids collide across skills, so a heuristic dedupe match
+ * against `existingFindingId` can name a finding shared by unrelated skills.
+ * Narrow to the actual winner using the skill(s) recorded on the dedupe
+ * match, and only trust that narrowing when the target skill name maps to
+ * exactly one execution in the run - with more than one, there's no way to
+ * tell which execution a name-only match actually corroborates.
  *
- * A posted comment's dedupe match only records the winner's skill *name*
- * (parsed from the comment footer), not its skillExecutionId. When that name
- * has more than one execution in the current run, there's no way to tell
- * which execution the comment actually corroborates, so skip rather than
- * attach the same corroboration to every same-named execution.
+ * Exact candidates skip all of that: the compound key they were looked up by
+ * already proves which execution they target, independent of `targetSkillName`.
  *
- * A finding that dedupes against its own prior posting (continuity, not
- * corroboration) recenters `existingFindingId` onto itself, so its own
- * skillExecutionId can appear among the candidates here — exclude it rather
- * than have a finding list itself as a corroborator of itself.
- *
- * A candidate marked `exact` already matched via `corroborationKey`'s
- * compound `skillExecutionId:id` form, so it's proven to target this exact
- * winner regardless of what `targetSkillName` resolves to - both the
- * name-ambiguity guard and the `targetSkills` filter below exist only to
- * approximate that same guarantee for candidates that had no
- * skillExecutionId to key on, and must not apply to an already-exact match.
+ * Either pass can also dedupe more than one of its own findings against the
+ * same winner in one run, or (for a finding that dedupes against its own
+ * prior posting - continuity, not corroboration) recenter onto its own
+ * skillExecutionId - `seenSkillExecutionIds` collapses/excludes both across
+ * both passes.
  */
 function resolveCorroboratingAttributions(
-  candidates: CorroboratingCandidate[],
+  candidates: CorroboratingCandidates,
+  findingId: string,
   targetSkillName: string,
   targetSkillExecutionId: string,
   skillExecutionIdByName: Map<string, string>
 ): FindingAttribution[] {
   const seenSkillExecutionIds = new Set<string>([targetSkillExecutionId]);
   const attributions: FindingAttribution[] = [];
-  for (const candidate of candidates) {
-    if (!candidate.exact) {
-      if (skillExecutionIdByName.get(targetSkillName) !== targetSkillExecutionId) continue;
+
+  const exactMatches = candidates.exact.get(exactCorroborationKey(targetSkillExecutionId, findingId)) ?? [];
+  for (const attribution of exactMatches) {
+    if (seenSkillExecutionIds.has(attribution.skillExecutionId)) continue;
+    seenSkillExecutionIds.add(attribution.skillExecutionId);
+    attributions.push(attribution);
+  }
+
+  if (skillExecutionIdByName.get(targetSkillName) === targetSkillExecutionId) {
+    const heuristicMatches = candidates.heuristic.get(findingId) ?? [];
+    for (const candidate of heuristicMatches) {
       if (candidate.targetSkills && candidate.targetSkills.length > 0 && !candidate.targetSkills.includes(targetSkillName)) {
         continue;
       }
+      if (seenSkillExecutionIds.has(candidate.attribution.skillExecutionId)) continue;
+      seenSkillExecutionIds.add(candidate.attribution.skillExecutionId);
+      attributions.push(candidate.attribution);
     }
-    if (seenSkillExecutionIds.has(candidate.attribution.skillExecutionId)) continue;
-    seenSkillExecutionIds.add(candidate.attribution.skillExecutionId);
-    attributions.push(candidate.attribution);
   }
+
   return attributions;
 }
 
@@ -692,7 +696,8 @@ export function patchFindingsOutputV2Observations(
 
     const primarySkillName = finding.reportedBy.find((r) => r.role === 'primary')?.skillName ?? '';
     const newCorroborators = resolveCorroboratingAttributions(
-      corroboratingCandidatesFor(corroboratingById, finding.reportedId ?? finding.id, originSkillExecutionId),
+      corroboratingById,
+      finding.reportedId ?? finding.id,
       primarySkillName,
       originSkillExecutionId,
       skillExecutionIdByName
@@ -845,7 +850,8 @@ export function buildFindingsOutputV2(
         reportedBy: [
           { skillExecutionId, skillName: report.skill, role: 'primary' },
           ...resolveCorroboratingAttributions(
-            corroboratingCandidatesFor(corroboratingById, finding.reportedId ?? finding.id, skillExecutionId),
+            corroboratingById,
+            finding.reportedId ?? finding.id,
             report.skill,
             skillExecutionId,
             skillExecutionIdByName
