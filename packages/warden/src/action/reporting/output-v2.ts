@@ -612,10 +612,10 @@ function corroboratingCandidatesFor(
  *
  * A candidate marked `exact` already matched via `corroborationKey`'s
  * compound `skillExecutionId:id` form, so it's proven to target this exact
- * winner - the skill-name filter below only exists to approximate that same
- * guarantee for candidates that had no skillExecutionId to key on, and would
- * be redundant (or, for a comment with an incomplete skills list, wrongly
- * exclusive) if applied to an already-exact match.
+ * winner regardless of what `targetSkillName` resolves to - both the
+ * name-ambiguity guard and the `targetSkills` filter below exist only to
+ * approximate that same guarantee for candidates that had no
+ * skillExecutionId to key on, and must not apply to an already-exact match.
  */
 function resolveCorroboratingAttributions(
   candidates: CorroboratingCandidate[],
@@ -623,20 +623,14 @@ function resolveCorroboratingAttributions(
   targetSkillExecutionId: string,
   skillExecutionIdByName: Map<string, string>
 ): FindingAttribution[] {
-  if (skillExecutionIdByName.get(targetSkillName) !== targetSkillExecutionId) {
-    return [];
-  }
-
   const seenSkillExecutionIds = new Set<string>([targetSkillExecutionId]);
   const attributions: FindingAttribution[] = [];
   for (const candidate of candidates) {
-    if (
-      !candidate.exact &&
-      candidate.targetSkills &&
-      candidate.targetSkills.length > 0 &&
-      !candidate.targetSkills.includes(targetSkillName)
-    ) {
-      continue;
+    if (!candidate.exact) {
+      if (skillExecutionIdByName.get(targetSkillName) !== targetSkillExecutionId) continue;
+      if (candidate.targetSkills && candidate.targetSkills.length > 0 && !candidate.targetSkills.includes(targetSkillName)) {
+        continue;
+      }
     }
     if (seenSkillExecutionIds.has(candidate.attribution.skillExecutionId)) continue;
     seenSkillExecutionIds.add(candidate.attribution.skillExecutionId);

@@ -417,6 +417,64 @@ describe('buildFindingsOutputV2', () => {
     ]);
   });
 
+  it('attaches an exact corroboration even when the target skill has multiple executions', () => {
+    const firstExecution = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
+    const secondExecution = createTrigger({
+      id: 'trigger-2',
+      skillExecutionId: 'exec-2',
+      name: 'code-review-strict',
+      skill: 'code-review',
+    });
+    const corroboratingTrigger = createTrigger({
+      id: 'trigger-3',
+      skillExecutionId: 'exec-3',
+      name: 'security-review-trigger',
+      skill: 'security-review',
+    });
+
+    const firstResult = createResult({
+      triggerId: 'trigger-1',
+      report: createReport({ skill: 'code-review', findings: [createFinding({ id: 'WRD-001' })] }),
+    });
+    const secondResult = createResult({
+      triggerId: 'trigger-2',
+      report: createReport({ skill: 'code-review', findings: [createFinding({ id: 'WRD-002' })] }),
+    });
+
+    const observations: FindingObservation[] = [
+      {
+        outcome: 'deduped',
+        finding: createFinding({ id: 'WRD-004' }),
+        skill: 'security-review',
+        dedupe: {
+          source: 'warden',
+          matchType: 'hash',
+          existingFindingId: 'WRD-001',
+          existingSkillExecutionId: 'exec-1',
+          existingSkills: ['code-review'],
+        },
+      },
+    ];
+
+    const output = buildFindingsOutputV2(
+      [firstResult, secondResult],
+      [firstExecution, secondExecution, corroboratingTrigger],
+      observations,
+      { runId: '123' }
+    );
+
+    const fromFirstExecution = output.findings.find((f) => f.provenance.originSkillExecutionId === 'exec-1');
+    const fromSecondExecution = output.findings.find((f) => f.provenance.originSkillExecutionId === 'exec-2');
+
+    expect(fromFirstExecution?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-1', skillName: 'code-review', role: 'primary' },
+      { skillExecutionId: 'exec-3', skillName: 'security-review', role: 'corroborating', matchType: 'hash' },
+    ]);
+    expect(fromSecondExecution?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-2', skillName: 'code-review', role: 'primary' },
+    ]);
+  });
+
   it('attaches corroboration when the existing comment has an empty skills array', () => {
     const firstTrigger = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
     const secondTrigger = createTrigger({
