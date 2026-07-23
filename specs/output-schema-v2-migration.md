@@ -97,7 +97,7 @@ treat a `runId`/`schemaVersion` mismatch between the two as a hard error.
 | *(not tracked)* | `metadata.skippedTriggers[]` | new — `{skillName, triggerId?, triggerName?, reason}`, reason is one of `no_event_match\|path_filter\|draft_state\|label_mismatch\|no_changes` |
 | `findingObservations[].skill` | `findingObservations[].origin.skillExecutionId/.skillName` | renamed/restructured |
 | `findingObservations[].finding` | `findingObservations[].finding` | unchanged shape |
-| `findingObservations[].dedupe` | `findingObservations[].dedupe` | unchanged, plus new `existingSkills[]` field (cross-skill attribution at the moment of the match) |
+| `findingObservations[].dedupe` | `findingObservations[].dedupe` | unchanged, plus new `existingSkills[]` and `existingSkillExecutionId` fields (cross-skill attribution at the moment of the match) |
 | `summary.totalFindings/.findingsBySeverity/.totalSkills` | `findings.summary.totalFindings/.bySeverity/.totalSkillExecutions` + `.byOutcome` | `totalSkillExecutions` replaces `totalSkills` since one skill can now have multiple executions; `byOutcome` is new |
 
 ## Two-phase `analyze`/`report` mode

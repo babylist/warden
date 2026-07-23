@@ -42,6 +42,8 @@ export interface ExistingComment {
   isWarden?: boolean;
   /** Skills that have already detected this issue (for Warden comments) */
   skills?: string[];
+  /** The skillExecutionId that produced this comment, when posted earlier in the current run (unavailable for comments fetched from GitHub) */
+  skillExecutionId?: string;
   /** Original finding severity, when emitted by a recent Warden comment */
   severity?: Severity;
   /** Original finding confidence, when emitted by a recent Warden comment */
@@ -657,7 +659,11 @@ export async function processDuplicateActions(
  * Convert a Finding to an ExistingComment for cross-trigger deduplication.
  * Returns null if the finding has no location.
  */
-export function findingToExistingComment(finding: Finding, skill?: string): ExistingComment | null {
+export function findingToExistingComment(
+  finding: Finding,
+  skill?: string,
+  skillExecutionId?: string
+): ExistingComment | null {
   if (!finding.location) {
     return null;
   }
@@ -671,6 +677,7 @@ export function findingToExistingComment(finding: Finding, skill?: string): Exis
     findingId: finding.reportedId ?? finding.id,
     contentHash: generateContentHash(finding.title, finding.description),
     isWarden: true,
+    skillExecutionId,
     skills: skill ? [skill] : [],
     severity: finding.severity,
     ...(finding.confidence ? { confidence: finding.confidence } : {}),

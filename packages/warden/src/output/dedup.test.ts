@@ -627,6 +627,23 @@ describe('findingToExistingComment', () => {
     expect(comment!.skills).toEqual(['security-review']);
   });
 
+  it('includes skillExecutionId when provided', () => {
+    const finding: Finding = {
+      id: 'f1',
+      severity: 'high',
+      title: 'SQL Injection',
+      description: 'User input passed to query',
+      location: {
+        path: 'src/db.ts',
+        startLine: 42,
+      },
+    };
+
+    const comment = findingToExistingComment(finding, 'security-review', 'exec-1');
+    expect(comment).not.toBeNull();
+    expect(comment!.skillExecutionId).toBe('exec-1');
+  });
+
   it('uses startLine when endLine is not set', () => {
     const finding: Finding = {
       id: 'f1',

@@ -236,6 +236,7 @@ export const DedupeDetailV2Schema = z.object({
   source: z.enum(['warden', 'external']),
   matchType: z.enum(['hash', 'semantic']),
   existingFindingId: z.string().optional(),
+  existingSkillExecutionId: z.string().optional(),
   existingCommentId: z.number().int().positive().optional(),
   existingThreadId: z.string().optional(),
   existingResolved: z.boolean().optional(),
@@ -536,6 +537,11 @@ function buildFindingObservationsV2(
 interface CorroboratingCandidate {
   attribution: FindingAttribution;
   targetSkills?: string[];
+  exact: boolean;
+}
+
+function corroborationKey(findingId: string, skillExecutionId?: string): string {
+  return skillExecutionId ? `${skillExecutionId}:${findingId}` : findingId;
 }
 
 function buildCorroboratingAttributions(
@@ -546,8 +552,8 @@ function buildCorroboratingAttributions(
   const corroboratingById = new Map<string, CorroboratingCandidate[]>();
   for (const observation of findingObservations) {
     if (observation.outcome === 'deduped' && observation.dedupe.existingFindingId) {
-      const winnerId = observation.dedupe.existingFindingId;
-      const list = corroboratingById.get(winnerId) ?? [];
+      const key = corroborationKey(observation.dedupe.existingFindingId, observation.dedupe.existingSkillExecutionId);
+      const list = corroboratingById.get(key) ?? [];
       list.push({
         attribution: {
           skillExecutionId: observation.skillExecutionId ?? skillExecutionIdByName.get(observation.skill ?? '') ?? '',
@@ -556,11 +562,33 @@ function buildCorroboratingAttributions(
           matchType: observation.dedupe.matchType,
         },
         targetSkills: observation.dedupe.existingSkills,
+        exact: Boolean(observation.dedupe.existingSkillExecutionId),
       });
-      corroboratingById.set(winnerId, list);
+      corroboratingById.set(key, list);
     }
   }
   return corroboratingById;
+}
+
+/**
+ * `existingSkillExecutionId` pins a dedupe match to the exact execution that
+ * produced the winning finding (known whenever the match is against a
+ * comment posted earlier in the same run). When present, only the compound
+ * key can match - a bare-id collision from an unrelated execution physically
+ * cannot share it. When absent (a match against a comment from a prior run,
+ * which only ever records the winner's skill *name*), fall back to the bare
+ * id and let `resolveCorroboratingAttributions`'s name-based narrowing do
+ * the best it can with what a GitHub comment footer actually preserves.
+ */
+function corroboratingCandidatesFor(
+  corroboratingById: Map<string, CorroboratingCandidate[]>,
+  findingId: string,
+  originSkillExecutionId: string
+): CorroboratingCandidate[] {
+  return [
+    ...(corroboratingById.get(corroborationKey(findingId, originSkillExecutionId)) ?? []),
+    ...(corroboratingById.get(findingId) ?? []),
+  ];
 }
 
 /**
@@ -581,6 +609,13 @@ function buildCorroboratingAttributions(
  * corroboration) recenters `existingFindingId` onto itself, so its own
  * skillExecutionId can appear among the candidates here — exclude it rather
  * than have a finding list itself as a corroborator of itself.
+ *
+ * A candidate marked `exact` already matched via `corroborationKey`'s
+ * compound `skillExecutionId:id` form, so it's proven to target this exact
+ * winner - the skill-name filter below only exists to approximate that same
+ * guarantee for candidates that had no skillExecutionId to key on, and would
+ * be redundant (or, for a comment with an incomplete skills list, wrongly
+ * exclusive) if applied to an already-exact match.
  */
 function resolveCorroboratingAttributions(
   candidates: CorroboratingCandidate[],
@@ -595,7 +630,12 @@ function resolveCorroboratingAttributions(
   const seenSkillExecutionIds = new Set<string>([targetSkillExecutionId]);
   const attributions: FindingAttribution[] = [];
   for (const candidate of candidates) {
-    if (candidate.targetSkills && candidate.targetSkills.length > 0 && !candidate.targetSkills.includes(targetSkillName)) {
+    if (
+      !candidate.exact &&
+      candidate.targetSkills &&
+      candidate.targetSkills.length > 0 &&
+      !candidate.targetSkills.includes(targetSkillName)
+    ) {
       continue;
     }
     if (seenSkillExecutionIds.has(candidate.attribution.skillExecutionId)) continue;
@@ -658,7 +698,7 @@ export function patchFindingsOutputV2Observations(
 
     const primarySkillName = finding.reportedBy.find((r) => r.role === 'primary')?.skillName ?? '';
     const newCorroborators = resolveCorroboratingAttributions(
-      corroboratingById.get(finding.reportedId ?? finding.id) ?? [],
+      corroboratingCandidatesFor(corroboratingById, finding.reportedId ?? finding.id, originSkillExecutionId),
       primarySkillName,
       originSkillExecutionId,
       skillExecutionIdByName
@@ -811,7 +851,7 @@ export function buildFindingsOutputV2(
         reportedBy: [
           { skillExecutionId, skillName: report.skill, role: 'primary' },
           ...resolveCorroboratingAttributions(
-            corroboratingById.get(finding.reportedId ?? finding.id) ?? [],
+            corroboratingCandidatesFor(corroboratingById, finding.reportedId ?? finding.id, skillExecutionId),
             report.skill,
             skillExecutionId,
             skillExecutionIdByName

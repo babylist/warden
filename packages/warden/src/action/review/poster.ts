@@ -94,6 +94,7 @@ function buildDedupeObservations(
       source: action.existingComment.isWarden ? 'warden' : 'external',
       matchType: action.matchType,
       existingFindingId: action.existingComment.findingId,
+      existingSkillExecutionId: action.existingComment.skillExecutionId,
       ...(action.existingComment.id > 0 ? { existingCommentId: action.existingComment.id } : {}),
       existingThreadId: action.existingComment.threadId,
       existingResolved: action.existingComment.isResolved,
@@ -477,7 +478,7 @@ export async function postTriggerReview(
           continue;
         }
         findingObservations.push({ outcome: 'posted', finding, skill, skillExecutionId });
-        const comment = findingToExistingComment(finding, skill);
+        const comment = findingToExistingComment(finding, skill, skillExecutionId);
         if (comment) {
           newComments.push(comment);
         }

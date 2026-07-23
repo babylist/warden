@@ -18,6 +18,7 @@ export const DedupeDetailSchema = z.object({
   source: z.enum(['warden', 'external']),
   matchType: z.enum(['hash', 'semantic']),
   existingFindingId: z.string().optional(),
+  existingSkillExecutionId: z.string().optional(),
   existingCommentId: z.number().int().positive().optional(),
   existingThreadId: z.string().optional(),
   existingResolved: z.boolean().optional(),
