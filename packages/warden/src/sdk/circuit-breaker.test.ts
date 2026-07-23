@@ -36,11 +36,37 @@ describe('ProviderFailureCircuitBreaker', () => {
     expect(breaker.reason).toBeUndefined();
     expect(controller.signal.aborted).toBe(false);
 
-    breaker.recordFailure('provider_unavailable', 'third outage');
+    const providerContextScope = {
+      apiKey: 'secret-provider-key',
+      circuitBreaker: breaker,
+    };
+    breaker.recordFailure('provider_unavailable', 'third outage', {
+      runtime: 'pi',
+      provider: 'openrouter',
+      model: 'openrouter/anthropic/claude-sonnet-4',
+      status: 'provider_error',
+      responseId: 'req_123',
+      message: 'third outage',
+    }, providerContextScope);
 
     expect(breaker.reason?.code).toBe('provider_unavailable');
     expect(breaker.reason?.message).toContain('Provider unavailable after 2 consecutive failures');
     expect(breaker.reason?.message).toContain('third outage');
+    expect(breaker.reason?.providerContext).toEqual({
+      runtime: 'pi',
+      provider: 'openrouter',
+      model: 'openrouter/anthropic/claude-sonnet-4',
+      status: 'provider_error',
+      responseId: 'req_123',
+      attempts: 2,
+      message: 'third outage',
+    });
+    expect(breaker.providerContextFor(providerContextScope)).toEqual(
+      breaker.reason?.providerContext,
+    );
+    expect(breaker.providerContextFor({})).toBeUndefined();
+    expect(() => JSON.stringify(breaker.reason)).not.toThrow();
+    expect(JSON.stringify(breaker.reason)).not.toContain(providerContextScope.apiKey);
     expect(controller.signal.aborted).toBe(true);
   });
 

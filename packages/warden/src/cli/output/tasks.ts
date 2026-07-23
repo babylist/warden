@@ -8,7 +8,7 @@
 import type { SkillReport, SeverityThreshold, ConfidenceThreshold, Finding, UsageStats, EventContext, HunkFailure, AuxiliaryUsageMap, ErrorCode, HunkTrace } from '../../types/index.js';
 import type { SkillDefinition } from '../../config/schema.js';
 import { Sentry, emitSkillMetrics, logger } from '../../sentry.js';
-import { SkillRunnerError, WardenAuthenticationError, classifyError } from '../../sdk/errors.js';
+import { SkillRunnerError, WardenAuthenticationError, classifyError, type ProviderErrorContext } from '../../sdk/errors.js';
 import {
   prepareFiles,
   analyzeFile,
@@ -67,12 +67,15 @@ function firstAnalysisFailureMessage(hunkFailures: HunkFailure[], code: ErrorCod
 function summarizeRunFailure(args: {
   totalHunks: number;
   hunkFailures: HunkFailure[];
-  circuitReason?: { code: ErrorCode; message: string };
+  circuitBreaker?: ProviderFailureCircuitBreaker;
   runtime?: SkillRunnerOptions['runtime'];
-}): { code: ErrorCode; message: string } {
-  const { totalHunks, hunkFailures, circuitReason, runtime } = args;
+  scope?: object;
+}): { code: ErrorCode; message: string; providerContext?: ProviderErrorContext } {
+  const { totalHunks, hunkFailures, circuitBreaker, runtime } = args;
+  const circuitReason = circuitBreaker?.reason;
   if (circuitReason) {
-    return circuitReason;
+    const providerContext = circuitBreaker.providerContextFor(args.scope);
+    return { code: circuitReason.code, message: circuitReason.message, providerContext };
   }
   if (allAnalysisFailuresHaveCode(hunkFailures, 'auth_failed')) {
     return {
@@ -251,7 +254,18 @@ export async function runSkillTask(
   callbacks: SkillProgressCallbacks,
   semaphore?: Semaphore
 ): Promise<SkillTaskResult> {
-  const { name, displayName = name, triggerName, failOn, minConfidence, resolveSkill, context, runnerOptions = {} } = options;
+  const {
+    name,
+    displayName = name,
+    triggerName,
+    failOn,
+    minConfidence,
+    resolveSkill,
+    context,
+    runnerOptions: configuredRunnerOptions = {},
+  } = options;
+  // This clone's identity scopes circuit-breaker provider diagnostics to this skill run.
+  const runnerOptions: SkillRunnerOptions = { ...configuredRunnerOptions };
 
   return Sentry.startSpan(
     { op: 'skill.run', name: `run ${displayName}` },
@@ -545,8 +559,9 @@ export async function runSkillTask(
           const error = summarizeRunFailure({
             totalHunks,
             hunkFailures: allHunkFailures,
-            circuitReason,
+            circuitBreaker: runnerOptions.circuitBreaker,
             runtime: runnerOptions.runtime,
+            scope: runnerOptions,
           });
           const errorReport: SkillReport = {
             skill: skill.name,
@@ -597,7 +612,10 @@ export async function runSkillTask(
           callbacks.onSkillComplete(name, errorReport);
           // Carry a typed error alongside the report so consumers that re-throw
           // (action executor, Sentry.captureException) preserve the ErrorCode.
-          const runnerError = new SkillRunnerError(error.message, { code: error.code });
+          const runnerError = new SkillRunnerError(error.message, {
+            code: error.code,
+            providerContext: error.providerContext,
+          });
           return { name, report: errorReport, error: runnerError, failOn, minConfidence };
         }
 

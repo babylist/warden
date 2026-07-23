@@ -7,14 +7,28 @@ import {
 } from '@anthropic-ai/sdk';
 import type { ErrorCode } from '../types/index.js';
 import { InvalidPiModelSelectorError } from './runtimes/model-selectors.js';
+import type { RuntimeName, SkillRunStatus } from './runtimes/types.js';
+
+export interface ProviderErrorContext {
+  runtime: RuntimeName;
+  provider?: string;
+  model?: string;
+  status: SkillRunStatus;
+  responseId?: string;
+  attempts?: number;
+  message: string;
+}
 
 export class SkillRunnerError extends Error {
   /** Optional classification so callers skip message-sniffing. */
   code?: ErrorCode;
-  constructor(message: string, options?: { cause?: unknown; code?: ErrorCode }) {
+  /** Sanitized provider diagnostics safe to attach to telemetry. */
+  providerContext?: ProviderErrorContext;
+  constructor(message: string, options?: { cause?: unknown; code?: ErrorCode; providerContext?: ProviderErrorContext }) {
     super(message, options);
     this.name = 'SkillRunnerError';
     if (options?.code) this.code = options.code;
+    if (options?.providerContext) this.providerContext = options.providerContext;
   }
 }
 

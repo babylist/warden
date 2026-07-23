@@ -9,7 +9,7 @@ import type { FileAnalysisResult } from '../../sdk/types.js';
 import type { HunkWithContext } from '../../diff/index.js';
 import type { SkillDefinition } from '../../config/schema.js';
 import { Semaphore, runPool } from '../../utils/index.js';
-import { SkillRunnerError, WardenAuthenticationError } from '../../sdk/errors.js';
+import { SkillRunnerError, WardenAuthenticationError, type ProviderErrorContext } from '../../sdk/errors.js';
 import { ProviderFailureCircuitBreaker } from '../../sdk/circuit-breaker.js';
 import * as sdkRunner from '../../sdk/runner.js';
 
@@ -943,17 +943,9 @@ describe('runSkillTask all-hunks-fail synthesis', () => {
       files: [{ filename: 'a.ts', hunks: [fakeHunk] }],
       skippedFiles: [],
     });
-    vi.spyOn(sdkRunner, 'analyzeFile').mockResolvedValue({
-      filename: 'a.ts',
-      findings: [],
-      usage: { inputTokens: 0, outputTokens: 0, costUSD: 0 },
-      failedHunks: 1,
-      failedExtractions: 0,
-      hunkFailures,
-    });
-
     const options: SkillTaskOptions = {
       name: 'provider-fail-skill',
+      triggerName: 'provider-fail-trigger',
       resolveSkill: async () =>
         ({ name: 'provider-fail-skill', definition: '', files: [] } as unknown as SkillDefinition),
       context: {
@@ -964,11 +956,95 @@ describe('runSkillTask all-hunks-fail synthesis', () => {
       } as unknown as SkillTaskOptions['context'],
     };
 
+    const providerContext: ProviderErrorContext = {
+      runtime: 'pi',
+      provider: 'openrouter',
+      model: 'openrouter/anthropic/claude-sonnet-4',
+      status: 'provider_error',
+      attempts: 5,
+      message: '400',
+    };
+    const circuitBreaker = new ProviderFailureCircuitBreaker({ maxConsecutiveProviderFailures: 1 });
+    vi.spyOn(sdkRunner, 'analyzeFile').mockImplementation(async (_skill, _file, _repoPath, runnerOptions) => {
+      circuitBreaker.recordFailure('provider_unavailable', '400', providerContext, runnerOptions);
+      return {
+        filename: 'a.ts',
+        findings: [],
+        usage: { inputTokens: 0, outputTokens: 0, costUSD: 0 },
+        failedHunks: 1,
+        failedExtractions: 0,
+        hunkFailures,
+      };
+    });
+    options.runnerOptions = { circuitBreaker };
+
     const result = await runSkillTask(options, 1, noopCallbacks());
 
     expect(result.report!.error?.code).toBe('provider_unavailable');
     expect(result.report!.error?.message).toContain('Provider unavailable');
     expect((result.error as SkillRunnerError).code).toBe('provider_unavailable');
+    expect((result.error as SkillRunnerError).providerContext).toEqual({
+      ...providerContext,
+      attempts: 1,
+    });
+  });
+
+  it('does not copy provider context from another direct skill sharing the circuit breaker', async () => {
+    const fakeHunk = {
+      hunk: { newStart: 1, newCount: 10 },
+    } as unknown as HunkWithContext;
+    const hunkFailures: HunkFailure[] = [
+      {
+        type: 'analysis',
+        filename: 'a.ts',
+        lineRange: '1-10',
+        code: 'provider_unavailable',
+        message: 'Provider unavailable',
+      },
+    ];
+
+    vi.spyOn(sdkRunner, 'prepareFiles').mockReturnValue({
+      files: [{ filename: 'a.ts', hunks: [fakeHunk] }],
+      skippedFiles: [],
+    });
+    vi.spyOn(sdkRunner, 'analyzeFile').mockResolvedValue({
+      filename: 'a.ts',
+      findings: [],
+      usage: { inputTokens: 0, outputTokens: 0, costUSD: 0 },
+      failedHunks: 1,
+      failedExtractions: 0,
+      hunkFailures,
+    });
+
+    const circuitBreaker = new ProviderFailureCircuitBreaker({ maxConsecutiveProviderFailures: 1 });
+    circuitBreaker.recordFailure(
+      'provider_unavailable',
+      'Provider unavailable',
+      {
+        runtime: 'pi',
+        provider: 'openrouter',
+        model: 'openrouter/anthropic/claude-sonnet-4',
+        status: 'provider_error',
+        message: 'Provider unavailable',
+      },
+      {},
+    );
+
+    const result = await runSkillTask({
+      name: 'later-direct-skill',
+      resolveSkill: async () =>
+        ({ name: 'later-direct-skill', definition: '', files: [] } as unknown as SkillDefinition),
+      context: {
+        eventType: 'pull_request',
+        repository: { owner: 'o', name: 'n', fullName: 'o/n', defaultBranch: 'main' },
+        repoPath: '/tmp',
+        pullRequest: { number: 1, title: 't', body: '', headSha: 'abc', baseSha: 'def', files: [] },
+      } as unknown as SkillTaskOptions['context'],
+      runnerOptions: { circuitBreaker },
+    }, 1, noopCallbacks());
+
+    expect((result.error as SkillRunnerError).code).toBe('provider_unavailable');
+    expect((result.error as SkillRunnerError).providerContext).toBeUndefined();
   });
 
   it('preserves invalid_model_selector when every hunk fails from Pi model validation', async () => {

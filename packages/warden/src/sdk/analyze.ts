@@ -3,7 +3,8 @@ import type { SkillDefinition } from '../config/schema.js';
 import type { ErrorCode, Finding, RetryConfig } from '../types/index.js';
 import { getHunkLineRange, type HunkWithContext } from '../diff/index.js';
 import { Sentry, emitExtractionMetrics, emitRetryMetric, emitSkillMetrics, ensureLocalTracing } from '../sentry.js';
-import { SkillRunnerError, WardenAuthenticationError, isRetryableError, isAuthenticationError, isAuthenticationErrorMessage, isSubprocessError, classifyError, mapExtractionErrorCode, sanitizeErrorMessage } from './errors.js';
+import { SkillRunnerError, WardenAuthenticationError, isRetryableError, isAuthenticationError, isAuthenticationErrorMessage, isSubprocessError, classifyError, mapExtractionErrorCode, sanitizeErrorMessage, type ProviderErrorContext } from './errors.js';
+import { genAiProviderName } from './otel.js';
 import type { CircuitBreakerReason } from './circuit-breaker.js';
 import { DEFAULT_RETRY_CONFIG, calculateRetryDelay, sleep } from './retry.js';
 import { aggregateUsage, emptyUsage, estimateTokens, aggregateAuxiliaryUsage, aggregateAuxiliaryUsageAttribution } from './usage.js';
@@ -88,10 +89,33 @@ function recordCircuitFailure(
   options: SkillRunnerOptions,
   code: ErrorCode,
   message: string,
+  providerContext?: ProviderErrorContext,
 ): CircuitBreakerReason | undefined {
   if (!isCircuitBreakerCode(code)) return undefined;
-  options.circuitBreaker?.recordFailure(code, message);
+  options.circuitBreaker?.recordFailure(
+    code,
+    message,
+    providerContext,
+    providerContext ? options : undefined,
+  );
   return options.circuitBreaker?.reason;
+}
+
+function providerErrorContext(
+  options: SkillRunnerOptions,
+  result: SkillRunResult,
+  message: string,
+): ProviderErrorContext {
+  const model = result.responseModel ?? options.model;
+  const runtime = options.runtime ?? 'pi';
+  return {
+    runtime,
+    provider: genAiProviderName(runtime, model, result.responseProvider),
+    model,
+    status: result.status,
+    responseId: result.responseId,
+    message: sanitizeErrorMessage(message),
+  };
 }
 
 function allHunksFailedGuidance(runtime: SkillRunnerOptions['runtime'] | undefined): string {
@@ -456,7 +480,14 @@ async function analyzeHunk(
                   ? 'provider_unavailable'
                   : 'sdk_error';
             const failureMessage = `Runtime execution failed: ${errorSummary}`;
-            const openReason = recordCircuitFailure(options, failureCode, failureMessage);
+            const openReason = recordCircuitFailure(
+              options,
+              failureCode,
+              failureMessage,
+              failureCode === 'provider_unavailable'
+                ? providerErrorContext(options, resultMessage, errorSummary)
+                : undefined,
+            );
             notifyHunkFailed(callbacks, callbacks?.lineRange ?? lineRange, failureMessage);
             if (openReason) {
               return hunkFailureFromCircuit(
@@ -697,7 +728,21 @@ async function analyzeHunk(
 
       const { code: retryCode, message } = classifyError(lastError);
       const retryMsg = sanitizeErrorMessage(message);
-      const openReason = recordCircuitFailure(options, retryCode, retryMsg);
+      const openReason = recordCircuitFailure(
+        options,
+        retryCode,
+        retryMsg,
+        retryCode === 'provider_unavailable'
+          ? {
+              runtime: runtimeName,
+              provider: genAiProviderName(runtimeName, options.model),
+              model: options.model,
+              status: 'provider_error',
+              attempts: retryConfig.maxRetries + 1,
+              message: retryMsg,
+            }
+          : undefined,
+      );
       if (openReason) {
         return hunkFailureFromCircuit(
           openReason,
@@ -915,19 +960,23 @@ export async function runSkill(
   context: EventContext,
   options: SkillRunnerOptions = {}
 ): Promise<SkillReport> {
+  // This clone's identity scopes circuit-breaker provider diagnostics to this skill run.
+  const scopedOptions: SkillRunnerOptions = {
+    ...options,
+  };
   return Sentry.startSpan(
     {
       op: 'skill.run',
       name: `run ${skill.name}`,
       attributes: {
         'gen_ai.agent.name': skill.name,
-        ...(options.telemetryTriggerName ? { 'warden.trigger.name': options.telemetryTriggerName } : {}),
+        ...(options.triggerName ? { 'warden.trigger.name': options.triggerName } : {}),
         'warden.file.count': context.pullRequest?.files.length ?? 0,
       },
     },
     async (span) => {
       try {
-        const report = await runSkillAnalysis(skill, context, options);
+        const report = await runSkillAnalysis(skill, context, scopedOptions);
         span.setAttribute('warden.finding.count', report.findings.length);
         emitSkillMetrics(report);
         return report;
@@ -1123,7 +1172,10 @@ async function runSkillAnalysis(
   const totalAttemptFailures = totalFailedHunks + totalFailedExtractions;
   const circuitReason = options.circuitBreaker?.reason;
   if (circuitReason && totalAttemptFailures > 0 && allFindings.length === 0) {
-    throw new SkillRunnerError(circuitReason.message, { code: circuitReason.code });
+    throw new SkillRunnerError(circuitReason.message, {
+      code: circuitReason.code,
+      providerContext: options.circuitBreaker?.providerContextFor(options),
+    });
   }
   if (totalAttemptFailures > 0 && totalAttemptFailures === totalHunks && allFindings.length === 0) {
     const analysisFailures = allHunkFailures.filter((failure) => failure.type === 'analysis');
