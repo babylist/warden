@@ -586,6 +586,25 @@ function resolveCorroboratingAttributions(
 }
 
 /**
+ * Report-time dedupe against existing comments can rename a finding's id to
+ * match the comment it duplicates (see `recenterReportFindingIds` in
+ * poster.ts). The analyze-phase payload being patched here still has the
+ * pre-recenter id, so every place that id appears must be renamed the same
+ * way or it stops joining to the recentered id in `findingObservations`.
+ */
+function buildFindingIdRecenterMap(findingObservations: FindingObservation[]): Map<string, string> {
+  const ids = new Map<string, string>();
+  for (const observation of findingObservations) {
+    if (observation.outcome !== 'deduped') continue;
+    const { originalFindingId, finding } = observation;
+    if (originalFindingId && originalFindingId !== finding.id) {
+      ids.set(originalFindingId, finding.id);
+    }
+  }
+  return ids;
+}
+
+/**
  * Rebuild only the observation-derived parts of a v2 findings payload:
  * `findingObservations`, `summary.byOutcome`, and any newly-discovered
  * cross-skill corroboration on `findings[].reportedBy`. Used by report mode
@@ -604,8 +623,12 @@ export function patchFindingsOutputV2Observations(
 ): WardenFindingsV2 {
   const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, matchedTriggers);
   const corroboratingById = buildCorroboratingAttributions(findingObservations, matchedTriggers);
+  const idRecenterMap = buildFindingIdRecenterMap(findingObservations);
 
-  const findings = base.findings.map((finding) => {
+  const findings = base.findings.map((original) => {
+    const recenteredId = idRecenterMap.get(original.id);
+    const finding = recenteredId ? { ...original, id: recenteredId } : original;
+
     const primarySkillName = finding.reportedBy.find((r) => r.role === 'primary')?.skillName ?? '';
     const newCorroborators = resolveCorroboratingAttributions(
       corroboratingById.get(finding.id) ?? [],
@@ -620,9 +643,28 @@ export function patchFindingsOutputV2Observations(
     return { ...finding, reportedBy: [...finding.reportedBy, ...additions] };
   });
 
+  const skillExecutions =
+    idRecenterMap.size === 0
+      ? base.skillExecutions
+      : base.skillExecutions.map((execution) => ({
+          ...execution,
+          findingIds: execution.findingIds.map((id) => idRecenterMap.get(id) ?? id),
+        }));
+
+  const discardedFindings =
+    !base.discardedFindings || idRecenterMap.size === 0
+      ? base.discardedFindings
+      : base.discardedFindings.map((discarded) =>
+          discarded.survivorFindingId && idRecenterMap.has(discarded.survivorFindingId)
+            ? { ...discarded, survivorFindingId: idRecenterMap.get(discarded.survivorFindingId) }
+            : discarded
+        );
+
   return WardenFindingsSchemaV2.parse({
     ...base,
+    skillExecutions,
     findings,
+    discardedFindings,
     findingObservations: observations,
     summary: { ...base.summary, byOutcome },
   });

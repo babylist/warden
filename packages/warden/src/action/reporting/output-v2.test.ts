@@ -643,6 +643,38 @@ describe('patchFindingsOutputV2Observations', () => {
     ]);
     expect(patched.findings[0]?.provenance).toEqual(analyzePhaseOutput.findings[0]?.provenance);
   });
+
+  it('recenters findings[].id and skillExecutions[].findingIds to match a report-phase dedupe against an existing comment', () => {
+    const trigger = createTrigger();
+    const finding = createFinding({ id: 'WRD-301' });
+
+    const analyzePhaseOutput = buildFindingsOutputV2(
+      [createResult({ report: createReport({ findings: [finding] }) })],
+      [trigger],
+      [],
+      { runId: '123' }
+    );
+    expect(analyzePhaseOutput.findings[0]?.id).toBe('WRD-301');
+    expect(analyzePhaseOutput.skillExecutions[0]?.findingIds).toEqual(['WRD-301']);
+
+    // Report-time dedupe against an existing GitHub comment recenters the
+    // finding's id; the analyze-phase payload being patched still has the
+    // pre-recenter id and must be renamed to match.
+    const reportPhaseObservations: FindingObservation[] = [
+      {
+        outcome: 'deduped',
+        finding: { ...finding, id: 'WRZ-XPL' },
+        skill: 'code-review',
+        originalFindingId: 'WRD-301',
+        dedupe: { source: 'warden', matchType: 'hash', existingFindingId: 'WRZ-XPL' },
+      },
+    ];
+
+    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [trigger], reportPhaseObservations);
+
+    expect(patched.findings[0]?.id).toBe('WRZ-XPL');
+    expect(patched.skillExecutions[0]?.findingIds).toEqual(['WRZ-XPL']);
+  });
 });
 
 describe('buildFindingsOutputV2 kept verification provenance', () => {

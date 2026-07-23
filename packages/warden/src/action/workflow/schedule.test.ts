@@ -650,6 +650,33 @@ describe('runScheduleWorkflow', () => {
         rmSync(findingsFile, { force: true });
       }
     });
+
+    it('still writes schema-v2 files when every schedule trigger fails', async () => {
+      mockRunSkill.mockRejectedValue(new Error('Skill failed'));
+
+      const metadataFile = getMetadataOutputPath(SCHEDULE_MULTI_FIXTURES);
+      const findingsFile = getFindingsOutputPathV2(SCHEDULE_MULTI_FIXTURES);
+
+      try {
+        await expect(
+          runScheduleWorkflow(
+            mockOctokit,
+            createDefaultInputs({ outputSchemaVersion: '2' }),
+            SCHEDULE_MULTI_FIXTURES
+          )
+        ).rejects.toThrow('setFailed');
+
+        const metadata = JSON.parse(readFileSync(metadataFile, 'utf-8'));
+        const findings = JSON.parse(readFileSync(findingsFile, 'utf-8'));
+        expect(metadata.schemaVersion).toBe('2');
+        expect(findings.schemaVersion).toBe('2');
+        expect(metadata.triggerResults).toHaveLength(2);
+        expect(metadata.triggerResults.every((result: { status: string }) => result.status === 'error')).toBe(true);
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+      }
+    });
   });
 
   // ---------------------------------------------------------------------------

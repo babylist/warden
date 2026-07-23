@@ -91,6 +91,7 @@ function buildDedupeObservations(
     finding: action.finding,
     skill,
     skillExecutionId,
+    originalFindingId: action.originalFindingId,
     dedupe: {
       source: action.existingComment.isWarden ? 'warden' : 'external',
       matchType: action.matchType,

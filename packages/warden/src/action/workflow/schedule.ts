@@ -334,8 +334,6 @@ async function runScheduleWorkflowInner(
     }
   }
 
-  handleTriggerErrors(triggerErrors, scheduleTriggers.length);
-
   // Set outputs
   const highCount = countSeverity(allReports, 'high');
   workflowSpan.setAttribute('warden.finding.count', totalFindings);
@@ -360,6 +358,10 @@ async function runScheduleWorkflowInner(
     console.error(`::warning::Failed to write findings output: ${error}`);
   }
   writeSchemaV2ScheduleOutputs(inputs, scheduleContext, allResolvedTriggers, matchedTriggers, results);
+
+  // Both outputs are written above, so a total-failure or threshold exit below
+  // never discards artifacts that already reflect this run's results.
+  handleTriggerErrors(triggerErrors, scheduleTriggers.length);
 
   if (shouldFailAction) {
     setFailed(failureReasons.join('; '));
