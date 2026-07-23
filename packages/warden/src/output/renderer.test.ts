@@ -98,7 +98,7 @@ describe('renderSkillReport', () => {
     const result = renderSkillReport(report);
 
     expect(result.review!.comments[0]!.body).toContain(
-      '<sub>Identified by Warden code-review · WRZ-XPL</sub>'
+      '<sub>Identified by Warden · code-review · WRZ-XPL</sub>'
     );
     expect(result.review!.comments[0]!.body).not.toContain('· f1<');
   });
