@@ -643,6 +643,9 @@ function buildCorroboratingAttributions(
     };
     // syncReportedIds sets a deduped finding's reportedId to its own existingFindingId,
     // so this observation's own resolution lookup uses existingFindingId, not the raw id.
+    // Assumes at most one anchor per (skillExecutionId, existingFindingId): the same
+    // execution deduping two of its own findings against different prior comments that
+    // coincidentally share an existingFindingId would have the second silently win here.
     ownAnchors.set(`${skillExecutionId}:${observation.dedupe.existingFindingId}`, anchor);
 
     if (observation.dedupe.existingSkillExecutionId) {
@@ -676,7 +679,12 @@ function buildCorroboratingAttributions(
  * *prior*-run comments, so heuristic candidates are further narrowed against
  * the target's own dedupe anchor (`anchorsConflict`) whenever both sides
  * have one - otherwise two unrelated old findings that happen to share a
- * model-assigned id could corroborate each other.
+ * model-assigned id could corroborate each other. This narrowing is only as
+ * good as the target's own anchor: a target posted fresh this run (never
+ * itself deduped) has none, so a heuristic candidate can't be ruled out for
+ * it on anchor grounds alone - accepted the same way an empty
+ * `existingSkills` is (see the "empty skills array" tests below), since
+ * requiring an anchor here would also block that legitimate case.
  *
  * Either pass can also dedupe more than one of its own findings against the
  * same winner in one run, or (for a finding that dedupes against its own
