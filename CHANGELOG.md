@@ -1,4 +1,22 @@
 # Changelog
+## 0.43.0
+
+### New Features ✨
+
+- (output) Separate attribution footer fields by @sentry-junior in [#443](https://github.com/getsentry/warden/pull/443)
+- (pi) Add Kimi K3 benchmark support by @dcramer in [#448](https://github.com/getsentry/warden/pull/448)
+- Report structured provider error context by @sentry-junior in [#442](https://github.com/getsentry/warden/pull/442)
+
+### Bug Fixes 🐛
+
+- (docs) Show max benchmark reasoning level by @dcramer in [#449](https://github.com/getsentry/warden/pull/449)
+- (reporting) Export failedHunks, failedExtractions, and error on findings-file skills by @CalebKAston in [#438](https://github.com/getsentry/warden/pull/438)
+
+### Internal Changes 🔧
+
+- (docs) Bump starlight theme to 0.8.0 by @sentry-junior in [#447](https://github.com/getsentry/warden/pull/447)
+- Pin GitHub Actions to commit SHAs (2) by @mirkosalvato1-ctrl in [#446](https://github.com/getsentry/warden/pull/446)
+
 ## 0.42.0
 
 ### Bug Fixes 🐛
