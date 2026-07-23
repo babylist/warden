@@ -357,7 +357,8 @@ describe('deduplicateFindings', () => {
     expect(result.duplicateActions).toHaveLength(1);
     expect(result.duplicateActions[0]!.type).toBe('update_warden');
     expect(result.duplicateActions[0]!.matchType).toBe('hash');
-    expect(result.duplicateActions[0]!.finding.id).toBe('WRZ-XPL');
+    expect(result.duplicateActions[0]!.finding.id).toBe(baseFinding.id);
+    expect(result.duplicateActions[0]!.finding.reportedId).toBe('WRZ-XPL');
   });
 
   it('keeps findings with different content', async () => {

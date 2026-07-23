@@ -160,7 +160,7 @@ export function findingsToAnnotations(findings: Finding[], reportOn?: SeverityTh
           end_line: loc.endLine ?? loc.startLine,
           annotation_level: severityToAnnotationLevel(finding.severity),
           message: escapeHtml(finding.description),
-          title: `[${finding.id}] ${escapeHtml(finding.title)} (additional location)`,
+          title: `[${finding.reportedId ?? finding.id}] ${escapeHtml(finding.title)} (additional location)`,
         });
       }
     }

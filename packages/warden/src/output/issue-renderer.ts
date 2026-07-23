@@ -156,7 +156,7 @@ function renderFindingItem(finding: Finding, ctx: LinkContext): string {
     }
   }
 
-  let line = `- \`${finding.id}\` **${escapeHtml(finding.title)}**${locationStr} · ${finding.severity}`;
+  let line = `- \`${finding.reportedId ?? finding.id}\` **${escapeHtml(finding.title)}**${locationStr} · ${finding.severity}`;
   line += `\n  ${escapeHtml(finding.description)}`;
 
   return line;

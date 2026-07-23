@@ -341,7 +341,7 @@ describe('postTriggerReview', () => {
     });
     vi.mocked(deduplicateFindings).mockResolvedValue({
       newFindings: findings,
-      duplicateActions: [{ finding: findings[0]!, existingComment: createExistingComment(), matchType: 'hash', originalFindingId: findings[0]!.id }],
+      duplicateActions: [{ finding: findings[0]!, existingComment: createExistingComment(), matchType: 'hash' }],
     } as never);
 
     const postResult = await postTriggerReview({
@@ -384,7 +384,7 @@ describe('postTriggerReview', () => {
 
       vi.mocked(deduplicateFindings).mockResolvedValue({
         newFindings: [findings[0]!],
-        duplicateActions: [{ finding: findings[1]!, existingComment: createExistingComment(), matchType: 'hash', originalFindingId: findings[1]!.id }],
+        duplicateActions: [{ finding: findings[1]!, existingComment: createExistingComment(), matchType: 'hash' }],
       } as never);
       // Dedup shrank the finding set, so the poster re-renders before posting.
       vi.mocked(renderSkillReport).mockReturnValue(createRenderResult({
@@ -527,7 +527,7 @@ describe('postTriggerReview', () => {
     // Mock that the finding is a duplicate
     vi.mocked(deduplicateFindings).mockResolvedValue({
       newFindings: [],
-      duplicateActions: [{ type: 'react_external', originalFindingId: finding.id, finding, existingComment, matchType: 'hash' }],
+      duplicateActions: [{ type: 'react_external', finding, existingComment, matchType: 'hash' }],
     });
     vi.mocked(processDuplicateActions).mockResolvedValue({ updated: 0, reacted: 1, skipped: 0, failed: 0 });
 
@@ -546,7 +546,7 @@ describe('postTriggerReview', () => {
     });
     expect(processDuplicateActions).toHaveBeenCalledWith(
       mockOctokit, 'test-owner', 'test-repo',
-      [{ type: 'react_external', originalFindingId: finding.id, finding, existingComment, matchType: 'hash' }],
+      [{ type: 'react_external', finding, existingComment, matchType: 'hash' }],
       'test-skill'
     );
     // Since all findings were duplicates and failOn not triggered, nothing new to post
@@ -597,7 +597,7 @@ describe('postTriggerReview', () => {
 
     vi.mocked(deduplicateFindings).mockResolvedValue({
       newFindings: [],
-      duplicateActions: [{ type: 'update_warden', originalFindingId: finding.id, finding, existingComment, matchType: 'hash' }],
+      duplicateActions: [{ type: 'update_warden', finding, existingComment, matchType: 'hash' }],
     });
     vi.mocked(processDuplicateActions).mockResolvedValue({ updated: 0, reacted: 0, skipped: 1, failed: 0 });
 
@@ -661,7 +661,6 @@ describe('postTriggerReview', () => {
     });
     const duplicateAction = {
       type: 'react_external' as const,
-      originalFindingId: duplicateFinding.id,
       finding: duplicateFinding,
       existingComment,
       matchType: 'hash' as const,
@@ -726,7 +725,6 @@ describe('postTriggerReview', () => {
       duplicateActions: [
         {
           type: 'update_warden',
-          originalFindingId: finding.id,
           finding,
           existingComment,
           matchType: 'hash',
@@ -777,12 +775,12 @@ describe('postTriggerReview', () => {
     };
 
     const existingComment = createExistingComment({ isWarden: true, findingId: 'WRZ-XPL' });
-    const recenteredFinding = { ...finding, id: 'WRZ-XPL' };
+    const recenteredFinding = { ...finding, reportedId: 'WRZ-XPL' };
 
     // Mock that the finding is a duplicate (already posted in previous run)
     vi.mocked(deduplicateFindings).mockResolvedValue({
       newFindings: [],
-      duplicateActions: [{ type: 'update_warden', originalFindingId: finding.id, finding: recenteredFinding, existingComment, matchType: 'hash' }],
+      duplicateActions: [{ type: 'update_warden', finding: recenteredFinding, existingComment, matchType: 'hash' }],
     });
     vi.mocked(processDuplicateActions).mockResolvedValue({ updated: 1, reacted: 0, skipped: 0, failed: 0 });
 
@@ -811,13 +809,14 @@ describe('postTriggerReview', () => {
     });
     expect(processDuplicateActions).toHaveBeenCalledWith(
       mockOctokit, 'test-owner', 'test-repo',
-      [{ type: 'update_warden', originalFindingId: finding.id, finding: recenteredFinding, existingComment, matchType: 'hash' }],
+      [{ type: 'update_warden', finding: recenteredFinding, existingComment, matchType: 'hash' }],
       'test-skill'
     );
     // Even though all findings were deduplicated, REQUEST_CHANGES should still be posted
     expect(postResult.posted).toBe(true);
     expect([...postResult.activeWardenCommentIds]).toEqual([1]);
-    expect(result.report?.findings[0]?.id).toBe('WRZ-XPL');
+    expect(result.report?.findings[0]?.id).toBe(finding.id);
+    expect(result.report?.findings[0]?.reportedId).toBe('WRZ-XPL');
     expect(postResult.findingObservations).toEqual([
       expect.objectContaining({
         outcome: 'deduped',
@@ -837,10 +836,10 @@ describe('postTriggerReview', () => {
     );
   });
 
-  it('recenters finding ids on findingProcessingEvents alongside report.findings', async () => {
+  it('never touches findingProcessingEvents when dedupe sets reportedId, since id never mutates', async () => {
     const finding = createFinding();
     const existingComment = createExistingComment({ isWarden: true, findingId: 'WRZ-XPL' });
-    const recenteredFinding = { ...finding, id: 'WRZ-XPL' };
+    const recenteredFinding = { ...finding, reportedId: 'WRZ-XPL' };
 
     const result: TriggerResult = {
       triggerName: 'test-trigger',
@@ -860,7 +859,7 @@ describe('postTriggerReview', () => {
 
     vi.mocked(deduplicateFindings).mockResolvedValue({
       newFindings: [],
-      duplicateActions: [{ type: 'react_external', originalFindingId: finding.id, finding: recenteredFinding, existingComment, matchType: 'hash' }],
+      duplicateActions: [{ type: 'react_external', finding: recenteredFinding, existingComment, matchType: 'hash' }],
     });
     vi.mocked(processDuplicateActions).mockResolvedValue({ updated: 0, reacted: 1, skipped: 0, failed: 0 });
 
@@ -872,8 +871,9 @@ describe('postTriggerReview', () => {
 
     await postTriggerReview(ctx, mockDeps);
 
-    expect(result.report?.findings[0]?.id).toBe('WRZ-XPL');
-    expect(result.findingProcessingEvents?.[0]?.finding.id).toBe('WRZ-XPL');
+    expect(result.report?.findings[0]?.id).toBe(finding.id);
+    expect(result.report?.findings[0]?.reportedId).toBe('WRZ-XPL');
+    expect(result.findingProcessingEvents?.[0]?.finding.id).toBe(finding.id);
   });
 
   it('handles API errors gracefully', async () => {

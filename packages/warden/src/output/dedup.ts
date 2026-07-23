@@ -66,8 +66,6 @@ export type DuplicateActionType = 'update_warden' | 'react_external';
  */
 export interface DuplicateAction {
   type: DuplicateActionType;
-  /** ID produced by the current run before any Warden ID recentering */
-  originalFindingId: string;
   finding: Finding;
   existingComment: ExistingComment;
   /** Whether this was a hash match or semantic match */
@@ -670,7 +668,7 @@ export function findingToExistingComment(finding: Finding, skill?: string): Exis
     line: finding.location.endLine ?? finding.location.startLine,
     title: finding.title,
     description: finding.description,
-    findingId: finding.id,
+    findingId: finding.reportedId ?? finding.id,
     contentHash: generateContentHash(finding.title, finding.description),
     isWarden: true,
     skills: skill ? [skill] : [],
@@ -915,11 +913,10 @@ export async function deduplicateFindings(
 
     if (matchingComment) {
       const duplicateFinding = matchingComment.isWarden && matchingComment.findingId
-        ? { ...finding, id: matchingComment.findingId }
+        ? { ...finding, reportedId: matchingComment.findingId }
         : finding;
       duplicateActions.push({
         type: matchingComment.isWarden ? 'update_warden' : 'react_external',
-        originalFindingId: finding.id,
         finding: duplicateFinding,
         existingComment: matchingComment,
         matchType: 'hash',
@@ -950,11 +947,10 @@ export async function deduplicateFindings(
     const matchingComment = semanticResult.matches.get(finding.id);
     if (matchingComment) {
       const duplicateFinding = matchingComment.isWarden && matchingComment.findingId
-        ? { ...finding, id: matchingComment.findingId }
+        ? { ...finding, reportedId: matchingComment.findingId }
         : finding;
       duplicateActions.push({
         type: matchingComment.isWarden ? 'update_warden' : 'react_external',
-        originalFindingId: finding.id,
         finding: duplicateFinding,
         existingComment: matchingComment,
         matchType: 'semantic',

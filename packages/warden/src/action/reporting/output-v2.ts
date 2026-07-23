@@ -200,6 +200,7 @@ export type FindingAttribution = z.infer<typeof FindingAttributionSchema>;
 
 export const ExportedFindingV2Schema = z.object({
   id: z.string(),
+  reportedId: z.string().optional(),
   contentHash: z.string(),
   severity: SeveritySchema,
   confidence: ConfidenceSchema.optional(),
@@ -245,6 +246,7 @@ export type DedupeDetailV2 = z.infer<typeof DedupeDetailV2Schema>;
 
 const ObservedFindingSchema = z.object({
   id: z.string(),
+  reportedId: z.string().optional(),
   severity: SeveritySchema,
   confidence: ConfidenceSchema.optional(),
   title: z.string(),
@@ -500,6 +502,7 @@ function buildFindingObservationsV2(
     const origin = { skillExecutionId, skillName: observation.skill ?? '' };
     const findingSnapshot = {
       id: observation.finding.id,
+      reportedId: observation.finding.reportedId,
       severity: observation.finding.severity,
       confidence: observation.finding.confidence,
       title: observation.finding.title,
@@ -586,35 +589,40 @@ function resolveCorroboratingAttributions(
 }
 
 /**
- * Report-time dedupe against existing comments can rename a finding's id to
- * match the comment it duplicates (see `recenterReportFindingIds` in
- * poster.ts). The analyze-phase payload being patched here still has the
- * pre-recenter id, so every place that id appears must be renamed the same
- * way or it stops joining to the recentered id in `findingObservations`.
+ * Report-time dedupe against an existing comment sets `reportedId` on a
+ * finding (see `syncReportedIds` in poster.ts) without ever changing its
+ * `id`. The analyze-phase payload being patched here was built before that
+ * happened, so newly-discovered `reportedId`s need folding in. `id` alone
+ * is only unique within one skill execution, not across the whole run, so
+ * the map is keyed by `${skillExecutionId}:${id}` - the same composite key
+ * `buildReportModeResultsV2` already uses for this exact reason.
  */
-function buildFindingIdRecenterMap(findingObservations: FindingObservation[]): Map<string, string> {
-  const ids = new Map<string, string>();
+function buildReportedIdMap(
+  findingObservations: FindingObservation[],
+  matchedTriggers: ResolvedTrigger[]
+): Map<string, string> {
+  const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
+  const reportedIds = new Map<string, string>();
   for (const observation of findingObservations) {
-    if (observation.outcome !== 'deduped') continue;
-    const { originalFindingId, finding } = observation;
-    if (originalFindingId && originalFindingId !== finding.id) {
-      ids.set(originalFindingId, finding.id);
-    }
+    if (observation.outcome !== 'deduped' || !observation.finding.reportedId) continue;
+    const skillExecutionId = observation.skillExecutionId ?? skillExecutionIdByName.get(observation.skill ?? '') ?? '';
+    reportedIds.set(`${skillExecutionId}:${observation.finding.id}`, observation.finding.reportedId);
   }
-  return ids;
+  return reportedIds;
 }
 
 /**
  * Rebuild only the observation-derived parts of a v2 findings payload:
- * `findingObservations`, `summary.byOutcome`, and any newly-discovered
- * cross-skill corroboration on `findings[].reportedBy`. Used by report mode
- * to fold real posting outcomes into an analyze-phase payload without
- * touching `skillExecutions`/`discardedFindings`/`provenance`, which can
- * only be reconstructed from the original `findingProcessingEvents` and
- * would otherwise be silently wiped by a full rebuild from replayed
- * results. Corroboration is additive-only (existing `reportedBy` entries
- * are never removed) since it can only be discovered once posting/dedup
- * runs, which analyze mode never does.
+ * `findingObservations`, `summary.byOutcome`, any newly-discovered
+ * `reportedId` (continuity with an existing comment), and any
+ * newly-discovered cross-skill corroboration on `findings[].reportedBy`.
+ * Used by report mode to fold real posting outcomes into an analyze-phase
+ * payload without touching `skillExecutions`/`discardedFindings`/
+ * `provenance`, which can only be reconstructed from the original
+ * `findingProcessingEvents` and would otherwise be silently wiped by a full
+ * rebuild from replayed results. Corroboration is additive-only (existing
+ * `reportedBy` entries are never removed) since it can only be discovered
+ * once posting/dedup runs, which analyze mode never does.
  */
 export function patchFindingsOutputV2Observations(
   base: WardenFindingsV2,
@@ -623,15 +631,16 @@ export function patchFindingsOutputV2Observations(
 ): WardenFindingsV2 {
   const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, matchedTriggers);
   const corroboratingById = buildCorroboratingAttributions(findingObservations, matchedTriggers);
-  const idRecenterMap = buildFindingIdRecenterMap(findingObservations);
+  const reportedIdMap = buildReportedIdMap(findingObservations, matchedTriggers);
 
   const findings = base.findings.map((original) => {
-    const recenteredId = idRecenterMap.get(original.id);
-    const finding = recenteredId ? { ...original, id: recenteredId } : original;
+    const originSkillExecutionId = original.reportedBy.find((r) => r.role === 'primary')?.skillExecutionId ?? '';
+    const reportedId = reportedIdMap.get(`${originSkillExecutionId}:${original.id}`);
+    const finding = reportedId ? { ...original, reportedId } : original;
 
     const primarySkillName = finding.reportedBy.find((r) => r.role === 'primary')?.skillName ?? '';
     const newCorroborators = resolveCorroboratingAttributions(
-      corroboratingById.get(finding.id) ?? [],
+      corroboratingById.get(finding.reportedId ?? finding.id) ?? [],
       primarySkillName
     );
     if (newCorroborators.length === 0) return finding;
@@ -643,28 +652,9 @@ export function patchFindingsOutputV2Observations(
     return { ...finding, reportedBy: [...finding.reportedBy, ...additions] };
   });
 
-  const skillExecutions =
-    idRecenterMap.size === 0
-      ? base.skillExecutions
-      : base.skillExecutions.map((execution) => ({
-          ...execution,
-          findingIds: execution.findingIds.map((id) => idRecenterMap.get(id) ?? id),
-        }));
-
-  const discardedFindings =
-    !base.discardedFindings || idRecenterMap.size === 0
-      ? base.discardedFindings
-      : base.discardedFindings.map((discarded) =>
-          discarded.survivorFindingId && idRecenterMap.has(discarded.survivorFindingId)
-            ? { ...discarded, survivorFindingId: idRecenterMap.get(discarded.survivorFindingId) }
-            : discarded
-        );
-
   return WardenFindingsSchemaV2.parse({
     ...base,
-    skillExecutions,
     findings,
-    discardedFindings,
     findingObservations: observations,
     summary: { ...base.summary, byOutcome },
   });
@@ -776,6 +766,7 @@ export function buildFindingsOutputV2(
     for (const finding of report.findings) {
       findings.push({
         id: finding.id,
+        reportedId: finding.reportedId,
         contentHash: generateContentHash(finding.title, finding.description),
         severity: finding.severity,
         confidence: finding.confidence,
@@ -787,7 +778,7 @@ export function buildFindingsOutputV2(
         sourceSnippet: finding.sourceSnippet,
         reportedBy: [
           { skillExecutionId, skillName: report.skill, role: 'primary' },
-          ...resolveCorroboratingAttributions(corroboratingById.get(finding.id) ?? [], report.skill),
+          ...resolveCorroboratingAttributions(corroboratingById.get(finding.reportedId ?? finding.id) ?? [], report.skill),
         ],
         provenance: {
           originSkillExecutionId: skillExecutionId,

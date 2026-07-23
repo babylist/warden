@@ -644,7 +644,7 @@ describe('patchFindingsOutputV2Observations', () => {
     expect(patched.findings[0]?.provenance).toEqual(analyzePhaseOutput.findings[0]?.provenance);
   });
 
-  it('recenters findings[].id and skillExecutions[].findingIds to match a report-phase dedupe against an existing comment', () => {
+  it('adds reportedId without ever renaming findings[].id or skillExecutions[].findingIds', () => {
     const trigger = createTrigger();
     const finding = createFinding({ id: 'WRD-301' });
 
@@ -657,23 +657,61 @@ describe('patchFindingsOutputV2Observations', () => {
     expect(analyzePhaseOutput.findings[0]?.id).toBe('WRD-301');
     expect(analyzePhaseOutput.skillExecutions[0]?.findingIds).toEqual(['WRD-301']);
 
-    // Report-time dedupe against an existing GitHub comment recenters the
-    // finding's id; the analyze-phase payload being patched still has the
-    // pre-recenter id and must be renamed to match.
+    // Report-time dedupe against an existing GitHub comment sets `reportedId`
+    // on the finding (the analyze-phase payload being patched here still has
+    // no reportedId, since dedupe hadn't happened yet) - `id` itself is
+    // stable and never needs renaming.
     const reportPhaseObservations: FindingObservation[] = [
       {
         outcome: 'deduped',
-        finding: { ...finding, id: 'WRZ-XPL' },
+        finding: { ...finding, reportedId: 'WRZ-XPL' },
         skill: 'code-review',
-        originalFindingId: 'WRD-301',
         dedupe: { source: 'warden', matchType: 'hash', existingFindingId: 'WRZ-XPL' },
       },
     ];
 
     const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [trigger], reportPhaseObservations);
 
-    expect(patched.findings[0]?.id).toBe('WRZ-XPL');
-    expect(patched.skillExecutions[0]?.findingIds).toEqual(['WRZ-XPL']);
+    expect(patched.findings[0]?.id).toBe('WRD-301');
+    expect(patched.findings[0]?.reportedId).toBe('WRZ-XPL');
+    expect(patched.skillExecutions[0]?.findingIds).toEqual(['WRD-301']);
+  });
+
+  it('never lets a report-time dedupe in one skill rename an unrelated finding that shares its id in another skill', () => {
+    const triggerA = createTrigger({ id: 'trigger-a', skillExecutionId: 'exec-a', skill: 'skill-a' });
+    const triggerB = createTrigger({ id: 'trigger-b', skillExecutionId: 'exec-b', skill: 'skill-b' });
+    const findingA = createFinding({ id: 'SHARED-ID' });
+    const findingB = createFinding({ id: 'SHARED-ID' });
+
+    const analyzePhaseOutput = buildFindingsOutputV2(
+      [
+        createResult({ report: createReport({ skill: 'skill-a', findings: [findingA] }), triggerId: 'trigger-a', skillExecutionId: 'exec-a' }),
+        createResult({ report: createReport({ skill: 'skill-b', findings: [findingB] }), triggerId: 'trigger-b', skillExecutionId: 'exec-b' }),
+      ],
+      [triggerA, triggerB],
+      [],
+      { runId: '123' }
+    );
+    expect(analyzePhaseOutput.findings).toHaveLength(2);
+    expect(analyzePhaseOutput.findings.every((f) => f.id === 'SHARED-ID')).toBe(true);
+
+    // Only skill A's finding gets deduped this report step.
+    const reportPhaseObservations: FindingObservation[] = [
+      {
+        outcome: 'deduped',
+        finding: { ...findingA, reportedId: 'WRZ-XPL' },
+        skill: 'skill-a',
+        skillExecutionId: 'exec-a',
+        dedupe: { source: 'warden', matchType: 'hash', existingFindingId: 'WRZ-XPL' },
+      },
+    ];
+
+    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [triggerA, triggerB], reportPhaseObservations);
+
+    const patchedA = patched.findings.find((f) => f.reportedBy.some((r) => r.skillName === 'skill-a'));
+    const patchedB = patched.findings.find((f) => f.reportedBy.some((r) => r.skillName === 'skill-b'));
+    expect(patchedA?.reportedId).toBe('WRZ-XPL');
+    expect(patchedB?.reportedId).toBeUndefined();
   });
 });
 

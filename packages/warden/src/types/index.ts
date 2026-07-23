@@ -115,6 +115,8 @@ export type SourceSnippet = z.infer<typeof SourceSnippetSchema>;
 // Individual finding from a skill
 export const FindingSchema = z.object({
   id: z.string(),
+  /** Id this finding is displayed/tracked as once dedupe matches it to an already-posted comment. Undefined means display `id` as-is. `id` itself is assigned once at creation and never mutated afterward. */
+  reportedId: z.string().optional(),
   severity: SeveritySchema,
   confidence: ConfidenceSchema.optional(),
   title: z.string(),

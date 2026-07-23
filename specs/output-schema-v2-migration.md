@@ -81,6 +81,7 @@ treat a `runId`/`schemaVersion` mismatch between the two as a hard error.
 | `skills[].findings[]` (nested per skill) | `findings[]` (flat, top-level) | a finding is no longer owned by exactly one skill array |
 | `findings[].id/.severity/.confidence/.title/.description/.location/.additionalLocations/.sourceSnippet` | same fields on `findings[]` | unchanged |
 | — | `findings[].contentHash` | new — stable cross-run key (same as `dedup.ts`'s `generateContentHash`) |
+| — | `findings[].reportedId` | new, optional — set once dedupe matches this finding to an existing GitHub comment, for continuity with the id shown across runs; `id` itself never changes |
 | *(dropped from export)* | `findings[].verification` | **fixed** — the verifier's evidence text was already rendered into GitHub comments but silently absent from v1 JSON |
 | *(implicit, one skill only)* | `findings[].reportedBy[]` | new — `{skillExecutionId, skillName, role: 'primary'\|'corroborating', matchType?}`; a finding independently flagged by multiple skills now lists all of them |
 | *(only in `auxiliaryUsage` aggregate)* | `findings[].provenance.verification` | new — `{outcome: 'kept'\|'revised', model, runtime, evidence?, before?}`; on `revised`, `before` holds the pre-revision title/description/severity/confidence |

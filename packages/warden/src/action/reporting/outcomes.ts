@@ -40,8 +40,6 @@ export interface PostedFindingObservation extends BaseFindingObservation {
 export interface DedupedFindingObservation extends BaseFindingObservation {
   outcome: 'deduped';
   dedupe: DedupeDetail;
-  /** finding.id before dedupe recentered it to match an existing comment; unset when they never diverged. */
-  originalFindingId?: string;
 }
 
 export interface SkippedFindingObservation extends BaseFindingObservation {
@@ -78,7 +76,6 @@ export const FindingObservationSchema = z.discriminatedUnion('outcome', [
     skill: z.string().optional(),
     skillExecutionId: z.string().optional(),
     dedupe: DedupeDetailSchema,
-    originalFindingId: z.string().optional(),
   }),
   z.object({
     outcome: z.literal('skipped'),

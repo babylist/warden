@@ -76,6 +76,33 @@ describe('renderSkillReport', () => {
     expect(result.review!.comments[0]!.body).not.toContain('`f1`');
   });
 
+  it('shows reportedId instead of id in the attribution footnote once dedupe sets it', () => {
+    const report: SkillReport = {
+      ...baseReport,
+      skill: 'code-review',
+      findings: [
+        {
+          id: 'f1',
+          reportedId: 'WRZ-XPL',
+          severity: 'medium',
+          title: 'Issue',
+          description: 'Details',
+          location: {
+            path: 'src/file.ts',
+            startLine: 10,
+          },
+        },
+      ],
+    };
+
+    const result = renderSkillReport(report);
+
+    expect(result.review!.comments[0]!.body).toContain(
+      '<sub>Identified by Warden code-review · WRZ-XPL</sub>'
+    );
+    expect(result.review!.comments[0]!.body).not.toContain('· f1<');
+  });
+
   it('does not include confidence in attribution footnote', () => {
     const report: SkillReport = {
       ...baseReport,

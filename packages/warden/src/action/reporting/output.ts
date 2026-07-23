@@ -245,7 +245,7 @@ export function buildFindingsOutput(
       error: r.error,
       verifierRejections: r.verifierRejections,
       findings: r.findings.map((f) => ({
-        id: f.id,
+        id: f.reportedId ?? f.id,
         severity: f.severity,
         confidence: f.confidence,
         title: f.title,

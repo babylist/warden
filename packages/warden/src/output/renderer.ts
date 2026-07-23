@@ -88,7 +88,7 @@ function renderReview(
     }
 
     // Add attribution footer with skill name and finding ID
-    body += `\n\n${renderAttributionFooter(report.skill, finding.id)}`;
+    body += `\n\n${renderAttributionFooter(report.skill, finding.reportedId ?? finding.id)}`;
 
     // Add deduplication marker
     const contentHash = generateContentHash(finding.title, finding.description);
@@ -249,7 +249,7 @@ function renderFindingItem(finding: Finding): string {
   const extra = finding.additionalLocations?.length
     ? ` (+${finding.additionalLocations.length} more ${pluralize(finding.additionalLocations.length, 'location')})`
     : '';
-  return `- \`${finding.id}\` **${escapeHtml(finding.title)}**${location}${extra} · ${finding.severity}: ${escapeHtml(finding.description)}`;
+  return `- \`${finding.reportedId ?? finding.id}\` **${escapeHtml(finding.title)}**${location}${extra} · ${finding.severity}: ${escapeHtml(finding.description)}`;
 }
 
 /** Render findings as markdown for inclusion in a review body. */

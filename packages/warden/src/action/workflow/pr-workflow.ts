@@ -1949,6 +1949,7 @@ function validateV2OutputsMatchContext(
 function toFindingFromV2(finding: ExportedFindingV2): Finding {
   return {
     id: finding.id,
+    reportedId: finding.reportedId,
     severity: finding.severity,
     confidence: finding.confidence,
     title: finding.title,
