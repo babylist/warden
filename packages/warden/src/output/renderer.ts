@@ -1,7 +1,7 @@
 import { SEVERITY_ORDER, filterFindings } from '../types/index.js';
 import type { SkillReport, Finding, Severity, SeverityThreshold } from '../types/index.js';
 import type { RenderResult, RenderOptions, GitHubReview, GitHubComment } from './types.js';
-import { capitalize, formatStatsCompact, countBySeverity, pluralize } from '../cli/output/formatters.js';
+import { capitalize, displayFindingId, formatStatsCompact, countBySeverity, pluralize } from '../cli/output/formatters.js';
 import { generateContentHash, generateFindingMetadata, generateMarker } from './dedup.js';
 import { escapeHtml } from '../utils/index.js';
 
@@ -88,7 +88,7 @@ function renderReview(
     }
 
     // Add attribution footer with skill name and finding ID
-    body += `\n\n${renderAttributionFooter(report.skill, finding.reportedId ?? finding.id)}`;
+    body += `\n\n${renderAttributionFooter(report.skill, displayFindingId(finding))}`;
 
     // Add deduplication marker
     const contentHash = generateContentHash(finding.title, finding.description);
@@ -159,7 +159,7 @@ function renderHiddenFindingsLink(hiddenCount: number, checkRunUrl: string): str
 
 function renderAttributionFooter(skill: string, findingId?: string): string {
   const idSuffix = findingId ? ` · ${escapeHtml(findingId)}` : '';
-  return `<sub>Identified by Warden · ${escapeHtml(skill)}${idSuffix}</sub>`;
+  return `<sub>Identified by Warden ${escapeHtml(skill)}${idSuffix}</sub>`;
 }
 
 function renderSummaryComment(
@@ -249,7 +249,7 @@ function renderFindingItem(finding: Finding): string {
   const extra = finding.additionalLocations?.length
     ? ` (+${finding.additionalLocations.length} more ${pluralize(finding.additionalLocations.length, 'location')})`
     : '';
-  return `- \`${finding.reportedId ?? finding.id}\` **${escapeHtml(finding.title)}**${location}${extra} · ${finding.severity}: ${escapeHtml(finding.description)}`;
+  return `- \`${displayFindingId(finding)}\` **${escapeHtml(finding.title)}**${location}${extra} · ${finding.severity}: ${escapeHtml(finding.description)}`;
 }
 
 /** Render findings as markdown for inclusion in a review body. */

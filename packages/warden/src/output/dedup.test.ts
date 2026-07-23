@@ -16,8 +16,9 @@ import {
   updateWardenCommentBody,
   consolidateBatchFindings,
 } from './dedup.js';
-import type { Finding } from '../types/index.js';
+import type { Finding, SkillReport } from '../types/index.js';
 import type { ExistingComment } from './dedup.js';
+import { renderSkillReport } from './renderer.js';
 
 describe('generateContentHash', () => {
   it('generates consistent 8-char hex hash', () => {
@@ -691,6 +692,27 @@ ${marker}`;
 
     const parsed = parseMarker(body);
     expect(parsed).toEqual({ path, line, contentHash: hash });
+  });
+
+  it('parses skill and finding id back out of the real rendered attribution footer', () => {
+    const report: SkillReport = {
+      skill: 'security-review',
+      summary: 'Found 1 issue',
+      findings: [
+        {
+          id: 'sql-injection-1',
+          severity: 'high',
+          title: 'SQL Injection',
+          description: 'User input passed directly to query',
+          location: { path: 'src/db.ts', startLine: 42, endLine: 45 },
+        },
+      ],
+    };
+
+    const body = renderSkillReport(report).review!.comments[0]!.body;
+
+    expect(parseWardenFindingId(body)).toBe('sql-injection-1');
+    expect(parseWardenSkills(body)).toEqual(['security-review']);
   });
 });
 

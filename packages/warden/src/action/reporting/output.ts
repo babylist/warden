@@ -12,6 +12,7 @@ import {
 } from '../../types/index.js';
 import type { FindingObservation } from './outcomes.js';
 import { FindingObservationSchema } from './outcomes.js';
+import { displayFindingId } from '../../cli/output/formatters.js';
 
 const ExportedFindingSchema = z.object({
   id: z.string(),
@@ -204,7 +205,7 @@ function serializeTriggerResult(result: ReplayTriggerResult): z.infer<typeof Tri
  * underlying Finding.
  */
 function v1ContinuityId(finding: Finding): string {
-  return finding.reportedId ?? finding.id;
+  return displayFindingId(finding);
 }
 
 /** Build the public findings export payload. */

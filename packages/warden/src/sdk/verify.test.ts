@@ -132,6 +132,28 @@ describe('verifyFindings', () => {
     }));
   });
 
+  it('truncates a long rejection reason to 500 characters', async () => {
+    const longReason = 'x'.repeat(600);
+    const runtime = mockRuntime(JSON.stringify({ verdict: 'reject', reason: longReason }));
+    vi.mocked(getRuntime).mockReturnValue(runtime);
+
+    const finding = makeFinding();
+    const result = await verifyFindings([finding], {
+      repoPath: '/repo',
+      skill: makeSkill(),
+      model: 'claude-haiku-4-5',
+      prContext: {
+        repository: 'getsentry/sentry',
+        title: 'Fix guarded path',
+        body: 'Adds a guard before the call.',
+        changedFiles: ['src/app.ts'],
+      },
+    });
+
+    expect(result.verifierRejections?.reasons[0]).toHaveLength(500);
+    expect(result.verifierRejections?.reasons[0]).toBe(longReason.slice(0, 500));
+  });
+
   it('emits a kept processing event when the verifier returns keep', async () => {
     const runtime = mockRuntime('{"verdict":"keep","reason":"still real after tracing"}');
     vi.mocked(getRuntime).mockReturnValue(runtime);

@@ -24,6 +24,7 @@ import type { TriggerResult } from '../triggers/executor.js';
 import { buildConfiguredSkillsList, serializeTriggerError } from './output.js';
 import { generateContentHash } from '../../output/dedup.js';
 import { getVersion } from '../../utils/version.js';
+import { displayFindingId } from '../../cli/output/formatters.js';
 import type { FindingObservation } from './outcomes.js';
 
 export const SeverityBreakdownSchema = z.object({
@@ -394,6 +395,7 @@ export interface BuildMetadataOutputV2Options {
   reportOn?: SeverityThreshold;
 }
 
+/** Build the schema-v2 metadata output: static run/repo/harness identity plus the resolved trigger roster. */
 export function buildMetadataOutputV2(
   context: EventContext,
   resolvedTriggers: ResolvedTrigger[],
@@ -492,14 +494,42 @@ export function skillExecutionIdByNameFrom(matchedTriggers: ResolvedTrigger[]): 
   return skillExecutionIdByName;
 }
 
+/**
+ * Resolves an observation's own execution id: its own id, then a by-name
+ * fallback. Deliberately falls back to '' (never the bare skill name) when
+ * neither is known - an observation can describe a comment from a trigger
+ * no longer in the current config, so guessing a truthy-but-wrong id here
+ * risks a false match at a `${skillExecutionId}:${id}` compound key.
+ */
+function resolveObservationSkillExecutionId(
+  ownId: string | undefined,
+  skillName: string | undefined,
+  skillExecutionIdByName: Map<string, string>
+): string {
+  return ownId ?? skillExecutionIdByName.get(skillName ?? '') ?? '';
+}
+
+/**
+ * Resolves a current result's own execution id: its own id, then a by-name
+ * fallback, then the skill name itself. Unlike the observation-side
+ * resolver, this always describes a result that just ran in this process,
+ * so falling back to its own (non-empty) skill name is a safe placeholder
+ * rather than a guess.
+ */
+function resolveReportSkillExecutionId(
+  ownId: string | undefined,
+  skillName: string,
+  skillExecutionIdByName: Map<string, string>
+): string {
+  return ownId ?? skillExecutionIdByName.get(skillName) ?? skillName;
+}
+
 function buildFindingObservationsV2(
   findingObservations: FindingObservation[],
-  matchedTriggers: ResolvedTrigger[]
+  skillExecutionIdByName: Map<string, string>
 ): { observations: FindingObservationV2[]; byOutcome: SummaryV2['byOutcome'] } {
-  const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
-
   const observations: FindingObservationV2[] = findingObservations.map((observation) => {
-    const skillExecutionId = observation.skillExecutionId ?? skillExecutionIdByName.get(observation.skill ?? '') ?? '';
+    const skillExecutionId = resolveObservationSkillExecutionId(observation.skillExecutionId, observation.skill, skillExecutionIdByName);
     const origin = { skillExecutionId, skillName: observation.skill ?? '' };
     const findingSnapshot = {
       id: observation.finding.id,
@@ -534,9 +564,15 @@ function buildFindingObservationsV2(
   return { observations, byOutcome };
 }
 
+interface DedupeAnchor {
+  existingCommentId?: number;
+  existingThreadId?: string;
+}
+
 interface HeuristicCorroboratingCandidate {
   attribution: FindingAttribution;
   targetSkills?: string[];
+  anchor: DedupeAnchor;
 }
 
 /**
@@ -549,34 +585,65 @@ interface HeuristicCorroboratingCandidate {
  * candidates are all a match against a comment from a *prior* run can ever
  * produce, since a comment footer only ever records the winner's skill
  * *name*, not its skillExecutionId - these still need the name-based
- * narrowing `resolveCorroboratingAttributions` applies.
+ * narrowing `resolveCorroboratingAttributions` applies, plus the anchor
+ * narrowing below (two prior-run comments can coincidentally share a bare
+ * model-assigned finding id just as two current-run findings can).
  */
 interface CorroboratingCandidates {
   exact: Map<string, FindingAttribution[]>;
   heuristic: Map<string, HeuristicCorroboratingCandidate[]>;
+  /** A resolving finding's own dedupe anchor, keyed the same as `reportedIdMap`. */
+  ownAnchors: Map<string, DedupeAnchor>;
 }
 
 function exactCorroborationKey(skillExecutionId: string, findingId: string): string {
   return `${skillExecutionId}:${findingId}`;
 }
 
+/**
+ * Two heuristic candidates only definitely refer to the same prior-run
+ * comment when both sides carry a comment/thread id and they match - a bare
+ * `existingFindingId` string alone can't tell two coincidentally-same-id
+ * prior comments apart, the same collision class `exactCorroborationKey`
+ * defends against on the current-run side. When either side lacks an
+ * anchor, there's no way to rule the match out, so it's kept (matches the
+ * permissive default for unparseable skill metadata).
+ */
+function anchorsConflict(a: DedupeAnchor, b: DedupeAnchor): boolean {
+  if (a.existingCommentId !== undefined && b.existingCommentId !== undefined) {
+    return a.existingCommentId !== b.existingCommentId;
+  }
+  if (a.existingThreadId !== undefined && b.existingThreadId !== undefined) {
+    return a.existingThreadId !== b.existingThreadId;
+  }
+  return false;
+}
+
 function buildCorroboratingAttributions(
   findingObservations: FindingObservation[],
-  matchedTriggers: ResolvedTrigger[]
+  skillExecutionIdByName: Map<string, string>
 ): CorroboratingCandidates {
-  const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
   const exact = new Map<string, FindingAttribution[]>();
   const heuristic = new Map<string, HeuristicCorroboratingCandidate[]>();
+  const ownAnchors = new Map<string, DedupeAnchor>();
 
   for (const observation of findingObservations) {
     if (observation.outcome !== 'deduped' || !observation.dedupe.existingFindingId) continue;
 
+    const skillExecutionId = resolveObservationSkillExecutionId(observation.skillExecutionId, observation.skill, skillExecutionIdByName);
     const attribution: FindingAttribution = {
-      skillExecutionId: observation.skillExecutionId ?? skillExecutionIdByName.get(observation.skill ?? '') ?? '',
+      skillExecutionId,
       skillName: observation.skill ?? '',
       role: 'corroborating',
       matchType: observation.dedupe.matchType,
     };
+    const anchor: DedupeAnchor = {
+      existingCommentId: observation.dedupe.existingCommentId,
+      existingThreadId: observation.dedupe.existingThreadId,
+    };
+    // syncReportedIds sets a deduped finding's reportedId to its own existingFindingId,
+    // so this observation's own resolution lookup uses existingFindingId, not the raw id.
+    ownAnchors.set(`${skillExecutionId}:${observation.dedupe.existingFindingId}`, anchor);
 
     if (observation.dedupe.existingSkillExecutionId) {
       const key = exactCorroborationKey(observation.dedupe.existingSkillExecutionId, observation.dedupe.existingFindingId);
@@ -586,12 +653,12 @@ function buildCorroboratingAttributions(
     } else {
       const key = observation.dedupe.existingFindingId;
       const list = heuristic.get(key) ?? [];
-      list.push({ attribution, targetSkills: observation.dedupe.existingSkills });
+      list.push({ attribution, targetSkills: observation.dedupe.existingSkills, anchor });
       heuristic.set(key, list);
     }
   }
 
-  return { exact, heuristic };
+  return { exact, heuristic, ownAnchors };
 }
 
 /**
@@ -604,6 +671,12 @@ function buildCorroboratingAttributions(
  *
  * Exact candidates skip all of that: the compound key they were looked up by
  * already proves which execution they target, independent of `targetSkillName`.
+ *
+ * A bare `existingFindingId` can also collide across two genuinely different
+ * *prior*-run comments, so heuristic candidates are further narrowed against
+ * the target's own dedupe anchor (`anchorsConflict`) whenever both sides
+ * have one - otherwise two unrelated old findings that happen to share a
+ * model-assigned id could corroborate each other.
  *
  * Either pass can also dedupe more than one of its own findings against the
  * same winner in one run, or (for a finding that dedupes against its own
@@ -629,11 +702,13 @@ function resolveCorroboratingAttributions(
   }
 
   if (skillExecutionIdByName.get(targetSkillName) === targetSkillExecutionId) {
+    const ownAnchor = candidates.ownAnchors.get(`${targetSkillExecutionId}:${findingId}`);
     const heuristicMatches = candidates.heuristic.get(findingId) ?? [];
     for (const candidate of heuristicMatches) {
       if (candidate.targetSkills && candidate.targetSkills.length > 0 && !candidate.targetSkills.includes(targetSkillName)) {
         continue;
       }
+      if (ownAnchor && anchorsConflict(ownAnchor, candidate.anchor)) continue;
       if (seenSkillExecutionIds.has(candidate.attribution.skillExecutionId)) continue;
       seenSkillExecutionIds.add(candidate.attribution.skillExecutionId);
       attributions.push(candidate.attribution);
@@ -654,13 +729,12 @@ function resolveCorroboratingAttributions(
  */
 function buildReportedIdMap(
   findingObservations: FindingObservation[],
-  matchedTriggers: ResolvedTrigger[]
+  skillExecutionIdByName: Map<string, string>
 ): Map<string, string> {
-  const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
   const reportedIds = new Map<string, string>();
   for (const observation of findingObservations) {
     if (observation.outcome !== 'deduped' || !observation.finding.reportedId) continue;
-    const skillExecutionId = observation.skillExecutionId ?? skillExecutionIdByName.get(observation.skill ?? '') ?? '';
+    const skillExecutionId = resolveObservationSkillExecutionId(observation.skillExecutionId, observation.skill, skillExecutionIdByName);
     reportedIds.set(`${skillExecutionId}:${observation.finding.id}`, observation.finding.reportedId);
   }
   return reportedIds;
@@ -681,10 +755,9 @@ interface SkillExecutionUsageUpdate {
  */
 function buildSkillExecutionUsageUpdates(
   results: TriggerResult[],
-  matchedTriggers: ResolvedTrigger[]
+  triggerById: Map<string, ResolvedTrigger>,
+  skillExecutionIdByName: Map<string, string>
 ): Map<string, SkillExecutionUsageUpdate> {
-  const triggerById = new Map(matchedTriggers.map((t) => [t.id, t]));
-  const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
   const updates = new Map<string, SkillExecutionUsageUpdate>();
 
   for (const result of results) {
@@ -692,7 +765,7 @@ function buildSkillExecutionUsageUpdates(
     if (!report) continue;
 
     const trigger = result.triggerId ? triggerById.get(result.triggerId) : undefined;
-    const skillExecutionId = trigger?.skillExecutionId ?? skillExecutionIdByName.get(report.skill) ?? report.skill;
+    const skillExecutionId = resolveReportSkillExecutionId(trigger?.skillExecutionId, report.skill, skillExecutionIdByName);
     const auxiliaryUsageEntries = toAuxiliaryUsageEntries(report.auxiliaryUsage, report.auxiliaryUsageAttribution);
 
     updates.set(skillExecutionId, {
@@ -725,11 +798,12 @@ export function patchFindingsOutputV2Observations(
   matchedTriggers: ResolvedTrigger[],
   findingObservations: FindingObservation[]
 ): WardenFindingsV2 {
-  const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, matchedTriggers);
-  const corroboratingById = buildCorroboratingAttributions(findingObservations, matchedTriggers);
-  const reportedIdMap = buildReportedIdMap(findingObservations, matchedTriggers);
+  const triggerById = new Map(matchedTriggers.map((t) => [t.id, t]));
   const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
-  const usageUpdates = buildSkillExecutionUsageUpdates(results, matchedTriggers);
+  const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, skillExecutionIdByName);
+  const corroboratingById = buildCorroboratingAttributions(findingObservations, skillExecutionIdByName);
+  const reportedIdMap = buildReportedIdMap(findingObservations, skillExecutionIdByName);
+  const usageUpdates = buildSkillExecutionUsageUpdates(results, triggerById, skillExecutionIdByName);
 
   const skillExecutions = base.skillExecutions.map((execution) => {
     const update = usageUpdates.get(execution.skillExecutionId);
@@ -745,7 +819,7 @@ export function patchFindingsOutputV2Observations(
     const primarySkillName = finding.reportedBy.find((r) => r.role === 'primary')?.skillName ?? '';
     const newCorroborators = resolveCorroboratingAttributions(
       corroboratingById,
-      finding.reportedId ?? finding.id,
+      displayFindingId(finding),
       primarySkillName,
       originSkillExecutionId,
       skillExecutionIdByName
@@ -783,6 +857,75 @@ export interface BuildFindingsOutputV2Options {
   runId: string;
 }
 
+interface ReducedFindingProcessingEvents {
+  verificationById: Map<string, VerificationStage>;
+  mergeById: Map<string, MergeStage>;
+  discarded: DiscardedFinding[];
+}
+
+/** Finding IDs are model-assigned per skill run and can collide across skills, so the returned maps must not survive past this execution's findings. */
+function reduceFindingProcessingEvents(
+  events: TriggerResult['findingProcessingEvents'],
+  skillExecutionId: string
+): ReducedFindingProcessingEvents {
+  const verificationById = new Map<string, VerificationStage>();
+  const mergeById = new Map<string, MergeStage>();
+  const discarded: DiscardedFinding[] = [];
+
+  for (const event of events ?? []) {
+    if (event.stage === 'verification' && event.action === 'revised' && event.replacement) {
+      verificationById.set(event.replacement.id, {
+        outcome: 'revised',
+        model: event.model,
+        runtime: event.runtime,
+        evidence: event.replacement.verification,
+        before: {
+          title: event.finding.title,
+          description: event.finding.description,
+          severity: event.finding.severity,
+          confidence: event.finding.confidence,
+        },
+      });
+    } else if (event.stage === 'verification' && event.action === 'kept') {
+      verificationById.set(event.finding.id, {
+        outcome: 'kept',
+        model: event.model,
+        runtime: event.runtime,
+      });
+    } else if (event.stage === 'verification' && event.action === 'rejected') {
+      discarded.push({
+        originSkillExecutionId: skillExecutionId,
+        stage: 'verification_rejected',
+        severity: event.finding.severity,
+        title: event.finding.title,
+        location: event.finding.location,
+        model: event.model,
+        reason: event.reason,
+      });
+    } else if (event.stage === 'merge' && event.action === 'merged') {
+      const survivorId = event.replacement?.id;
+      discarded.push({
+        originSkillExecutionId: skillExecutionId,
+        stage: 'merge_absorbed',
+        severity: event.finding.severity,
+        title: event.finding.title,
+        location: event.finding.location,
+        model: event.model,
+        reason: event.reason,
+        survivorFindingId: survivorId,
+      });
+      if (survivorId) {
+        const entry = mergeById.get(survivorId) ?? { model: event.model, runtime: event.runtime, absorbedFindingIds: [] };
+        entry.absorbedFindingIds.push(event.finding.id);
+        mergeById.set(survivorId, entry);
+      }
+    }
+  }
+
+  return { verificationById, mergeById, discarded };
+}
+
+/** Build the schema-v2 findings output from scratch: skill executions, findings, corroboration, and discarded findings from this run's results. */
 export function buildFindingsOutputV2(
   results: TriggerResult[],
   matchedTriggers: ResolvedTrigger[],
@@ -791,7 +934,7 @@ export function buildFindingsOutputV2(
 ): WardenFindingsV2 {
   const triggerById = new Map(matchedTriggers.map((t) => [t.id, t]));
   const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
-  const corroboratingById = buildCorroboratingAttributions(findingObservations, matchedTriggers);
+  const corroboratingById = buildCorroboratingAttributions(findingObservations, skillExecutionIdByName);
 
   const skillExecutions: SkillExecution[] = [];
   const findings: ExportedFindingV2[] = [];
@@ -802,62 +945,13 @@ export function buildFindingsOutputV2(
     if (!report) continue;
 
     const trigger = result.triggerId ? triggerById.get(result.triggerId) : undefined;
-    const skillExecutionId = trigger?.skillExecutionId ?? skillExecutionIdByName.get(report.skill) ?? report.skill;
+    const skillExecutionId = resolveReportSkillExecutionId(trigger?.skillExecutionId, report.skill, skillExecutionIdByName);
 
-    // Finding IDs are model-assigned per skill run and can collide across
-    // skills, so these maps must not survive past this execution's findings.
-    const verificationById = new Map<string, VerificationStage>();
-    const mergeById = new Map<string, MergeStage>();
-
-    for (const event of result.findingProcessingEvents ?? []) {
-      if (event.stage === 'verification' && event.action === 'revised' && event.replacement) {
-        verificationById.set(event.replacement.id, {
-          outcome: 'revised',
-          model: event.model,
-          runtime: event.runtime,
-          evidence: event.replacement.verification,
-          before: {
-            title: event.finding.title,
-            description: event.finding.description,
-            severity: event.finding.severity,
-            confidence: event.finding.confidence,
-          },
-        });
-      } else if (event.stage === 'verification' && event.action === 'kept') {
-        verificationById.set(event.finding.id, {
-          outcome: 'kept',
-          model: event.model,
-          runtime: event.runtime,
-        });
-      } else if (event.stage === 'verification' && event.action === 'rejected') {
-        discardedFindings.push({
-          originSkillExecutionId: skillExecutionId,
-          stage: 'verification_rejected',
-          severity: event.finding.severity,
-          title: event.finding.title,
-          location: event.finding.location,
-          model: event.model,
-          reason: event.reason,
-        });
-      } else if (event.stage === 'merge' && event.action === 'merged') {
-        const survivorId = event.replacement?.id;
-        discardedFindings.push({
-          originSkillExecutionId: skillExecutionId,
-          stage: 'merge_absorbed',
-          severity: event.finding.severity,
-          title: event.finding.title,
-          location: event.finding.location,
-          model: event.model,
-          reason: event.reason,
-          survivorFindingId: survivorId,
-        });
-        if (survivorId) {
-          const entry = mergeById.get(survivorId) ?? { model: event.model, runtime: event.runtime, absorbedFindingIds: [] };
-          entry.absorbedFindingIds.push(event.finding.id);
-          mergeById.set(survivorId, entry);
-        }
-      }
-    }
+    const { verificationById, mergeById, discarded } = reduceFindingProcessingEvents(
+      result.findingProcessingEvents,
+      skillExecutionId
+    );
+    discardedFindings.push(...discarded);
 
     const auxiliaryUsageEntries = toAuxiliaryUsageEntries(report.auxiliaryUsage, report.auxiliaryUsageAttribution);
 
@@ -899,7 +993,7 @@ export function buildFindingsOutputV2(
           { skillExecutionId, skillName: report.skill, role: 'primary' },
           ...resolveCorroboratingAttributions(
             corroboratingById,
-            finding.reportedId ?? finding.id,
+            displayFindingId(finding),
             report.skill,
             skillExecutionId,
             skillExecutionIdByName
@@ -915,7 +1009,7 @@ export function buildFindingsOutputV2(
     }
   }
 
-  const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, matchedTriggers);
+  const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, skillExecutionIdByName);
 
   return WardenFindingsSchemaV2.parse({
     schemaVersion: '2',

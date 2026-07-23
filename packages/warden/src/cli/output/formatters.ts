@@ -2,6 +2,11 @@ import chalk from 'chalk';
 import figures from 'figures';
 import type { Severity, Confidence, Finding, FileChange, UsageStats, AuxiliaryUsageMap } from '../../types/index.js';
 
+/** The id to display for a finding: its reportedId once dedupe sets one, otherwise its own id. */
+export function displayFindingId(finding: Finding): string {
+  return finding.reportedId ?? finding.id;
+}
+
 /**
  * Capitalize the first letter of a string.
  * @example capitalize('critical') // 'Critical'
@@ -142,7 +147,7 @@ export function formatLocation(path: string, startLine?: number, endLine?: numbe
  */
 export function formatFindingCompact(finding: Finding): string {
   const badge = formatSeverityBadge(finding.severity);
-  const id = chalk.dim(`[${finding.reportedId ?? finding.id}]`);
+  const id = chalk.dim(`[${displayFindingId(finding)}]`);
   const location = finding.location
     ? chalk.dim(formatLocation(finding.location.path, finding.location.startLine, finding.location.endLine))
     : '';

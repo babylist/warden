@@ -1374,6 +1374,23 @@ function toReplayTriggerResults(results: TriggerResult[]): ReplayTriggerResult[]
   }));
 }
 
+/** The trigger-derived fields common to every report-mode result, before the found/error/report outcome is layered on. */
+function buildReplayBaseResult(trigger: ResolvedTrigger, inputs: ActionInputs) {
+  return {
+    triggerId: trigger.id,
+    triggerName: trigger.name,
+    skillName: trigger.skill,
+    skillExecutionId: trigger.skillExecutionId,
+    failOn: trigger.failOn ?? inputs.failOn,
+    reportOn: trigger.reportOn ?? inputs.reportOn,
+    minConfidence: trigger.minConfidence ?? 'medium',
+    reportOnSuccess: trigger.reportOnSuccess,
+    requestChanges: trigger.requestChanges ?? inputs.requestChanges,
+    failCheck: trigger.failCheck ?? inputs.failCheck,
+    maxFindings: trigger.maxFindings ?? inputs.maxFindings,
+  };
+}
+
 /**
  * Rebuild report-mode trigger results by joining artifact rows to the current
  * configured trigger name and skill identity.
@@ -1437,25 +1454,7 @@ function buildReportModeResults(
   }
 
   const results = matchedTriggers.map((trigger) => {
-    const failOn = trigger.failOn ?? inputs.failOn;
-    const reportOn = trigger.reportOn ?? inputs.reportOn;
-    const minConfidence = trigger.minConfidence ?? 'medium';
-    const requestChanges = trigger.requestChanges ?? inputs.requestChanges;
-    const failCheck = trigger.failCheck ?? inputs.failCheck;
-    const maxFindings = trigger.maxFindings ?? inputs.maxFindings;
-    const baseResult = {
-      triggerId: trigger.id,
-      triggerName: trigger.name,
-      skillName: trigger.skill,
-      skillExecutionId: trigger.skillExecutionId,
-      failOn,
-      reportOn,
-      minConfidence,
-      reportOnSuccess: trigger.reportOnSuccess,
-      requestChanges,
-      failCheck,
-      maxFindings,
-    };
+    const baseResult = buildReplayBaseResult(trigger, inputs);
     const outputResult =
       outputResults.get(triggerReplayKey(trigger))?.shift() ??
       outputResults.get(resultKey(trigger.name, trigger.skill))?.shift();
@@ -1992,25 +1991,7 @@ function buildReportModeResultsV2(
   const consumedTriggerIds = new Set<string>();
 
   const results = matchedTriggers.map((trigger) => {
-    const failOn = trigger.failOn ?? inputs.failOn;
-    const reportOn = trigger.reportOn ?? inputs.reportOn;
-    const minConfidence = trigger.minConfidence ?? 'medium';
-    const requestChanges = trigger.requestChanges ?? inputs.requestChanges;
-    const failCheck = trigger.failCheck ?? inputs.failCheck;
-    const maxFindings = trigger.maxFindings ?? inputs.maxFindings;
-    const baseResult = {
-      triggerId: trigger.id,
-      triggerName: trigger.name,
-      skillName: trigger.skill,
-      skillExecutionId: trigger.skillExecutionId,
-      failOn,
-      reportOn,
-      minConfidence,
-      reportOnSuccess: trigger.reportOnSuccess,
-      requestChanges,
-      failCheck,
-      maxFindings,
-    };
+    const baseResult = buildReplayBaseResult(trigger, inputs);
 
     const execution = executionsByTriggerId.get(trigger.id);
     if (!execution) {

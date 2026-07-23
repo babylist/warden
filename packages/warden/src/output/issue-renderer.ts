@@ -1,6 +1,6 @@
 import { SEVERITY_ORDER } from '../types/index.js';
 import type { SkillReport, Finding, Severity } from '../types/index.js';
-import { capitalize, countBySeverity } from '../cli/output/formatters.js';
+import { capitalize, countBySeverity, displayFindingId } from '../cli/output/formatters.js';
 import { escapeHtml } from '../utils/index.js';
 
 export interface IssueRenderOptions {
@@ -156,7 +156,7 @@ function renderFindingItem(finding: Finding, ctx: LinkContext): string {
     }
   }
 
-  let line = `- \`${finding.reportedId ?? finding.id}\` **${escapeHtml(finding.title)}**${locationStr} · ${finding.severity}`;
+  let line = `- \`${displayFindingId(finding)}\` **${escapeHtml(finding.title)}**${locationStr} · ${finding.severity}`;
   line += `\n  ${escapeHtml(finding.description)}`;
 
   return line;

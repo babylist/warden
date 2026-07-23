@@ -569,6 +569,71 @@ describe('buildFindingsOutputV2', () => {
     ]);
   });
 
+  it('does not cross-attribute two unrelated heuristic matches that coincidentally share a bare id when both existing comments have empty skills arrays', () => {
+    const firstTrigger = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
+    const secondTrigger = createTrigger({
+      id: 'trigger-2',
+      skillExecutionId: 'exec-2',
+      name: 'unrelated-skill-trigger',
+      skill: 'unrelated-skill',
+    });
+
+    const firstResult = createResult({
+      triggerId: 'trigger-1',
+      report: createReport({ skill: 'code-review', findings: [createFinding({ id: 'WRD-001' })] }),
+    });
+    const secondResult = createResult({
+      triggerId: 'trigger-2',
+      report: createReport({ skill: 'unrelated-skill', findings: [createFinding({ id: 'WRD-001' })] }),
+    });
+
+    const observations: FindingObservation[] = [
+      {
+        outcome: 'deduped',
+        finding: createFinding({ id: 'WRD-001', reportedId: 'WRD-001' }),
+        skill: 'code-review',
+        skillExecutionId: 'exec-1',
+        dedupe: {
+          source: 'warden',
+          matchType: 'hash',
+          existingFindingId: 'WRD-001',
+          existingCommentId: 111,
+          existingSkills: [],
+        },
+      },
+      {
+        outcome: 'deduped',
+        finding: createFinding({ id: 'WRD-001', reportedId: 'WRD-001' }),
+        skill: 'unrelated-skill',
+        skillExecutionId: 'exec-2',
+        dedupe: {
+          source: 'warden',
+          matchType: 'hash',
+          existingFindingId: 'WRD-001',
+          existingCommentId: 222,
+          existingSkills: [],
+        },
+      },
+    ];
+
+    const output = buildFindingsOutputV2(
+      [firstResult, secondResult],
+      [firstTrigger, secondTrigger],
+      observations,
+      { runId: '123' }
+    );
+
+    const fromCodeReview = output.findings.find((f) => f.provenance.originSkillExecutionId === 'exec-1');
+    const fromUnrelated = output.findings.find((f) => f.provenance.originSkillExecutionId === 'exec-2');
+
+    expect(fromCodeReview?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-1', skillName: 'code-review', role: 'primary' },
+    ]);
+    expect(fromUnrelated?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-2', skillName: 'unrelated-skill', role: 'primary' },
+    ]);
+  });
+
   it('does not list a finding as its own corroborator when it dedupes against its own prior posting', () => {
     const trigger = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
     const finding = createFinding({ id: 'WRD-001', reportedId: 'EXISTING-001' });

@@ -155,6 +155,28 @@ describe('parseActionInputs', () => {
       expect(() => parseActionInputs()).toThrow('Invalid mode "later"');
     });
   });
+
+  describe('output-schema-version handling', () => {
+    it('defaults to schema version 1', () => {
+      const inputs = parseActionInputs();
+      expect(inputs.outputSchemaVersion).toBe('1');
+    });
+
+    it('parses output-schema-version 2, metadata-file, and action-ref', () => {
+      process.env['INPUT_OUTPUT_SCHEMA_VERSION'] = '2';
+      process.env['INPUT_METADATA_FILE'] = 'warden-metadata.json';
+      process.env['INPUT_ACTION_REF'] = 'abc123';
+      const inputs = parseActionInputs();
+      expect(inputs.outputSchemaVersion).toBe('2');
+      expect(inputs.metadataFile).toBe('warden-metadata.json');
+      expect(inputs.actionRef).toBe('abc123');
+    });
+
+    it('rejects an invalid output-schema-version', () => {
+      process.env['INPUT_OUTPUT_SCHEMA_VERSION'] = '3';
+      expect(() => parseActionInputs()).toThrow('Invalid output-schema-version "3"');
+    });
+  });
 });
 
 describe('setupAuthEnv', () => {

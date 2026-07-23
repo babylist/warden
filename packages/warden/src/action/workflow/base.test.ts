@@ -20,10 +20,10 @@ import {
   prepareRuntimeEnvironment,
   writeFindingsOutput,
   writeFindingsOutputs,
-  writeFindingsOutputV2Object,
+  writeSchemaV2OutputPair,
 } from './base.js';
 import { FindingsOutputSchema } from '../reporting/output.js';
-import type { WardenFindingsV2 } from '../reporting/output-v2.js';
+import type { WardenFindingsV2, WardenMetadata } from '../reporting/output-v2.js';
 
 const mockExecFile = vi.mocked(execFileNonInteractive);
 const mockExec = vi.mocked(execNonInteractive);
@@ -105,6 +105,14 @@ describe('findings output', () => {
   it('repoints the findings-file output at the v2 file, matching what report mode reads as its findings-file input', () => {
     process.env['GITHUB_WORKSPACE'] = tempDir;
 
+    const v2Metadata: WardenMetadata = {
+      schemaVersion: '2',
+      runId: '123',
+      generatedAt: new Date().toISOString(),
+      harness: { name: 'warden', version: '1.0.0' },
+      repository: { owner: 'getsentry', name: 'warden', fullName: 'getsentry/warden' },
+      event: 'pull_request',
+    };
     const v2Findings: WardenFindingsV2 = {
       schemaVersion: '2',
       runId: '123',
@@ -119,9 +127,10 @@ describe('findings output', () => {
       },
     };
 
-    writeFindingsOutputV2Object(v2Findings, createContext(tempDir));
+    writeSchemaV2OutputPair(v2Metadata, v2Findings, createContext(tempDir));
 
     const outputContent = readFileSync(process.env['GITHUB_OUTPUT']!, 'utf-8');
+    expect(outputContent).toContain('metadata-file=warden-metadata.json\n');
     expect(outputContent).toContain('findings-file-v2=warden-findings-v2.json\n');
     expect(outputContent).toContain('findings-file=warden-findings-v2.json\n');
   });

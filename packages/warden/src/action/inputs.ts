@@ -83,6 +83,14 @@ function parseModeInput(value: string): ActionMode {
   throw new Error(`Invalid mode "${mode}". Expected run, analyze, or report.`);
 }
 
+function parseOutputSchemaVersionInput(value: string): '1' | '2' {
+  const version = value || '1';
+  if (version === '1' || version === '2') {
+    return version;
+  }
+  throw new Error(`Invalid output-schema-version "${version}". Expected 1 or 2.`);
+}
+
 /**
  * Parse action inputs from the GitHub Actions environment.
  * Runtime-specific auth can be absent here; runtime setup validates it when needed.
@@ -118,7 +126,7 @@ export function parseActionInputs(): ActionInputs {
   const requestChanges = parseBooleanInput(getInput('request-changes'));
   const failCheck = parseBooleanInput(getInput('fail-check'));
 
-  const outputSchemaVersion = getInput('output-schema-version') === '2' ? '2' : '1';
+  const outputSchemaVersion = parseOutputSchemaVersionInput(getInput('output-schema-version'));
 
   return {
     anthropicApiKey,

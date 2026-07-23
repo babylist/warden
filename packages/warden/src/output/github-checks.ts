@@ -1,7 +1,7 @@
 import type { Octokit } from '@octokit/rest';
 import { SEVERITY_ORDER, filterFindings } from '../types/index.js';
 import type { Severity, SeverityThreshold, ConfidenceThreshold, Finding, SkillReport, UsageStats, AuxiliaryUsageMap } from '../types/index.js';
-import { formatDuration, formatCost, formatTokens, totalUsageCost, totalUsageStats } from '../cli/output/formatters.js';
+import { displayFindingId, formatDuration, formatCost, formatTokens, totalUsageCost, totalUsageStats } from '../cli/output/formatters.js';
 import { escapeHtml } from '../utils/index.js';
 
 /**
@@ -160,7 +160,7 @@ export function findingsToAnnotations(findings: Finding[], reportOn?: SeverityTh
           end_line: loc.endLine ?? loc.startLine,
           annotation_level: severityToAnnotationLevel(finding.severity),
           message: escapeHtml(finding.description),
-          title: `[${finding.reportedId ?? finding.id}] ${escapeHtml(finding.title)} (additional location)`,
+          title: `[${displayFindingId(finding)}] ${escapeHtml(finding.title)} (additional location)`,
         });
       }
     }
