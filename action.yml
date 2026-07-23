@@ -77,7 +77,7 @@ outputs:
     description: 'Summary of the analysis'
     value: ${{ steps.warden.outputs.summary }}
   findings-file:
-    description: 'Path to structured JSON findings file (always written, use for upload to GCS/S3/etc.)'
+    description: 'Path to structured JSON findings file (always written, use for upload to GCS/S3/etc.). When output-schema-version is "2", this is the schema-v2 findings file, matching the findings-file input.'
     value: ${{ steps.warden.outputs.findings-file }}
   metadata-file:
     description: 'Path to schema-v2 metadata JSON file (only written when output-schema-version is "2")'

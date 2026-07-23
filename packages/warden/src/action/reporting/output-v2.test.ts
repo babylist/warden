@@ -453,6 +453,40 @@ describe('buildFindingsOutputV2', () => {
     ]);
   });
 
+  it('does not list a finding as its own corroborator when it dedupes against its own prior posting', () => {
+    const trigger = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
+    const finding = createFinding({ id: 'WRD-001', reportedId: 'EXISTING-001' });
+
+    const result = createResult({
+      triggerId: 'trigger-1',
+      report: createReport({ skill: 'code-review', findings: [finding] }),
+    });
+
+    // Single-run mode: this finding's own continuity dedupe (matching its own
+    // prior posting) is recorded as a 'deduped' observation whose
+    // existingFindingId is the finding's own reportedId.
+    const observations: FindingObservation[] = [
+      {
+        outcome: 'deduped',
+        finding,
+        skill: 'code-review',
+        skillExecutionId: 'exec-1',
+        dedupe: {
+          source: 'warden',
+          matchType: 'hash',
+          existingFindingId: 'EXISTING-001',
+          existingSkills: ['code-review'],
+        },
+      },
+    ];
+
+    const output = buildFindingsOutputV2([result], [trigger], observations, { runId: '123' });
+
+    expect(output.findings[0]?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-1', skillName: 'code-review', role: 'primary' },
+    ]);
+  });
+
   it('records verifier rejections in discardedFindings', () => {
     const trigger = createTrigger();
     const result = createResult({

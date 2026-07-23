@@ -23,6 +23,28 @@ describe('findings output schema', () => {
     });
   });
 
+  it('shares a join key across skills[], findingObservations[], and triggerResults[] for a deduped finding', () => {
+    const finding = { ...createFinding(), reportedId: 'EXISTING-001' };
+    const report = createReport({ findings: [finding] });
+
+    const output = buildFindingsOutput([report], createContext(), [
+      {
+        outcome: 'deduped',
+        finding,
+        skill: 'test-skill',
+        dedupe: { source: 'warden', matchType: 'hash', existingFindingId: 'EXISTING-001' },
+      },
+    ], {
+      triggerResults: [{ triggerName: 'test-trigger', skillName: 'test-skill', report }],
+    });
+
+    expect(output.skills[0]?.findings[0]?.id).toBe('EXISTING-001');
+    expect(output.findingObservations[0]?.finding.id).toBe('EXISTING-001');
+    const triggerResult = output.triggerResults?.[0];
+    expect(triggerResult?.status).toBe('success');
+    expect(triggerResult?.status === 'success' ? triggerResult.report.findings[0]?.id : undefined).toBe('EXISTING-001');
+  });
+
   it('includes trigger run results for split report mode', () => {
     const report = createReport();
     const output = buildFindingsOutput([report], createContext(), [], {

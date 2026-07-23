@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { EventContext, SkillReport } from '../../types/index.js';
+import type { EventContext, Finding, SkillReport } from '../../types/index.js';
 import {
   AuxiliaryUsageMapSchema,
   FindingSchema,
@@ -165,7 +165,7 @@ function serializeReplayReport(report: SkillReport): z.infer<typeof ReplaySkillR
   return {
     skill: report.skill,
     summary: report.summary,
-    findings: report.findings,
+    findings: report.findings.map((f) => ({ ...f, id: v1ContinuityId(f) })),
     durationMs: report.durationMs,
     usage: report.usage,
     auxiliaryUsage: report.auxiliaryUsage,
@@ -195,6 +195,16 @@ function serializeTriggerResult(result: ReplayTriggerResult): z.infer<typeof Tri
     status: 'error',
     error: serializeTriggerError(result.error ?? 'Trigger did not produce a report'),
   };
+}
+
+/**
+ * v1 predates the id/reportedId split and has always used a single `id` per
+ * finding, mutated to match an existing comment on dedupe. `reportedId ?? id`
+ * preserves that continuity behavior for v1 consumers without mutating the
+ * underlying Finding.
+ */
+function v1ContinuityId(finding: Finding): string {
+  return finding.reportedId ?? finding.id;
 }
 
 /** Build the public findings export payload. */
@@ -245,7 +255,7 @@ export function buildFindingsOutput(
       error: r.error,
       verifierRejections: r.verifierRejections,
       findings: r.findings.map((f) => ({
-        id: f.reportedId ?? f.id,
+        id: v1ContinuityId(f),
         severity: f.severity,
         confidence: f.confidence,
         title: f.title,
@@ -258,7 +268,10 @@ export function buildFindingsOutput(
     ...(options.triggerResults && {
       triggerResults: options.triggerResults.map(serializeTriggerResult),
     }),
-    findingObservations,
+    findingObservations: findingObservations.map((observation) => ({
+      ...observation,
+      finding: { ...observation.finding, id: v1ContinuityId(observation.finding) },
+    })),
     ...(options.configuredSkills && { configuredSkills: options.configuredSkills }),
   };
 

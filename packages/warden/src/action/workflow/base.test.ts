@@ -20,8 +20,10 @@ import {
   prepareRuntimeEnvironment,
   writeFindingsOutput,
   writeFindingsOutputs,
+  writeFindingsOutputV2Object,
 } from './base.js';
 import { FindingsOutputSchema } from '../reporting/output.js';
+import type { WardenFindingsV2 } from '../reporting/output-v2.js';
 
 const mockExecFile = vi.mocked(execFileNonInteractive);
 const mockExec = vi.mocked(execNonInteractive);
@@ -98,6 +100,30 @@ describe('findings output', () => {
       ],
     });
     expect(payload.findingObservations).toHaveLength(1);
+  });
+
+  it('repoints the findings-file output at the v2 file, matching what report mode reads as its findings-file input', () => {
+    process.env['GITHUB_WORKSPACE'] = tempDir;
+
+    const v2Findings: WardenFindingsV2 = {
+      schemaVersion: '2',
+      runId: '123',
+      skillExecutions: [],
+      findings: [],
+      findingObservations: [],
+      summary: {
+        totalFindings: 0,
+        totalSkillExecutions: 0,
+        bySeverity: { high: 0, medium: 0, low: 0 },
+        byOutcome: { posted: 0, deduped: 0, skipped: 0, resolved: 0, failed: 0 },
+      },
+    };
+
+    writeFindingsOutputV2Object(v2Findings, createContext(tempDir));
+
+    const outputContent = readFileSync(process.env['GITHUB_OUTPUT']!, 'utf-8');
+    expect(outputContent).toContain('findings-file-v2=warden-findings-v2.json\n');
+    expect(outputContent).toContain('findings-file=warden-findings-v2.json\n');
   });
 
   it('falls back to RUNNER_TEMP when no repo path is provided', () => {

@@ -474,13 +474,23 @@ export function writeMetadataOutput(
   return writeMetadataOutputObject(output, context);
 }
 
-/** Write an already-built schema-v2 findings object as-is, with no rebuild. */
+/**
+ * Write an already-built schema-v2 findings object as-is, with no rebuild.
+ *
+ * Also repoints the generic `findings-file` output at this v2 file, since
+ * report mode's `findings-file` input reads it as the schema-v2 artifact
+ * once opted in — the natural two-phase `findings-file` output-to-input
+ * wire-up must not hand it the v1 file instead. `findings-file-v2` still
+ * points at the same path for consumers that want it disambiguated.
+ */
 export function writeFindingsOutputV2Object(findings: WardenFindingsV2, context: EventContext): string {
   const filePath = getFindingsOutputPathV2(context.repoPath);
 
   mkdirSync(dirname(filePath), { recursive: true });
   writeFileSync(filePath, JSON.stringify(findings, null, 2));
-  setOutput('findings-file-v2', getFindingsOutputValue(filePath, context.repoPath));
+  const outputValue = getFindingsOutputValue(filePath, context.repoPath);
+  setOutput('findings-file-v2', outputValue);
+  setOutput('findings-file', outputValue);
   return filePath;
 }
 

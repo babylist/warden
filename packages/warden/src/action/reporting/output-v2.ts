@@ -576,6 +576,11 @@ function buildCorroboratingAttributions(
  * has more than one execution in the current run, there's no way to tell
  * which execution the comment actually corroborates, so skip rather than
  * attach the same corroboration to every same-named execution.
+ *
+ * A finding that dedupes against its own prior posting (continuity, not
+ * corroboration) recenters `existingFindingId` onto itself, so its own
+ * skillExecutionId can appear among the candidates here — exclude it rather
+ * than have a finding list itself as a corroborator of itself.
  */
 function resolveCorroboratingAttributions(
   candidates: CorroboratingCandidate[],
@@ -587,7 +592,7 @@ function resolveCorroboratingAttributions(
     return [];
   }
 
-  const seenSkillExecutionIds = new Set<string>();
+  const seenSkillExecutionIds = new Set<string>([targetSkillExecutionId]);
   const attributions: FindingAttribution[] = [];
   for (const candidate of candidates) {
     if (candidate.targetSkills && candidate.targetSkills.length > 0 && !candidate.targetSkills.includes(targetSkillName)) {
