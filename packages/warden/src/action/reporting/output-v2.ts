@@ -292,7 +292,7 @@ export const FindingObservationV2Schema = z.discriminatedUnion('outcome', [
     outcome: z.literal('skipped'),
     origin: FindingOriginSchema,
     finding: ObservedFindingSchema,
-    skippedReason: z.enum(['max_findings', 'duplicate_in_batch', 'no_inline_location']),
+    skippedReason: z.enum(['max_findings', 'duplicate_in_batch', 'no_inline_location', 'review_not_posted']),
   }),
   z.object({
     outcome: z.literal('resolved'),
@@ -386,6 +386,11 @@ function deriveSkippedReason(
   if (trigger.type === 'schedule') {
     return context.eventType === 'schedule' ? 'no_changes' : 'no_event_match';
   }
+  // schedule.ts only ever evaluates type: 'schedule' triggers - a wildcard
+  // trigger never reaches matchTrigger's path-filter check in a scheduled
+  // run, so it isn't excluded by paths, it's excluded by event type entirely
+  // (same as the 'local'/'pull_request' branches above for a schedule event).
+  if (trigger.type === '*' && context.eventType === 'schedule') return 'no_event_match';
   if (trigger.type === 'pull_request') {
     if (context.eventType !== 'pull_request') return 'no_event_match';
     if (!trigger.actions?.includes(context.action)) return 'no_event_match';
@@ -493,7 +498,7 @@ export function buildMetadataOutputV2(
       resolvedDefaults: {
         failOn: primary.failOn ?? options.failOn,
         reportOn: primary.reportOn ?? options.reportOn,
-        minConfidence: primary.minConfidence,
+        minConfidence: primary.minConfidence ?? 'medium',
         model: primary.model,
         auxiliaryModel: primary.auxiliaryModel,
         synthesisModel: primary.synthesisModel,
@@ -610,6 +615,18 @@ interface HeuristicCorroboratingCandidate {
   attribution: FindingAttribution;
   targetSkills?: string[];
   anchor: DedupeAnchor;
+  /**
+   * Set once this candidate is accepted by some target. A heuristic
+   * candidate is only ever looked up by its bare `existingFindingId`, which
+   * two unrelated fresh findings from different skills can coincidentally
+   * share this run - without this flag, both would independently pass the
+   * same permissive checks (no anchor on either target, no `targetSkills`
+   * filter) and both would attach the same corroborator. Claiming makes the
+   * match at most one target's, at the cost of an arbitrary pick (run order)
+   * between two truly ambiguous targets - still strictly better than
+   * corrupting both.
+   */
+  claimed: boolean;
 }
 
 /**
@@ -695,7 +712,7 @@ function buildCorroboratingAttributions(
     } else {
       const key = observation.dedupe.existingFindingId;
       const list = heuristic.get(key) ?? [];
-      list.push({ attribution, targetSkills: observation.dedupe.existingSkills, anchor });
+      list.push({ attribution, targetSkills: observation.dedupe.existingSkills, anchor, claimed: false });
       heuristic.set(key, list);
     }
   }
@@ -753,12 +770,14 @@ function resolveCorroboratingAttributions(
     const ownAnchor = candidates.ownAnchors.get(`${targetSkillExecutionId}:${ownFindingId}`);
     const heuristicMatches = candidates.heuristic.get(findingId) ?? [];
     for (const candidate of heuristicMatches) {
+      if (candidate.claimed) continue;
       if (candidate.targetSkills && candidate.targetSkills.length > 0 && !candidate.targetSkills.includes(targetSkillName)) {
         continue;
       }
       if (ownAnchor && anchorsConflict(ownAnchor, candidate.anchor)) continue;
       if (seenSkillExecutionIds.has(candidate.attribution.skillExecutionId)) continue;
       seenSkillExecutionIds.add(candidate.attribution.skillExecutionId);
+      candidate.claimed = true;
       attributions.push(candidate.attribution);
     }
   }
@@ -822,6 +841,8 @@ interface SkillExecutionUsageUpdate {
   auxiliaryUsage: SkillExecution['auxiliaryUsage'];
   checkRunUrl: SkillExecution['checkRunUrl'];
   checkRunId: SkillExecution['checkRunId'];
+  reviewEvent: SkillExecution['reviewEvent'];
+  checkConclusion: SkillExecution['checkConclusion'];
 }
 
 /**
@@ -834,7 +855,10 @@ interface SkillExecutionUsageUpdate {
  * same is true of `checkRunUrl`/`checkRunId`: report mode creates its skill
  * checks as already-completed check runs (`createCompletedSkillChecksForReport`)
  * only after the analyze-phase payload was built, so `result` is the only
- * place this run's real check identity exists.
+ * place this run's real check identity exists. `reviewEvent`/`checkConclusion`
+ * follow the same rule: dedup can shrink the finding set posted (or posting
+ * can fail/get blocked) after the analyze-phase payload was built, so only
+ * `result` at patch time reflects what was actually posted and concluded.
  */
 function buildSkillExecutionUsageUpdates(
   results: TriggerResult[],
@@ -856,6 +880,12 @@ function buildSkillExecutionUsageUpdates(
       auxiliaryUsage: auxiliaryUsageEntries.length > 0 ? auxiliaryUsageEntries : undefined,
       checkRunUrl: result.checkRunUrl,
       checkRunId: result.checkRunId,
+      reviewEvent: result.renderResult?.review?.event,
+      checkConclusion: determineConclusion(
+        filterFindings(report.findings, undefined, result.minConfidence),
+        result.failOn,
+        result.failCheck
+      ),
     });
   }
 
@@ -900,6 +930,8 @@ export function patchFindingsOutputV2Observations(
       auxiliaryUsage: update.auxiliaryUsage,
       checkRunUrl: update.checkRunUrl,
       checkRunId: update.checkRunId,
+      reviewEvent: update.reviewEvent,
+      checkConclusion: update.checkConclusion,
     };
   });
 

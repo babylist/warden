@@ -617,6 +617,20 @@ async function postReviewsAndTrackFailures(
         postResult.activeWardenCommentIds.forEach((id) => activeWardenCommentIds.add(id));
         findingObservations.push(...postResult.findingObservations);
         reviewPosted = postResult.posted;
+      } else {
+        // The gate never let this trigger's review post at all — record its
+        // reportable findings as skipped rather than leaving them with zero
+        // observations, mirroring postTriggerReview's own 'blocked'/'no_review' handling.
+        const skippedFindings = filterFindings(result.report.findings, result.reportOn, result.minConfidence);
+        for (const finding of skippedFindings) {
+          findingObservations.push({
+            outcome: 'skipped',
+            finding,
+            skill: result.report.skill,
+            skillExecutionId: result.skillExecutionId,
+            skippedReason: 'review_not_posted',
+          });
+        }
       }
       // A stale head skips silently (the newer run owns feedback), but an
       // unverifiable head must not silently swallow a blocking review.

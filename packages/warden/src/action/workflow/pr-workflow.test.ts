@@ -1529,6 +1529,49 @@ describe('runPRWorkflow', () => {
       }
     });
 
+    it('records a skipped observation, not a silently missing one, when a trigger\'s review never gets attempted due to a stale head', async () => {
+      // Same race as 'stops review feedback if the PR head advances before
+      // posting' above, but checked from the schema-v2 output side: the
+      // finding must not simply vanish from findingObservations.
+      let now = 1_750_000_000_000;
+      const dateNowSpy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+      try {
+        const finding = createFinding();
+        const report = createSkillReport({ findings: [finding] });
+        vi.mocked(mockOctokit.pulls.get)
+          .mockResolvedValueOnce(createGetPullResponse(PR_HEAD_SHA))
+          .mockResolvedValueOnce(createGetPullResponse('new-head-sha'));
+
+        mockFetchExistingComments.mockImplementation(async () => {
+          now += 60_000;
+          return [createExistingWardenComment()];
+        });
+        mockRunSkillTask.mockResolvedValue({ name: 'test-trigger', report });
+
+        await runPRWorkflow(
+          mockOctokit,
+          createDefaultInputs({ outputSchemaVersion: '2' }),
+          'pull_request', EVENT_PAYLOAD_PATH, FIXTURES_DIR
+        );
+
+        expect(mockOctokit.pulls.createReview).not.toHaveBeenCalled();
+
+        const findingsFile = getFindingsOutputPathV2(FIXTURES_DIR);
+        try {
+          const findingsV2 = JSON.parse(readFileSync(findingsFile, 'utf-8'));
+          expect(findingsV2.findingObservations).toContainEqual(
+            expect.objectContaining({ outcome: 'skipped', skippedReason: 'review_not_posted' })
+          );
+        } finally {
+          rmSync(getMetadataOutputPath(FIXTURES_DIR), { force: true });
+          rmSync(findingsFile, { force: true });
+          rmSync(`${findingsFile}.done`, { force: true });
+        }
+      } finally {
+        dateNowSpy.mockRestore();
+      }
+    });
+
     it('stops stale resolution and dismissal if the PR head advances after posting', async () => {
       // Advance the clock past the gate TTL inside the review post so the
       // resolve phase re-verifies the head and sees it advanced.

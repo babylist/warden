@@ -4,7 +4,7 @@
  * Shared infrastructure for PR and schedule workflows.
  */
 
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, relative } from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -498,6 +498,12 @@ export function writeSchemaV2OutputPair(
  * happens once via `writeSchemaV2OutputPair` after the run finishes. Never
  * throws — a transient write hiccup here must not abort a run the way a
  * final-write failure legitimately can.
+ *
+ * Removes any `.done` sidecar left over from a previous run at this same
+ * path before writing. On an ephemeral GitHub-hosted runner this never
+ * exists, but a persistent/self-hosted runner or a repeated local `warden
+ * runs follow` invocation reusing the same paths could otherwise see a
+ * stale `.done` and report a brand-new, still in-progress run as finished.
  */
 export function writeSchemaV2OutputPairLive(
   metadata: WardenMetadata,
@@ -507,6 +513,9 @@ export function writeSchemaV2OutputPairLive(
   try {
     const metadataPath = getMetadataOutputPath(context.repoPath);
     const findingsPath = getFindingsOutputPathV2(context.repoPath);
+    if (existsSync(`${findingsPath}.done`)) {
+      try { unlinkSync(`${findingsPath}.done`); } catch { /* best-effort cleanup */ }
+    }
     writeFilesAtomicPair([
       { path: metadataPath, content: JSON.stringify(metadata, null, 2) },
       { path: findingsPath, content: JSON.stringify(findings, null, 2) },

@@ -45,6 +45,47 @@ describe('findings output schema', () => {
     expect(triggerResult?.status === 'success' ? triggerResult.report.findings[0]?.id : undefined).toBe('EXISTING-001');
   });
 
+  it('never includes schema-v2-only fields on findingObservations, regardless of what the runtime observation carries', () => {
+    const postedFinding = { ...createFinding(), id: 'POSTED-001' };
+    const dedupedFinding = { ...createFinding(), id: 'DEDUPED-001' };
+
+    const output = buildFindingsOutput([createReport({ findings: [postedFinding, dedupedFinding] })], createContext(), [
+      {
+        outcome: 'posted',
+        finding: postedFinding,
+        skill: 'test-skill',
+        skillExecutionId: 'exec-1',
+        githubCommentId: 42,
+        githubCommentUrl: 'https://github.com/example/pull/1#discussion_r42',
+      },
+      {
+        outcome: 'deduped',
+        finding: dedupedFinding,
+        skill: 'test-skill',
+        skillExecutionId: 'exec-1',
+        dedupe: {
+          source: 'warden',
+          matchType: 'hash',
+          existingFindingId: 'DEDUPED-001',
+          existingSkillExecutionId: 'exec-0',
+          existingSkills: ['test-skill', 'other-skill'],
+        },
+      },
+    ]);
+
+    expect(FindingsOutputSchema.parse(output)).toEqual(output);
+    expect(output.findingObservations[0]).not.toHaveProperty('skillExecutionId');
+    expect(output.findingObservations[0]).not.toHaveProperty('githubCommentId');
+    expect(output.findingObservations[0]).not.toHaveProperty('githubCommentUrl');
+    expect(output.findingObservations[1]).not.toHaveProperty('skillExecutionId');
+    const deduped = output.findingObservations[1];
+    expect(deduped?.outcome === 'deduped' ? deduped.dedupe : undefined).toEqual({
+      source: 'warden',
+      matchType: 'hash',
+      existingFindingId: 'DEDUPED-001',
+    });
+  });
+
   it('includes trigger run results for split report mode', () => {
     const report = createReport();
     const output = buildFindingsOutput([report], createContext(), [], {

@@ -95,9 +95,9 @@ treat a `runId`/`schemaVersion` mismatch between the two as a hard error.
 |---|---|---|
 | `configuredSkills[]` | `metadata.configuredSkills[]` | moved to metadata file, same shape |
 | `triggerResults[]` | `metadata.triggerResults[]` | moved to metadata file; the embedded `report` field is dropped (that content now lives in `findings.skillExecutions`/`findings`) |
-| *(not tracked)* | `metadata.skippedTriggers[]` | new — `{skillName, triggerId?, triggerName?, reason}`, reason is one of `no_event_match\|path_filter\|draft_state\|label_mismatch\|no_changes` |
+| *(not tracked)* | `metadata.skippedTriggers[]` | new — `{skillName, triggerId?, triggerName?, reason}`, reason is one of `no_event_match\|path_filter\|draft_state\|label_mismatch\|no_changes\|pending` (`pending` only appears while a scheduled run's triggers are still being worked through sequentially) |
 | `findingObservations[].skill` | `findingObservations[].origin.skillExecutionId/.skillName` | renamed/restructured |
-| `findingObservations[].finding` | `findingObservations[].finding` | unchanged shape |
+| `findingObservations[].finding` | `findingObservations[].finding` | narrowed — only `id/.reportedId/.severity/.confidence/.title/.description/.location/.elapsedMs`; `additionalLocations`/`sourceSnippet`/`verification` are dropped here (they're still exported on live findings via top-level `findings[]`, but a finding that's `deduped`/`skipped`/`resolved`/`failed` and never reaches `findings[]` loses them entirely) |
 | `findingObservations[].dedupe` | `findingObservations[].dedupe` | unchanged, plus new `existingSkills[]` and `existingSkillExecutionId` fields (cross-skill attribution at the moment of the match) |
 | `summary.totalFindings/.findingsBySeverity/.totalSkills` | `findings.summary.totalFindings/.bySeverity/.totalSkillExecutions` + `.byOutcome` | `totalSkillExecutions` replaces `totalSkills` since one skill can now have multiple executions; `byOutcome` is new |
 

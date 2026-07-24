@@ -526,6 +526,12 @@ export async function postTriggerReview(
         return emptyReviewPostResult(newComments, activeWardenCommentIds, findingObservations);
       }
       if (postResult.outcome !== 'posted') {
+        // 'blocked' (a stale-head re-check) and 'no_review' both mean this pass
+        // never attempted to post — record the candidates as skipped rather than
+        // letting them vanish from the run's observations entirely.
+        for (const finding of postedFindings) {
+          findingObservations.push({ outcome: 'skipped', finding, skill, skillExecutionId, skippedReason: 'review_not_posted' });
+        }
         return emptyReviewPostResult(newComments, activeWardenCommentIds, findingObservations);
       }
       // COMMENT reviews post with an empty body, so locationless findings that

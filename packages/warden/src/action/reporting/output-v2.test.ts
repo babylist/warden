@@ -198,6 +198,32 @@ describe('buildMetadataOutputV2', () => {
     ]);
   });
 
+  it('reports no_event_match, not path_filter, for a wildcard trigger skipped on a schedule run', () => {
+    // schedule.ts only ever evaluates type: 'schedule' triggers - a wildcard
+    // trigger never reaches a real path-filter check in a scheduled run, so
+    // it's excluded by event type, not by its (possibly nonexistent) paths.
+    const matched = createTrigger({ type: 'schedule' });
+    const skipped = createTrigger({
+      id: 'skipped-id',
+      skillExecutionId: 'exec-2',
+      name: 'skipped-trigger',
+      skill: 'security-review',
+      type: '*',
+    });
+
+    const output = buildMetadataOutputV2(
+      createContext({ eventType: 'schedule' }),
+      [matched, skipped],
+      [matched],
+      [createResult()],
+      { runId: '123', generatedAt: '2026-01-01T00:00:00.000Z' }
+    );
+
+    expect(output.skippedTriggers).toEqual([
+      { skillName: 'security-review', triggerId: 'skipped-id', triggerName: 'skipped-trigger', reason: 'no_event_match' },
+    ]);
+  });
+
   it('falls back to the action-level failOn/reportOn when the primary trigger has no override', () => {
     const matched = createTrigger({ failOn: undefined, reportOn: undefined });
 
@@ -212,6 +238,23 @@ describe('buildMetadataOutputV2', () => {
     expect(output.resolvedDefaults).toEqual(
       expect.objectContaining({ failOn: 'high', reportOn: 'medium' })
     );
+  });
+
+  it('falls back to the executor\'s own "medium" default when the primary trigger has no minConfidence override', () => {
+    // executor.ts applies `trigger.minConfidence ?? 'medium'` at runtime, so
+    // an unconfigured trigger still runs at 'medium' - resolvedDefaults must
+    // mirror that, not report minConfidence as unset.
+    const matched = createTrigger({ minConfidence: undefined });
+
+    const output = buildMetadataOutputV2(
+      createContext(),
+      [matched],
+      [matched],
+      [createResult()],
+      { runId: '123', generatedAt: '2026-01-01T00:00:00.000Z' }
+    );
+
+    expect(output.resolvedDefaults?.minConfidence).toBe('medium');
   });
 
   it('resolves failCheck/requestChanges/maxFindings the same way as failOn/reportOn', () => {
@@ -867,6 +910,66 @@ describe('buildFindingsOutputV2', () => {
     ]);
   });
 
+  it('claims a heuristic corroborator for at most one target when two unrelated fresh findings share a bare id and neither has an anchor', () => {
+    // Unlike the two tests above, neither exec-1 nor exec-2 dedupes against
+    // anything itself this run - both findings are fresh, so neither has an
+    // ownAnchor to narrow the security-review match against. Combined with
+    // an empty existingSkills (permissive by design), nothing but claiming
+    // stops the same corroborator from attaching to both.
+    const firstTrigger = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
+    const secondTrigger = createTrigger({
+      id: 'trigger-2',
+      skillExecutionId: 'exec-2',
+      name: 'perf-review-trigger',
+      skill: 'perf-review',
+    });
+    const thirdTrigger = createTrigger({
+      id: 'trigger-3',
+      skillExecutionId: 'exec-3',
+      name: 'security-review-trigger',
+      skill: 'security-review',
+    });
+
+    const firstResult = createResult({
+      triggerId: 'trigger-1',
+      report: createReport({ skill: 'code-review', findings: [createFinding({ id: 'WRD-001' })] }),
+    });
+    const secondResult = createResult({
+      triggerId: 'trigger-2',
+      report: createReport({ skill: 'perf-review', findings: [createFinding({ id: 'WRD-001' })] }),
+    });
+
+    const observations: FindingObservation[] = [
+      {
+        outcome: 'deduped',
+        finding: createFinding({ id: 'WRD-005' }),
+        skill: 'security-review',
+        skillExecutionId: 'exec-3',
+        dedupe: {
+          source: 'warden',
+          matchType: 'hash',
+          existingFindingId: 'WRD-001',
+          existingSkills: [],
+        },
+      },
+    ];
+
+    const output = buildFindingsOutputV2(
+      [firstResult, secondResult],
+      [firstTrigger, secondTrigger, thirdTrigger],
+      observations,
+      { runId: '123' }
+    );
+
+    const fromCodeReview = output.findings.find((f) => f.provenance.originSkillExecutionId === 'exec-1');
+    const fromPerfReview = output.findings.find((f) => f.provenance.originSkillExecutionId === 'exec-2');
+
+    const claimedByCodeReview = fromCodeReview?.reportedBy.some((r) => r.skillExecutionId === 'exec-3') ?? false;
+    const claimedByPerfReview = fromPerfReview?.reportedBy.some((r) => r.skillExecutionId === 'exec-3') ?? false;
+
+    expect([claimedByCodeReview, claimedByPerfReview].filter(Boolean)).toHaveLength(1);
+  });
+
   it('does not list a finding as its own corroborator when it dedupes against its own prior posting', () => {
     const trigger = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
     const finding = createFinding({ id: 'WRD-001', reportedId: 'EXISTING-001' });
@@ -1142,6 +1245,41 @@ describe('patchFindingsOutputV2Observations', () => {
 
     expect(patched.skillExecutions[0]?.checkRunUrl).toBe('https://github.com/getsentry/warden/runs/555');
     expect(patched.skillExecutions[0]?.checkRunId).toBe(555);
+  });
+
+  it('backfills skillExecutions reviewEvent/checkConclusion from the report-phase posting outcome', () => {
+    const trigger = createTrigger();
+    const finding = createFinding({ id: 'WRD-403', severity: 'high', confidence: 'low' });
+
+    const analyzePhaseOutput = buildFindingsOutputV2(
+      [createResult({
+        report: createReport({ findings: [finding] }),
+        failOn: 'high',
+        failCheck: true,
+        renderResult: { review: { event: 'REQUEST_CHANGES', body: '', comments: [] }, summaryComment: '' },
+      })],
+      [trigger],
+      [],
+      { runId: '123' }
+    );
+    expect(analyzePhaseOutput.skillExecutions[0]?.reviewEvent).toBe('REQUEST_CHANGES');
+    expect(analyzePhaseOutput.skillExecutions[0]?.checkConclusion).toBe('failure');
+
+    // Report-phase dedup/consolidate can shrink the posted review (or a
+    // trigger's own minConfidence can differ once replayed), so the real
+    // posting outcome must win over the analyze-phase payload's assumption.
+    const postedResult = createResult({
+      report: createReport({ findings: [finding] }),
+      failOn: 'high',
+      failCheck: true,
+      minConfidence: 'high',
+      renderResult: { review: { event: 'COMMENT', body: '', comments: [] }, summaryComment: '' },
+    });
+
+    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [postedResult], [trigger], []);
+
+    expect(patched.skillExecutions[0]?.reviewEvent).toBe('COMMENT');
+    expect(patched.skillExecutions[0]?.checkConclusion).toBe('success');
   });
 
   it('backfills a finding githubCommentId/githubCommentUrl from report-phase posting', () => {

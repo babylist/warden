@@ -553,6 +553,7 @@ async function runRunsShowV2(
 
   let metadata: WardenMetadata | undefined;
   let findings: WardenFindingsV2 | undefined;
+  let findingsFile: string | undefined;
 
   for (const file of files) {
     const parsed = parseV2File(file);
@@ -568,15 +569,20 @@ async function runRunsShowV2(
         return 1;
       }
       findings = parsed.data;
+      findingsFile = file;
     } else {
       reporter.error(`${file} is not a recognized JSONL run log or schema-v2 metadata/findings file`);
       return 1;
     }
   }
 
-  if (!metadata || !findings) {
+  if (!metadata || !findings || !findingsFile) {
     reporter.error('Schema-v2 replay needs one metadata file and one findings file');
     return 1;
+  }
+
+  if (!existsSync(`${findingsFile}.done`)) {
+    reporter.warning('No .done marker found — this run may still be in progress; showing the latest snapshot');
   }
 
   if (metadata.runId !== findings.runId || metadata.schemaVersion !== findings.schemaVersion) {

@@ -208,6 +208,43 @@ function v1ContinuityId(finding: Finding): string {
   return displayFindingId(finding);
 }
 
+/**
+ * `FindingObservation`/`DedupeDetail` (outcomes.ts) carry `skillExecutionId`,
+ * `githubCommentId`/`githubCommentUrl`, and `dedupe.existingSkillExecutionId`/
+ * `existingSkills` for schema-v2 consumers. v1 predates all of these, so drop
+ * them here rather than spreading the observation as-is, keeping v1 output
+ * byte-for-byte what it was before schema v2 existed.
+ */
+function serializeV1FindingObservation(observation: FindingObservation): z.infer<typeof FindingObservationSchema> {
+  const finding = { ...observation.finding, id: v1ContinuityId(observation.finding) };
+
+  switch (observation.outcome) {
+    case 'posted':
+      return { outcome: 'posted', finding, skill: observation.skill };
+    case 'deduped':
+      return {
+        outcome: 'deduped',
+        finding,
+        skill: observation.skill,
+        dedupe: {
+          source: observation.dedupe.source,
+          matchType: observation.dedupe.matchType,
+          existingFindingId: observation.dedupe.existingFindingId,
+          existingCommentId: observation.dedupe.existingCommentId,
+          existingThreadId: observation.dedupe.existingThreadId,
+          existingResolved: observation.dedupe.existingResolved,
+          actor: observation.dedupe.actor,
+        },
+      };
+    case 'skipped':
+      return { outcome: 'skipped', finding, skill: observation.skill, skippedReason: observation.skippedReason };
+    case 'resolved':
+      return { outcome: 'resolved', finding, skill: observation.skill, resolvedReason: observation.resolvedReason };
+    case 'failed':
+      return { outcome: 'failed', finding, skill: observation.skill };
+  }
+}
+
 /** Build the public findings export payload. */
 export function buildFindingsOutput(
   reports: SkillReport[],
@@ -269,10 +306,7 @@ export function buildFindingsOutput(
     ...(options.triggerResults && {
       triggerResults: options.triggerResults.map(serializeTriggerResult),
     }),
-    findingObservations: findingObservations.map((observation) => ({
-      ...observation,
-      finding: { ...observation.finding, id: v1ContinuityId(observation.finding) },
-    })),
+    findingObservations: findingObservations.map(serializeV1FindingObservation),
     ...(options.configuredSkills && { configuredSkills: options.configuredSkills }),
   };
 

@@ -604,8 +604,17 @@ describe('postTriggerReview', () => {
       // The gate verified twice: before duplicate processing and again before
       // the review write, where it saw the new head.
       expect(mockOctokit.pulls.get).toHaveBeenCalledTimes(2);
-      // No swallowed error: the findings were not marked failed.
+      // No swallowed error: the findings were not marked failed...
       expect(postResult.findingObservations.filter((o) => o.outcome === 'failed')).toEqual([]);
+      // ...but the candidate that would have posted isn't dropped either: it's
+      // recorded as skipped, so it isn't silently missing from the run's observations.
+      expect(postResult.findingObservations).toContainEqual({
+        outcome: 'skipped',
+        finding: findings[0],
+        skill: 'test-skill',
+        skillExecutionId: undefined,
+        skippedReason: 'review_not_posted',
+      });
     } finally {
       dateNowSpy.mockRestore();
     }

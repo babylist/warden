@@ -141,6 +141,20 @@ describe('findings output', () => {
     expect(existsSync(process.env['GITHUB_OUTPUT']!)).toBe(false);
   });
 
+  it('the live writer removes a stale .done sidecar left over from a previous run', () => {
+    process.env['GITHUB_WORKSPACE'] = tempDir;
+
+    // A prior run at this same path (persistent runner, or a repeated local
+    // invocation) finished and left its .done marker behind.
+    writeSchemaV2OutputPair(createV2Metadata(), createV2Findings(), createContext(tempDir));
+    const findingsPath = getFindingsOutputPathV2(tempDir);
+    expect(existsSync(`${findingsPath}.done`)).toBe(true);
+
+    writeSchemaV2OutputPairLive(createV2Metadata(), createV2Findings(), createContext(tempDir));
+
+    expect(existsSync(`${findingsPath}.done`)).toBe(false);
+  });
+
   it('the live writer swallows a write failure instead of throwing', async () => {
     process.env['GITHUB_WORKSPACE'] = tempDir;
     const { writeFileSync } = await import('node:fs');

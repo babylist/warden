@@ -124,4 +124,84 @@ describe('writeFilesAtomicPair', () => {
 
     expect(readdirSync(tempDir)).toEqual([]);
   });
+
+  it('restores both files to their prior content when the second file\'s commit rename fails', async () => {
+    writeFilesAtomicPair([
+      { path: firstPath, content: 'stale-first' },
+      { path: secondPath, content: 'stale-second' },
+    ]);
+
+    const { renameSync } = await import('node:fs');
+    const actualFs = await vi.importActual<typeof NodeFS>('node:fs');
+    // Both destinations already exist, so each file's commit is a backup rename
+    // followed by a commit rename: [first-backup, first-commit, second-backup, second-commit].
+    // Fail only the fourth call (second file's commit rename).
+    let call = 0;
+    vi.mocked(renameSync).mockImplementation((...args) => {
+      call += 1;
+      if (call === 4) throw new Error('rename failed');
+      return actualFs.renameSync(...args);
+    });
+
+    expect(() =>
+      writeFilesAtomicPair([
+        { path: firstPath, content: 'new-first' },
+        { path: secondPath, content: 'new-second' },
+      ])
+    ).toThrow('rename failed');
+
+    expect(readFileSync(firstPath, 'utf-8')).toBe('stale-first');
+    expect(readFileSync(secondPath, 'utf-8')).toBe('stale-second');
+    expect(readdirSync(tempDir).sort()).toEqual(['first.json', 'second.json']);
+  });
+
+  it('restores the first file\'s prior content when its own commit rename fails, without touching the second file', async () => {
+    writeFilesAtomicPair([
+      { path: firstPath, content: 'stale-first' },
+      { path: secondPath, content: 'stale-second' },
+    ]);
+
+    const { renameSync } = await import('node:fs');
+    const actualFs = await vi.importActual<typeof NodeFS>('node:fs');
+    // First file's own backup rename succeeds, but its commit rename fails —
+    // exercises restoring an entry's backup before it's ever added to `committed`.
+    let call = 0;
+    vi.mocked(renameSync).mockImplementation((...args) => {
+      call += 1;
+      if (call === 2) throw new Error('rename failed');
+      return actualFs.renameSync(...args);
+    });
+
+    expect(() =>
+      writeFilesAtomicPair([
+        { path: firstPath, content: 'new-first' },
+        { path: secondPath, content: 'new-second' },
+      ])
+    ).toThrow('rename failed');
+
+    expect(readFileSync(firstPath, 'utf-8')).toBe('stale-first');
+    expect(readFileSync(secondPath, 'utf-8')).toBe('stale-second');
+    expect(readdirSync(tempDir).sort()).toEqual(['first.json', 'second.json']);
+  });
+
+  it('removes a newly-created file when its partner\'s rename fails and neither existed before', async () => {
+    const { renameSync } = await import('node:fs');
+    const actualFs = await vi.importActual<typeof NodeFS>('node:fs');
+    vi.mocked(renameSync)
+      .mockImplementationOnce(actualFs.renameSync) // first file's commit rename
+      .mockImplementationOnce(() => {
+        throw new Error('rename failed');
+      }); // second file's commit rename
+
+    expect(() =>
+      writeFilesAtomicPair([
+        { path: firstPath, content: 'new-first' },
+        { path: secondPath, content: 'new-second' },
+      ])
+    ).toThrow('rename failed');
+
+    expect(existsSync(firstPath)).toBe(false);
+    expect(existsSync(secondPath)).toBe(false);
+    expect(readdirSync(tempDir)).toEqual([]);
+  });
 });

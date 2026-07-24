@@ -422,6 +422,41 @@ describe('runRunsShow — schema v2 replay', () => {
     expect(exitCode).toBe(0);
   });
 
+  it('warns that the run may still be in progress when no .done marker is present', async () => {
+    const { metadataPath, findingsPath } = writeV2Fixture(testDir, 'run-1234');
+
+    const reporter = createTestReporter();
+    const warningSpy = vi.spyOn(reporter, 'warning');
+
+    const exitCode = await runRunsShow(
+      { subcommand: 'show', files: [metadataPath, findingsPath] },
+      createDefaultOptions(),
+      reporter,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(warningSpy).toHaveBeenCalledWith(
+      'No .done marker found — this run may still be in progress; showing the latest snapshot'
+    );
+  });
+
+  it('does not warn about an in-progress run when the .done marker is present', async () => {
+    const { metadataPath, findingsPath } = writeV2Fixture(testDir, 'run-1234');
+    writeFileSync(`${findingsPath}.done`, '');
+
+    const reporter = createTestReporter();
+    const warningSpy = vi.spyOn(reporter, 'warning');
+
+    const exitCode = await runRunsShow(
+      { subcommand: 'show', files: [metadataPath, findingsPath] },
+      createDefaultOptions(),
+      reporter,
+    );
+
+    expect(exitCode).toBe(0);
+    expect(warningSpy).not.toHaveBeenCalled();
+  });
+
   it('renders the finding in JSON mode regardless of file order', async () => {
     const { metadataPath, findingsPath } = writeV2Fixture(testDir, 'run-1234');
 
