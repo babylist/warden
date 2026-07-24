@@ -1304,3 +1304,155 @@ describe('runRunsFollow', () => {
     stdoutSpy.mockRestore();
   }, 5000);
 });
+
+describe('runRunsFollowV2', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `warden-follow-v2-${Date.now()}`);
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true });
+    }
+  });
+
+  function writeV2FollowFixture(
+    runId: string,
+    skillExecutionIds: string[],
+    overrides: { metadata?: Record<string, unknown>; findings?: Record<string, unknown> } = {},
+  ): { metadataPath: string; findingsPath: string } {
+    const metadata = {
+      schemaVersion: '2',
+      runId,
+      generatedAt: new Date('2026-02-18T10:00:00.000Z').toISOString(),
+      harness: { name: 'warden', version: '0.42.0' },
+      repository: { owner: 'acme', name: 'repo', fullName: 'acme/repo' },
+      event: 'pull_request',
+      ...overrides.metadata,
+    };
+
+    const findings = {
+      schemaVersion: '2',
+      runId,
+      skillExecutions: skillExecutionIds.map((id) => ({
+        skillExecutionId: id,
+        skillName: `skill-${id}`,
+        summary: `Found 1 issue in ${id}`,
+        durationMs: 100,
+        findingsBySeverity: { high: 1, medium: 0, low: 0 },
+        findingIds: [`f-${id}`],
+      })),
+      findings: skillExecutionIds.map((id) => ({
+        id: `f-${id}`,
+        contentHash: `hash-${id}`,
+        severity: 'high',
+        title: `Finding from ${id}`,
+        description: 'test finding',
+        reportedBy: [{ skillExecutionId: id, skillName: `skill-${id}`, role: 'primary' }],
+        provenance: { originSkillExecutionId: id },
+      })),
+      findingObservations: [],
+      summary: {
+        totalFindings: skillExecutionIds.length,
+        totalSkillExecutions: skillExecutionIds.length,
+        bySeverity: { high: skillExecutionIds.length, medium: 0, low: 0 },
+        byOutcome: { posted: skillExecutionIds.length, deduped: 0, skipped: 0, resolved: 0, failed: 0 },
+      },
+      ...overrides.findings,
+    };
+
+    const metadataPath = join(testDir, 'warden-metadata.json');
+    const findingsPath = join(testDir, 'warden-findings-v2.json');
+    writeFileSync(metadataPath, JSON.stringify(metadata));
+    writeFileSync(findingsPath, JSON.stringify(findings));
+    return { metadataPath, findingsPath };
+  }
+
+  it('renders each newly-completed skill execution exactly once, then stops on .done', async () => {
+    const { metadataPath, findingsPath } = writeV2FollowFixture('run-live', ['exec-1']);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const reporter = createTestReporter();
+    const followPromise = runRunsFollow(
+      { subcommand: 'follow', files: [metadataPath, findingsPath] },
+      createDefaultOptions(),
+      reporter,
+    );
+
+    await vi.waitFor(() => expect(logSpy).toHaveBeenCalledTimes(1), { timeout: 3000 });
+
+    writeV2FollowFixture('run-live', ['exec-1', 'exec-2']);
+    await vi.waitFor(() => expect(logSpy).toHaveBeenCalledTimes(2), { timeout: 3000 });
+
+    writeFileSync(`${findingsPath}.done`, '');
+    const exit = await followPromise;
+
+    expect(exit).toBe(0);
+    expect(logSpy).toHaveBeenCalledTimes(2);
+  }, 8000);
+
+  it('errors when given a file count other than exactly 2', async () => {
+    const { metadataPath, findingsPath } = writeV2FollowFixture('run-live', ['exec-1']);
+    const thirdPath = join(testDir, 'extra.json');
+    writeFileSync(thirdPath, '{}');
+
+    const reporter = createTestReporter();
+    const exit = await runRunsFollow(
+      { subcommand: 'follow', files: [metadataPath, findingsPath, thirdPath] },
+      createDefaultOptions(),
+      reporter,
+    );
+
+    expect(exit).toBe(1);
+  });
+
+  it('errors when runId mismatches between metadata and findings, without ever rendering', async () => {
+    const { metadataPath, findingsPath } = writeV2FollowFixture('run-a', ['exec-1'], {
+      findings: { runId: 'run-b' },
+    });
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const reporter = createTestReporter();
+    const followPromise = runRunsFollow(
+      { subcommand: 'follow', files: [metadataPath, findingsPath] },
+      createDefaultOptions(),
+      reporter,
+    );
+
+    await new Promise((r) => setTimeout(r, 100));
+    writeFileSync(`${findingsPath}.done`, '');
+    const exit = await followPromise;
+
+    expect(exit).toBe(0);
+    expect(logSpy).not.toHaveBeenCalled();
+  }, 5000);
+
+  it('tolerates a transient malformed file mid-tick and recovers on the next one', async () => {
+    const { metadataPath, findingsPath } = writeV2FollowFixture('run-live', ['exec-1']);
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const reporter = createTestReporter();
+    const followPromise = runRunsFollow(
+      { subcommand: 'follow', files: [metadataPath, findingsPath] },
+      createDefaultOptions(),
+      reporter,
+    );
+
+    await vi.waitFor(() => expect(logSpy).toHaveBeenCalledTimes(1), { timeout: 3000 });
+
+    // Simulate a reader catching the findings file mid-rewrite.
+    writeFileSync(findingsPath, '{"not valid json');
+    await new Promise((r) => setTimeout(r, 50));
+    writeV2FollowFixture('run-live', ['exec-1', 'exec-2']);
+
+    writeFileSync(`${findingsPath}.done`, '');
+    const exit = await followPromise;
+
+    expect(exit).toBe(0);
+    expect(logSpy).toHaveBeenCalledTimes(2);
+  }, 8000);
+});

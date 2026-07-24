@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -431,6 +431,7 @@ describe('runPRWorkflow', () => {
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
       }
     });
 
@@ -488,6 +489,7 @@ describe('runPRWorkflow', () => {
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
       }
     });
 
@@ -567,6 +569,7 @@ describe('runPRWorkflow', () => {
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
       }
 
       expect(mockRunSkillTask).toHaveBeenCalledTimes(1);
@@ -631,6 +634,7 @@ describe('runPRWorkflow', () => {
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
       }
 
       const postedBodies = vi.mocked(mockOctokit.pulls.createReview).mock.calls
@@ -672,6 +676,7 @@ describe('runPRWorkflow', () => {
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
       }
     });
 
@@ -711,6 +716,7 @@ describe('runPRWorkflow', () => {
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
       }
     });
 
@@ -757,6 +763,7 @@ describe('runPRWorkflow', () => {
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
       }
 
       const findingsV2 = JSON.parse(findingsFileAfterReport);
@@ -1781,6 +1788,54 @@ describe('runPRWorkflow', () => {
       expect(mockRunSkillTask).toHaveBeenCalledTimes(2);
       expect(callsBeforeFirstRunFinished).toBe(1);
       expect(maxActiveRuns).toBe(1);
+    });
+
+    it('writes live schema-v2 output after each trigger completes, before the run finishes', async () => {
+      let invocation = 0;
+      let releaseSecond!: () => void;
+      const secondGate = new Promise<void>((resolve) => {
+        releaseSecond = resolve;
+      });
+
+      mockRunSkillTask.mockImplementation(async (taskOptions) => {
+        invocation++;
+        if (invocation === 2) await secondGate;
+        return {
+          name: taskOptions.name,
+          report: createSkillReport({ skill: 'test-skill' }),
+        };
+      });
+
+      const findingsFile = getFindingsOutputPathV2(DUPLICATE_TRIGGER_FIXTURES_DIR);
+      const metadataFile = getMetadataOutputPath(DUPLICATE_TRIGGER_FIXTURES_DIR);
+
+      const workflow = runPRWorkflow(
+        mockOctokit,
+        createDefaultInputs({ mode: 'analyze', outputSchemaVersion: '2' }),
+        'pull_request',
+        EVENT_PAYLOAD_PATH,
+        DUPLICATE_TRIGGER_FIXTURES_DIR
+      );
+
+      try {
+        await vi.waitFor(() => {
+          const findings = JSON.parse(readFileSync(findingsFile, 'utf-8'));
+          expect(findings.skillExecutions).toHaveLength(1);
+        });
+
+        expect(existsSync(`${findingsFile}.done`)).toBe(false);
+
+        releaseSecond();
+        await workflow;
+
+        const finalFindings = JSON.parse(readFileSync(findingsFile, 'utf-8'));
+        expect(finalFindings.skillExecutions).toHaveLength(2);
+        expect(existsSync(`${findingsFile}.done`)).toBe(true);
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
+      }
     });
 
     it('records trigger failure and updates check before failing', async () => {

@@ -538,6 +538,7 @@ describe('runScheduleWorkflow', () => {
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
       }
     });
 
@@ -566,6 +567,7 @@ describe('runScheduleWorkflow', () => {
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
       }
     });
 
@@ -595,6 +597,7 @@ describe('runScheduleWorkflow', () => {
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
       }
     });
 
@@ -630,6 +633,7 @@ describe('runScheduleWorkflow', () => {
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
       }
     });
 
@@ -668,6 +672,7 @@ describe('runScheduleWorkflow', () => {
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
       }
     });
 
@@ -678,6 +683,7 @@ describe('runScheduleWorkflow', () => {
       const findingsFile = getFindingsOutputPathV2(SCHEDULE_FIXTURES);
       rmSync(metadataFile, { force: true });
       rmSync(findingsFile, { force: true });
+      rmSync(`${findingsFile}.done`, { force: true });
 
       await runScheduleWorkflow(mockOctokit, createDefaultInputs(), SCHEDULE_FIXTURES);
 
@@ -705,6 +711,7 @@ describe('runScheduleWorkflow', () => {
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
       }
     });
 
@@ -732,6 +739,52 @@ describe('runScheduleWorkflow', () => {
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
+      }
+    });
+
+    it('reports a not-yet-run trigger as pending during a live write, then replaces it with a real result', async () => {
+      let invocation = 0;
+      let releaseSecond!: () => void;
+      const secondGate = new Promise<void>((resolve) => {
+        releaseSecond = resolve;
+      });
+
+      mockRunSkill.mockImplementation(async () => {
+        invocation++;
+        if (invocation === 2) await secondGate;
+        return createSkillReport({ findings: [] });
+      });
+
+      const metadataFile = getMetadataOutputPath(SCHEDULE_MULTI_FIXTURES);
+      const findingsFile = getFindingsOutputPathV2(SCHEDULE_MULTI_FIXTURES);
+
+      const workflow = runScheduleWorkflow(
+        mockOctokit,
+        createDefaultInputs({ outputSchemaVersion: '2' }),
+        SCHEDULE_MULTI_FIXTURES
+      );
+
+      try {
+        await vi.waitFor(() => {
+          const metadata = JSON.parse(readFileSync(metadataFile, 'utf-8'));
+          expect(metadata.triggerResults).toHaveLength(1);
+        });
+
+        const midMetadata = JSON.parse(readFileSync(metadataFile, 'utf-8'));
+        expect(midMetadata.skippedTriggers).toHaveLength(1);
+        expect(midMetadata.skippedTriggers[0].reason).toBe('pending');
+
+        releaseSecond();
+        await workflow;
+
+        const finalMetadata = JSON.parse(readFileSync(metadataFile, 'utf-8'));
+        expect(finalMetadata.triggerResults).toHaveLength(2);
+        expect(finalMetadata.skippedTriggers ?? []).toHaveLength(0);
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
       }
     });
   });

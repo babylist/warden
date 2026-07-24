@@ -11,6 +11,7 @@ import { randomUUID } from 'node:crypto';
 import type { Octokit } from '@octokit/rest';
 import { execFileNonInteractive, execNonInteractive } from '../../utils/exec.js';
 import { isRepoRelativePath, normalizePath } from '../../utils/path.js';
+import { writeFileAtomic } from '../../utils/fs.js';
 import type { EventContext, SkillReport } from '../../types/index.js';
 import type { FindingObservation } from '../reporting/outcomes.js';
 import { buildFindingsOutput } from '../reporting/output.js';
@@ -451,8 +452,14 @@ export function getFindingsOutputPathV2(repoPath?: string): string {
   return join(tmpDir, 'warden-findings-v2.json');
 }
 
+function writeFileAtomicJson(path: string, value: unknown): void {
+  writeFileAtomic(path, JSON.stringify(value, null, 2));
+}
+
 /**
- * Write both schema-v2 files, then set their action outputs together.
+ * Write both schema-v2 files atomically, then set their action outputs
+ * together, then mark the pair done with a sidecar file next to the
+ * findings file.
  *
  * `metadata-file` and `findings-file` must never disagree on which schema
  * version they point at. Writing the two files independently (each setting
@@ -462,6 +469,10 @@ export function getFindingsOutputPathV2(repoPath?: string): string {
  * a hard error. Serializing both files to disk before setting any output
  * means a failure here leaves neither v2 output set, so a prior v1
  * `findings-file` output remains the last consistent value.
+ *
+ * This is the run's one true "done" checkpoint — every intermediate write
+ * during the run goes through `writeSchemaV2OutputPairLive` instead, which
+ * never touches the `.done` sidecar or these action outputs.
  */
 export function writeSchemaV2OutputPair(
   metadata: WardenMetadata,
@@ -471,10 +482,9 @@ export function writeSchemaV2OutputPair(
   const metadataPath = getMetadataOutputPath(context.repoPath);
   const findingsPath = getFindingsOutputPathV2(context.repoPath);
 
-  mkdirSync(dirname(metadataPath), { recursive: true });
-  writeFileSync(metadataPath, JSON.stringify(metadata, null, 2));
-  mkdirSync(dirname(findingsPath), { recursive: true });
-  writeFileSync(findingsPath, JSON.stringify(findings, null, 2));
+  writeFileAtomicJson(metadataPath, metadata);
+  writeFileAtomicJson(findingsPath, findings);
+  writeFileAtomic(`${findingsPath}.done`, '');
 
   setOutput('metadata-file', getFindingsOutputValue(metadataPath, context.repoPath));
   const findingsOutputValue = getFindingsOutputValue(findingsPath, context.repoPath);
@@ -482,6 +492,29 @@ export function writeSchemaV2OutputPair(
   setOutput('findings-file', findingsOutputValue);
 
   return { metadataPath, findingsPath };
+}
+
+/**
+ * Write both schema-v2 files atomically, without the `.done` sidecar or any
+ * action outputs. Used for the in-progress writes fired as each trigger
+ * completes during a run; the real, single `.done`-marked write still
+ * happens once via `writeSchemaV2OutputPair` after the run finishes. Never
+ * throws — a transient write hiccup here must not abort a run the way a
+ * final-write failure legitimately can.
+ */
+export function writeSchemaV2OutputPairLive(
+  metadata: WardenMetadata,
+  findings: WardenFindingsV2,
+  context: EventContext
+): void {
+  try {
+    const metadataPath = getMetadataOutputPath(context.repoPath);
+    const findingsPath = getFindingsOutputPathV2(context.repoPath);
+    writeFileAtomicJson(metadataPath, metadata);
+    writeFileAtomicJson(findingsPath, findings);
+  } catch (error) {
+    console.error(`::warning::Failed to write live schema-v2 output: ${error}`);
+  }
 }
 
 /** Build and write the schema-v2 metadata/findings pair from raw trigger results. */
@@ -496,4 +529,32 @@ export function writeSchemaV2Output(
   const metadata = buildMetadataOutputV2(context, resolvedTriggers, matchedTriggers, results, options);
   const findings = buildFindingsOutputV2(results, matchedTriggers, findingObservations, { runId: options.runId });
   return writeSchemaV2OutputPair(metadata, findings, context);
+}
+
+/** Build and write the in-progress schema-v2 metadata/findings pair from partial trigger results. */
+export function writeSchemaV2OutputLive(
+  context: EventContext,
+  resolvedTriggers: ResolvedTrigger[],
+  matchedTriggers: ResolvedTrigger[],
+  results: TriggerResult[],
+  findingObservations: FindingObservation[],
+  options: BuildMetadataOutputV2Options
+): void {
+  const metadata = buildMetadataOutputV2(context, resolvedTriggers, matchedTriggers, results, options);
+  const findings = buildFindingsOutputV2(results, matchedTriggers, findingObservations, { runId: options.runId });
+  writeSchemaV2OutputPairLive(metadata, findings, context);
+}
+
+/** Shared `{runId, runAttempt, actionRef, ...}` options every schema-v2 write site builds from `ActionInputs`. */
+export function buildV2WriteOptions(inputs: ActionInputs): BuildMetadataOutputV2Options {
+  return {
+    runId: process.env['GITHUB_RUN_ID'] ?? '',
+    runAttempt: process.env['GITHUB_RUN_ATTEMPT'],
+    actionRef: inputs.actionRef,
+    failOn: inputs.failOn,
+    reportOn: inputs.reportOn,
+    failCheck: inputs.failCheck,
+    requestChanges: inputs.requestChanges,
+    maxFindings: inputs.maxFindings,
+  };
 }

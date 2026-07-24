@@ -70,6 +70,7 @@ export const SkippedTriggerReasonSchema = z.enum([
   'draft_state',
   'label_mismatch',
   'no_changes',
+  'pending',
 ]);
 
 const SkippedTriggerSchema = z.object({
@@ -416,6 +417,8 @@ export interface BuildMetadataOutputV2Options {
   requestChanges?: boolean;
   /** Action-level fallback used by every trigger via `trigger.maxFindings ?? inputs.maxFindings`. */
   maxFindings?: number;
+  /** Triggers not yet attempted this run (schedule.ts's sequential loop hasn't reached them), reported as 'pending' instead of a guessed skip reason. */
+  pendingTriggerIds?: Set<string>;
 }
 
 /** Build the schema-v2 metadata output: static run/repo/harness identity plus the resolved trigger roster. */
@@ -427,13 +430,14 @@ export function buildMetadataOutputV2(
   options: BuildMetadataOutputV2Options
 ): WardenMetadata {
   const matchedIds = new Set(matchedTriggers.map((t) => t.id));
+  const pendingIds = options.pendingTriggerIds;
   const skippedTriggers = resolvedTriggers
     .filter((t) => !matchedIds.has(t.id))
     .map((t) => ({
       skillName: t.skill,
       triggerId: t.id,
       triggerName: t.name,
-      reason: deriveSkippedReason(t, context),
+      reason: pendingIds?.has(t.id) ? ('pending' as const) : deriveSkippedReason(t, context),
     }));
 
   const triggerResults = results.map((r) =>

@@ -626,6 +626,142 @@ async function runRunsShowV2(
   return 0;
 }
 
+/** Best-effort re-parse of both v2 files; returns undefined on any transient mismatch (in-flight write, race between the pair). */
+function tryReadV2Pair(
+  files: string[],
+): { metadata: WardenMetadata; findings: WardenFindingsV2 } | undefined {
+  let metadata: WardenMetadata | undefined;
+  let findings: WardenFindingsV2 | undefined;
+
+  for (const file of files) {
+    const parsed = parseV2File(file);
+    if (parsed.kind === 'metadata') {
+      if (metadata) return undefined;
+      metadata = parsed.data;
+    } else if (parsed.kind === 'findings') {
+      if (findings) return undefined;
+      findings = parsed.data;
+    } else {
+      return undefined;
+    }
+  }
+
+  if (!metadata || !findings) return undefined;
+  if (metadata.runId !== findings.runId || metadata.schemaVersion !== findings.schemaVersion) return undefined;
+  return { metadata, findings };
+}
+
+/**
+ * Tail a schema-v2 metadata+findings pair, rendering each newly-completed
+ * skill execution as it lands. Unlike v1's JSONL follow, both files are
+ * fully rewritten on every update (no append semantics) — each tick
+ * re-reads and re-parses both from scratch, and a parse mismatch (one file
+ * updated, the other not yet) is a transient race to wait out, not an error.
+ * Stops once a `.done` sidecar appears next to either file, or on Ctrl-C.
+ */
+async function runRunsFollowV2(
+  files: string[],
+  options: CLIOptions,
+  reporter: Reporter,
+): Promise<number> {
+  if (files.length !== 2) {
+    reporter.error(`Schema-v2 follow needs exactly one metadata file and one findings file, got ${files.length}`);
+    reporter.tip('Usage: warden runs follow <warden-metadata.json> <warden-findings-v2.json>');
+    return 1;
+  }
+
+  const missingFiles = files.filter((file) => !existsSync(file));
+  if (missingFiles.length > 0) {
+    reporter.error(`Log ${pluralize(missingFiles.length, 'file')} not found: ${missingFiles.join(', ')}`);
+    return 1;
+  }
+
+  if (!options.json) {
+    reporter.dim(`Following: ${files.join(', ')}`);
+    reporter.blank();
+  }
+
+  const renderedIds = new Set<string>();
+  let lastEmittedRaw = '';
+  let stopped = false;
+
+  const renderNew = (findings: WardenFindingsV2): void => {
+    const reports = reconstructSkillReportsFromV2(findings);
+    findings.skillExecutions.forEach((execution, i) => {
+      if (renderedIds.has(execution.skillExecutionId)) return;
+      renderedIds.add(execution.skillExecutionId);
+      const report = reports[i];
+      if (!report) return;
+      console.log(renderTerminalReport([report], reporter.mode, { verbosity: reporter.verbosity }));
+    });
+  };
+
+  const emitJson = (metadata: WardenMetadata, findings: WardenFindingsV2): void => {
+    const raw = JSON.stringify({ metadata, findings });
+    if (raw === lastEmittedRaw) return;
+    lastEmittedRaw = raw;
+    process.stdout.write(raw + '\n');
+  };
+
+  const isDone = (): boolean => files.some((file) => existsSync(`${file}.done`));
+
+  const poll = (): void => {
+    const done = isDone();
+    const result = tryReadV2Pair(files);
+    if (result) {
+      if (options.json) emitJson(result.metadata, result.findings);
+      else renderNew(result.findings);
+    }
+    if (!done) return;
+
+    if (!options.json) {
+      const finalResult = result ?? tryReadV2Pair(files);
+      if (finalResult) {
+        reporter.blank();
+        const reports = reconstructSkillReportsFromV2(finalResult.findings);
+        const totalDurationMs = reports.reduce((sum, r) => sum + (r.durationMs ?? 0), 0);
+        reporter.renderSummary(reports, totalDurationMs);
+      }
+    }
+    stopped = true;
+  };
+
+  poll();
+  if (stopped) return 0;
+
+  return new Promise<number>((resolvePromise) => {
+    const watchers: ReturnType<typeof watch>[] = [];
+
+    const tick = () => {
+      poll();
+      if (stopped) finish(0);
+    };
+
+    try {
+      for (const file of files) {
+        const watcher = watch(file, { persistent: true }, () => tick());
+        watcher.on('error', () => {
+          try { watcher.close(); } catch { /* ignore */ }
+        });
+        watchers.push(watcher);
+      }
+    } catch { /* polling alone is fine */ }
+    const pollTimer = setInterval(tick, 1000);
+
+    const finish = (code: number) => {
+      for (const watcher of watchers) {
+        try { watcher.close(); } catch { /* ignore */ }
+      }
+      clearInterval(pollTimer);
+      process.off('SIGINT', onSigint);
+      resolvePromise(code);
+    };
+
+    const onSigint = () => finish(0);
+    process.on('SIGINT', onSigint);
+  });
+}
+
 /**
  * Garbage-collect expired log files.
  */
@@ -814,6 +950,14 @@ export async function runRunsFollow(
   options: CLIOptions,
   reporter: Reporter,
 ): Promise<number> {
+  // Existing v1 follow only ever takes 0 (auto-detect) or 1 (run id / path)
+  // args; v2 has no auto-discovery, so more than one explicit file path is an
+  // unambiguous signal to follow a schema-v2 metadata+findings pair instead.
+  // runRunsFollowV2 itself validates the count is exactly 2.
+  if (runsOptions.files.length > 1) {
+    return runRunsFollowV2(runsOptions.files, options, reporter);
+  }
+
   const resolved = resolveLogDir();
   if (!resolved) {
     reporter.error('Not a git repository');

@@ -35,6 +35,8 @@ import {
   writeFindingsOutput,
   writeFindingsOutputs,
   writeSchemaV2Output,
+  writeSchemaV2OutputLive,
+  buildV2WriteOptions,
 } from './base.js';
 import type { TriggerResult } from '../triggers/executor.js';
 import type { FindingProcessingEvent } from '../../sdk/types.js';
@@ -59,22 +61,41 @@ function writeSchemaV2ScheduleOutputs(
 ): void {
   if (inputs.outputSchemaVersion !== '2') return;
 
-  const runId = process.env['GITHUB_RUN_ID'] ?? '';
-  const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
   try {
     const { metadataPath, findingsPath } = writeSchemaV2Output(
       context, resolvedTriggers, matchedTriggers, results, [],
-      {
-        runId, runAttempt, actionRef: inputs.actionRef,
-        failOn: inputs.failOn, reportOn: inputs.reportOn,
-        failCheck: inputs.failCheck, requestChanges: inputs.requestChanges, maxFindings: inputs.maxFindings,
-      }
+      buildV2WriteOptions(inputs)
     );
     console.log(`Metadata written to ${metadataPath}`);
     console.log(`Findings (v2) written to ${findingsPath}`);
   } catch (error) {
     console.error(`::warning::Failed to write schema-v2 output: ${error}`);
   }
+}
+
+/**
+ * Live counterpart of {@link writeSchemaV2ScheduleOutputs}, fired after each
+ * trigger completes. Unlike `pr-workflow.ts`, `matchedTriggers` here grows
+ * incrementally inside the same sequential loop this is called from, so a
+ * trigger this loop simply hasn't reached yet must be reported as `'pending'`
+ * rather than a guessed skip reason.
+ */
+function writeSchemaV2ScheduleOutputsLive(
+  inputs: ActionInputs,
+  context: EventContext,
+  resolvedTriggers: ResolvedTrigger[],
+  matchedTriggers: ResolvedTrigger[],
+  results: TriggerResult[],
+  processedTriggerIds: Set<string>
+): void {
+  if (inputs.outputSchemaVersion !== '2') return;
+  const pendingTriggerIds = new Set(
+    resolvedTriggers.filter((t) => !processedTriggerIds.has(t.id)).map((t) => t.id)
+  );
+  writeSchemaV2OutputLive(context, resolvedTriggers, matchedTriggers, results, [], {
+    ...buildV2WriteOptions(inputs),
+    pendingTriggerIds,
+  });
 }
 
 export async function runScheduleWorkflow(
@@ -197,6 +218,14 @@ async function runScheduleWorkflowInner(
 
   const defaultBranch = await getDefaultBranchFromAPI(octokit, owner, repo);
 
+  // Hoisted above the trigger loop so the live-write path can use it as each trigger completes.
+  const scheduleContext: EventContext = {
+    eventType: 'schedule',
+    action: 'scheduled',
+    repository: { owner, name: repo, fullName: `${owner}/${repo}`, defaultBranch },
+    repoPath,
+  };
+
   logGroup('Processing schedule triggers');
   for (const trigger of scheduleTriggers) {
     console.log(`- ${trigger.name}: ${trigger.skill}`);
@@ -206,6 +235,7 @@ async function runScheduleWorkflowInner(
   const allReports: SkillReport[] = [];
   const matchedTriggers: ResolvedTrigger[] = [];
   const results: TriggerResult[] = [];
+  const processedTriggerIds = new Set<string>();
   let totalFindings = 0;
   const failureReasons: string[] = [];
   const triggerErrors: string[] = [];
@@ -213,6 +243,7 @@ async function runScheduleWorkflowInner(
 
   // Process each schedule trigger
   for (const resolved of scheduleTriggers) {
+    processedTriggerIds.add(resolved.id);
     logGroup(`Running trigger: ${resolved.name} (skill: ${resolved.skill})`);
 
     try {
@@ -308,6 +339,9 @@ async function runScheduleWorkflowInner(
         issueNumber: issueResult?.issueNumber,
         issueUrl: issueResult?.issueUrl,
       });
+      writeSchemaV2ScheduleOutputsLive(
+        inputs, scheduleContext, allResolvedTriggers, matchedTriggers, results, processedTriggerIds
+      );
       totalFindings += report.findings.length;
 
       // Check failure condition
@@ -338,6 +372,9 @@ async function runScheduleWorkflowInner(
         skillExecutionId: resolved.skillExecutionId,
         error,
       });
+      writeSchemaV2ScheduleOutputsLive(
+        inputs, scheduleContext, allResolvedTriggers, matchedTriggers, results, processedTriggerIds
+      );
       console.error(`::warning::Trigger ${resolved.name} failed: ${error}`);
       logGroupEnd();
     }
@@ -352,12 +389,6 @@ async function runScheduleWorkflowInner(
   setOutput('summary', allReports.map((r) => r.summary).join('\n') || 'Scheduled analysis complete');
 
   // Write structured findings to file for external export (GCS, S3, etc.)
-  const scheduleContext: EventContext = {
-    eventType: 'schedule',
-    action: 'scheduled',
-    repository: { owner, name: repo, fullName: `${owner}/${repo}`, defaultBranch },
-    repoPath,
-  };
   writeFindingsOutputs(
     () => writeFindingsOutput(allReports, scheduleContext, [], {
       configuredSkills: buildConfiguredSkillsList({ allTriggers: allResolvedTriggers, matchedTriggers }),

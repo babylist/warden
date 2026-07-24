@@ -843,3 +843,15 @@ findings-count=5
 high-count=2
 summary=Warden found 5 issues across 2 skills
 ```
+
+### Schema-v2 Live Output
+
+When `output-schema-version: '2'`, the `warden-metadata.json`/`warden-findings-v2.json` pair (see [`specs/output-schema-v2-migration.md`](./output-schema-v2-migration.md)) is written incrementally as each trigger completes, not only once at the end of the run. This mirrors the JSONL live-append behavior in Section 3, at the granularity schema v2 actually supports: per-trigger completion, since a `skillExecutions`/`findings` entry only exists once a full skill report does — there is no chunk-level record in schema v2.
+
+**Write timing.** Every trigger completion (success or error) triggers a full atomic rewrite of both files, reflecting only the trigger results known at that point. Posting-derived data — `findingObservations`, per-finding `githubCommentId`/`githubCommentUrl`, and `reportedBy` corroboration beyond the primary attribution — is legitimately absent from every intermediate write; it only appears once the existing post-analysis rewrite runs after comment posting completes. This is unchanged by live output.
+
+**Completion marker.** A `.done` sidecar (`{findingsPath}.done`) is written next to `warden-findings-v2.json` only at the run's one true final write. Its absence is the signal a follower uses to know the run is still in progress, the same role it plays for JSONL logs in Section 3.
+
+**`pending` skip reason.** `schedule.ts` builds its matched-trigger list incrementally inside a sequential loop, so an intermediate write may include triggers this loop has not reached yet. Those report `skippedTriggers[].reason: 'pending'` rather than a real skip reason, distinguishing "not evaluated yet" from a genuine skip (`no_event_match`, `path_filter`, etc.). `pr-workflow.ts`'s trigger list is fully resolved before any trigger runs, so `'pending'` never appears there.
+
+**Consuming it.** `warden runs follow <warden-metadata.json> <warden-findings-v2.json>` tails the pair the same way `warden runs follow` tails a JSONL log — re-reading and re-parsing both files on each change (there is no append semantics for a rewritten JSON document), rendering each newly-completed skill execution, and stopping once the `.done` sidecar appears. This is intended for local development of the Action's own workflow code (running `pr-workflow.ts`/`schedule.ts` against a local checkout with a second terminal following along), not as a production CI capability — a GitHub-hosted Action run is a single synchronous process with nothing external able to follow its files during the run itself.

@@ -116,3 +116,12 @@ instead of reading the embedded `report`.
 `warden-findings.json` (v1's filename is unchanged; nothing currently
 depending on it needs to change). There is no plan to flip the default
 without a separate, explicitly announced deprecation window.
+
+## Live output
+
+The metadata/findings pair is also written incrementally as each trigger
+completes, not only once at the end of the run — see `specs/reporters.md`,
+"Schema-v2 Live Output" for the write-timing contract, the `.done` completion
+marker, and the `warden runs follow <metadata> <findings>` command that tails
+it. This is aimed at local development of Warden's own Action workflow code,
+not a production CI capability.

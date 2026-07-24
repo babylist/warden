@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import type * as NodeFS from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { EventContext, SkillReport } from '../../types/index.js';
@@ -14,13 +15,20 @@ vi.mock('../../utils/exec.js', async (importOriginal) => {
   };
 });
 
+vi.mock('node:fs', async (importOriginal) => {
+  const actual = await importOriginal<typeof NodeFS>();
+  return { ...actual, writeFileSync: vi.fn(actual.writeFileSync) };
+});
+
 import { execFileNonInteractive, execNonInteractive } from '../../utils/exec.js';
 import {
   getFindingsOutputPath,
+  getFindingsOutputPathV2,
   prepareRuntimeEnvironment,
   writeFindingsOutput,
   writeFindingsOutputs,
   writeSchemaV2OutputPair,
+  writeSchemaV2OutputPairLive,
 } from './base.js';
 import { FindingsOutputSchema } from '../reporting/output.js';
 import type { WardenFindingsV2, WardenMetadata } from '../reporting/output-v2.js';
@@ -105,34 +113,44 @@ describe('findings output', () => {
   it('repoints the findings-file output at the v2 file, matching what report mode reads as its findings-file input', () => {
     process.env['GITHUB_WORKSPACE'] = tempDir;
 
-    const v2Metadata: WardenMetadata = {
-      schemaVersion: '2',
-      runId: '123',
-      generatedAt: new Date().toISOString(),
-      harness: { name: 'warden', version: '1.0.0' },
-      repository: { owner: 'getsentry', name: 'warden', fullName: 'getsentry/warden' },
-      event: 'pull_request',
-    };
-    const v2Findings: WardenFindingsV2 = {
-      schemaVersion: '2',
-      runId: '123',
-      skillExecutions: [],
-      findings: [],
-      findingObservations: [],
-      summary: {
-        totalFindings: 0,
-        totalSkillExecutions: 0,
-        bySeverity: { high: 0, medium: 0, low: 0 },
-        byOutcome: { posted: 0, deduped: 0, skipped: 0, resolved: 0, failed: 0 },
-      },
-    };
-
-    writeSchemaV2OutputPair(v2Metadata, v2Findings, createContext(tempDir));
+    writeSchemaV2OutputPair(createV2Metadata(), createV2Findings(), createContext(tempDir));
 
     const outputContent = readFileSync(process.env['GITHUB_OUTPUT']!, 'utf-8');
     expect(outputContent).toContain('metadata-file=warden-metadata.json\n');
     expect(outputContent).toContain('findings-file-v2=warden-findings-v2.json\n');
     expect(outputContent).toContain('findings-file=warden-findings-v2.json\n');
+  });
+
+  it('writes a .done sidecar next to the findings file once both files land', () => {
+    process.env['GITHUB_WORKSPACE'] = tempDir;
+
+    const { findingsPath } = writeSchemaV2OutputPair(createV2Metadata(), createV2Findings(), createContext(tempDir));
+
+    expect(existsSync(`${findingsPath}.done`)).toBe(true);
+    expect(readFileSync(`${findingsPath}.done`, 'utf-8')).toBe('');
+  });
+
+  it('the live writer writes both content files but never a .done sidecar or GITHUB_OUTPUT', () => {
+    process.env['GITHUB_WORKSPACE'] = tempDir;
+
+    writeSchemaV2OutputPairLive(createV2Metadata(), createV2Findings(), createContext(tempDir));
+
+    const findingsPath = getFindingsOutputPathV2(tempDir);
+    expect(existsSync(findingsPath)).toBe(true);
+    expect(existsSync(`${findingsPath}.done`)).toBe(false);
+    expect(existsSync(process.env['GITHUB_OUTPUT']!)).toBe(false);
+  });
+
+  it('the live writer swallows a write failure instead of throwing', async () => {
+    process.env['GITHUB_WORKSPACE'] = tempDir;
+    const { writeFileSync } = await import('node:fs');
+    vi.mocked(writeFileSync).mockImplementationOnce(() => {
+      throw new Error('disk full');
+    });
+
+    expect(() =>
+      writeSchemaV2OutputPairLive(createV2Metadata(), createV2Findings(), createContext(tempDir))
+    ).not.toThrow();
   });
 
   it('falls back to RUNNER_TEMP when no repo path is provided', () => {
@@ -244,6 +262,33 @@ function createInputs(overrides: Partial<ActionInputs> = {}): ActionInputs {
     parallel: 4,
     outputSchemaVersion: '1',
     ...overrides,
+  };
+}
+
+function createV2Metadata(): WardenMetadata {
+  return {
+    schemaVersion: '2',
+    runId: '123',
+    generatedAt: new Date().toISOString(),
+    harness: { name: 'warden', version: '1.0.0' },
+    repository: { owner: 'getsentry', name: 'warden', fullName: 'getsentry/warden' },
+    event: 'pull_request',
+  };
+}
+
+function createV2Findings(): WardenFindingsV2 {
+  return {
+    schemaVersion: '2',
+    runId: '123',
+    skillExecutions: [],
+    findings: [],
+    findingObservations: [],
+    summary: {
+      totalFindings: 0,
+      totalSkillExecutions: 0,
+      bySeverity: { high: 0, medium: 0, low: 0 },
+      byOutcome: { posted: 0, deduped: 0, skipped: 0, resolved: 0, failed: 0 },
+    },
   };
 }
 

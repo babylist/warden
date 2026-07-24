@@ -420,18 +420,20 @@ const HELP_COMMANDS: Record<HelpTarget, HelpCommandSpec> = {
   },
   'runs:follow': {
     summary: 'Tail a live or completed session',
-    description: 'Follow a session as skill records arrive, or replay the latest completed run.',
+    description: 'Follow a session as skill records arrive, or replay the latest completed run. Pass a schema-v2 metadata+findings file pair to follow a local GitHub Action workflow run instead.',
     usage: [
       'warden runs follow [run] [options]',
       'warden runs --follow [run] [options]',
+      'warden runs follow <warden-metadata.json> <warden-findings-v2.json> [options]',
     ],
     arguments: [
-      { label: 'run', description: 'Optional short run ID or JSONL path' },
+      { label: 'run', description: 'Optional short run ID or JSONL path, or a warden-metadata.json + warden-findings-v2.json pair' },
     ],
     options: ['cwd', 'json', ...SHARED_COMMAND_OPTIONS],
     examples: [
       'warden runs follow',
       'warden runs --follow deadbeef',
+      'warden runs follow warden-metadata.json warden-findings-v2.json',
     ],
   },
   'runs:gc': {

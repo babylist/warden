@@ -79,7 +79,9 @@ import {
   writeFindingsOutput,
   writeFindingsOutputs,
   writeSchemaV2Output,
+  writeSchemaV2OutputLive,
   writeSchemaV2OutputPair,
+  buildV2WriteOptions,
 } from './base.js';
 import { renderSkillReport } from '../../output/renderer.js';
 import {
@@ -503,7 +505,7 @@ async function executeAllTriggers(
   context: EventContext,
   runnerConcurrency: number | undefined,
   inputs: ActionInputs,
-  options: { checks?: TriggerCheckReporter } = {}
+  options: { checks?: TriggerCheckReporter; onTriggerComplete?: (result: TriggerResult) => void } = {}
 ): Promise<TriggerResult[]> {
   const concurrency = runnerConcurrency ?? inputs.parallel;
   const runtimeEnv = await prepareRuntimeEnvironment(matchedTriggers, inputs);
@@ -530,6 +532,9 @@ async function executeAllTriggers(
         abortController,
         circuitBreaker,
         checks: options.checks,
+      }).then((result) => {
+        try { options.onTriggerComplete?.(result); } catch { /* live output must never abort the pool */ }
+        return result;
       }),
     { shouldAbort: () => abortController.signal.aborted },
   );
@@ -1009,22 +1014,28 @@ function writeSchemaV2Outputs(
 ): void {
   if (inputs.outputSchemaVersion !== '2') return;
 
-  const runId = process.env['GITHUB_RUN_ID'] ?? '';
-  const runAttempt = process.env['GITHUB_RUN_ATTEMPT'];
   try {
     const { metadataPath, findingsPath } = writeSchemaV2Output(
       context, resolvedTriggers, matchedTriggers, results, findingObservations,
-      {
-        runId, runAttempt, actionRef: inputs.actionRef,
-        failOn: inputs.failOn, reportOn: inputs.reportOn,
-        failCheck: inputs.failCheck, requestChanges: inputs.requestChanges, maxFindings: inputs.maxFindings,
-      }
+      buildV2WriteOptions(inputs)
     );
     logAction(`Metadata written to ${metadataPath}`);
     logAction(`Findings (v2) written to ${findingsPath}`);
   } catch (error) {
     onError(`Failed to write schema-v2 output: ${error}`);
   }
+}
+
+/** Live counterpart of {@link writeSchemaV2Outputs} — fired after each trigger completes, never fatal. */
+function writeSchemaV2OutputsLive(
+  inputs: ActionInputs,
+  context: EventContext,
+  resolvedTriggers: ResolvedTrigger[],
+  matchedTriggers: ResolvedTrigger[],
+  results: TriggerResult[]
+): void {
+  if (inputs.outputSchemaVersion !== '2') return;
+  writeSchemaV2OutputLive(context, resolvedTriggers, matchedTriggers, results, [], buildV2WriteOptions(inputs));
 }
 
 /**
@@ -1847,13 +1858,19 @@ async function runAnalyzeMode(
     return;
   }
 
+  const liveResults: TriggerResult[] = [];
   const results = await Sentry.startSpan(
     {
       op: 'workflow.execute',
       name: 'execute triggers',
       attributes: { 'warden.trigger.count': matchedTriggers.length },
     },
-    () => executeAllTriggers(matchedTriggers, context, runnerConcurrency, inputs),
+    () => executeAllTriggers(matchedTriggers, context, runnerConcurrency, inputs, {
+      onTriggerComplete: (result) => {
+        liveResults.push(result);
+        writeSchemaV2OutputsLive(inputs, context, resolvedTriggers, matchedTriggers, liveResults);
+      },
+    }),
   );
 
   const reports = results.flatMap((result) => (result.report ? [result.report] : []));
@@ -2325,6 +2342,7 @@ export async function runPRWorkflow(
       }
 
       let results: TriggerResult[];
+      const liveResults: TriggerResult[] = [];
       try {
         results = await Sentry.startSpan(
           {
@@ -2334,6 +2352,10 @@ export async function runPRWorkflow(
           },
           () => executeAllTriggers(matchedTriggers, context, runnerConcurrency, inputs, {
             checks: createTriggerCheckReporter(octokit, context),
+            onTriggerComplete: (result) => {
+              liveResults.push(result);
+              writeSchemaV2OutputsLive(inputs, context, resolvedTriggers, matchedTriggers, liveResults);
+            },
           }),
         );
       } catch (error) {
