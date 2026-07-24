@@ -237,7 +237,7 @@ async function postReviewToGitHub(
   }
 
   try {
-    const { data: postedComments } = await octokit.pulls.listCommentsForReview({
+    const postedComments = await octokit.paginate(octokit.pulls.listCommentsForReview, {
       owner,
       repo,
       pull_number: pullNumber,

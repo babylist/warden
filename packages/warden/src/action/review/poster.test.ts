@@ -39,6 +39,7 @@ describe('postTriggerReview', () => {
 
     vi.mocked(mockOctokit.pulls.createReview).mockResolvedValue({} as never);
     vi.mocked(mockOctokit.pulls.get).mockResolvedValue({ data: { head: { sha: 'abc123' } } } as never);
+    vi.mocked(mockOctokit.paginate).mockResolvedValue([]);
     mockDeps = {
       octokit: mockOctokit,
       context: mockContext,
@@ -47,10 +48,11 @@ describe('postTriggerReview', () => {
   });
 
   const mockOctokit = {
+    paginate: vi.fn().mockResolvedValue([]),
     pulls: {
       createReview: vi.fn().mockResolvedValue({}),
       get: vi.fn().mockResolvedValue({ data: { head: { sha: 'abc123' } } }),
-      listCommentsForReview: vi.fn().mockResolvedValue({ data: [] }),
+      listCommentsForReview: vi.fn(),
     },
   } as unknown as Octokit;
 
@@ -268,9 +270,9 @@ describe('postTriggerReview', () => {
 
     vi.mocked(findingToExistingComment).mockReturnValue(createExistingComment());
     vi.mocked(mockOctokit.pulls.createReview).mockResolvedValueOnce({ data: { id: 555 } } as never);
-    vi.mocked(mockOctokit.pulls.listCommentsForReview).mockResolvedValueOnce({
-      data: [{ id: 987, html_url: 'https://github.com/test-owner/test-repo/pull/1#discussion_r987', body: 'Test comment' }],
-    } as never);
+    vi.mocked(mockOctokit.paginate).mockResolvedValueOnce([
+      { id: 987, html_url: 'https://github.com/test-owner/test-repo/pull/1#discussion_r987', body: 'Test comment' },
+    ]);
 
     const postResult = await postTriggerReview({
       result,
@@ -278,7 +280,8 @@ describe('postTriggerReview', () => {
       apiKey: 'test-key',
     }, mockDeps);
 
-    expect(mockOctokit.pulls.listCommentsForReview).toHaveBeenCalledWith(
+    expect(mockOctokit.paginate).toHaveBeenCalledWith(
+      mockOctokit.pulls.listCommentsForReview,
       expect.objectContaining({ owner: 'test-owner', repo: 'test-repo', pull_number: 1, review_id: 555 })
     );
     expect(postResult.findingObservations).toEqual([
@@ -291,8 +294,8 @@ describe('postTriggerReview', () => {
     ]);
   });
 
-  it('requests enough comments to cover a review beyond GitHub default pagination', async () => {
-    const findingCount = 35;
+  it('matches every comment on a review spanning more than one GitHub results page', async () => {
+    const findingCount = 150;
     const findings = Array.from({ length: findingCount }, (_, i) =>
       createFinding({ id: `test-${i}`, location: { path: 'test.ts', startLine: 10 + i } })
     );
@@ -322,13 +325,13 @@ describe('postTriggerReview', () => {
 
     vi.mocked(findingToExistingComment).mockReturnValue(createExistingComment());
     vi.mocked(mockOctokit.pulls.createReview).mockResolvedValueOnce({ data: { id: 555 } } as never);
-    vi.mocked(mockOctokit.pulls.listCommentsForReview).mockResolvedValueOnce({
-      data: findings.map((finding, i) => ({
+    vi.mocked(mockOctokit.paginate).mockResolvedValueOnce(
+      findings.map((finding, i) => ({
         id: 1000 + i,
         html_url: `https://github.com/test-owner/test-repo/pull/1#discussion_r${1000 + i}`,
         body: `Comment for ${finding.id}`,
-      })),
-    } as never);
+      }))
+    );
 
     const postResult = await postTriggerReview({
       result,
@@ -336,7 +339,8 @@ describe('postTriggerReview', () => {
       apiKey: 'test-key',
     }, mockDeps);
 
-    expect(mockOctokit.pulls.listCommentsForReview).toHaveBeenCalledWith(
+    expect(mockOctokit.paginate).toHaveBeenCalledWith(
+      mockOctokit.pulls.listCommentsForReview,
       expect.objectContaining({ per_page: 100 })
     );
     expect(postResult.findingObservations).toHaveLength(findingCount);
@@ -366,7 +370,7 @@ describe('postTriggerReview', () => {
 
     vi.mocked(findingToExistingComment).mockReturnValue(createExistingComment());
     vi.mocked(mockOctokit.pulls.createReview).mockResolvedValueOnce({ data: { id: 555 } } as never);
-    vi.mocked(mockOctokit.pulls.listCommentsForReview).mockRejectedValueOnce(new Error('rate limited'));
+    vi.mocked(mockOctokit.paginate).mockRejectedValueOnce(new Error('rate limited'));
 
     const postResult = await postTriggerReview({
       result,
