@@ -87,6 +87,7 @@ describe('executeTrigger', () => {
       const check = await createSkillCheck(mockOctokit, skillName, checkOptions);
       return {
         url: check.url,
+        checkRunId: check.checkRunId,
         complete: (report: SkillReport, options: TriggerCheckCompleteOptions) =>
           updateSkillCheck(mockOctokit, check.checkRunId, report, {
             ...checkOptions,
@@ -247,6 +248,9 @@ describe('executeTrigger', () => {
     expect(result.report).toBe(mockReport);
     expect(result.renderResult).toBe(mockRenderResult);
     expect(result.error).toBeUndefined();
+    expect(result.skillExecutionId).toBe('test-trigger-id');
+    expect(result.checkRunId).toBe(123);
+    expect(result.checkRunUrl).toBe('https://github.com/check/123');
     expect(createSkillCheck).toHaveBeenCalledWith(mockOctokit, 'test-skill', {
       owner: 'test-owner',
       repo: 'test-repo',
@@ -287,6 +291,9 @@ describe('executeTrigger', () => {
     expect(result.triggerName).toBe('test-trigger');
     expect(result.error).toBeDefined();
     expect(result.report).toBeUndefined();
+    expect(result.skillExecutionId).toBe('test-trigger-id');
+    expect(result.checkRunId).toBe(123);
+    expect(result.checkRunUrl).toBe('https://github.com/check/123');
     expect(failSkillCheck).toHaveBeenCalledWith(
       mockOctokit, 123, expect.objectContaining({ message: 'Skill not found' }),
       { owner: 'test-owner', repo: 'test-repo', headSha: 'abc123' }

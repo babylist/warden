@@ -291,6 +291,58 @@ describe('postTriggerReview', () => {
     ]);
   });
 
+  it('requests enough comments to cover a review beyond GitHub default pagination', async () => {
+    const findingCount = 35;
+    const findings = Array.from({ length: findingCount }, (_, i) =>
+      createFinding({ id: `test-${i}`, location: { path: 'test.ts', startLine: 10 + i } })
+    );
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      skillName: 'test-skill',
+      report: {
+        skill: 'test-skill',
+        summary: `Found ${findingCount} issues`,
+        findings,
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: createRenderResult({
+        review: {
+          event: 'COMMENT',
+          body: 'Test review',
+          comments: findings.map((finding) => ({
+            path: 'test.ts',
+            line: finding.location!.startLine,
+            body: `Comment for ${finding.id}`,
+            findingId: finding.id,
+          })),
+        },
+      }),
+      reportOn: 'low',
+    };
+
+    vi.mocked(findingToExistingComment).mockReturnValue(createExistingComment());
+    vi.mocked(mockOctokit.pulls.createReview).mockResolvedValueOnce({ data: { id: 555 } } as never);
+    vi.mocked(mockOctokit.pulls.listCommentsForReview).mockResolvedValueOnce({
+      data: findings.map((finding, i) => ({
+        id: 1000 + i,
+        html_url: `https://github.com/test-owner/test-repo/pull/1#discussion_r${1000 + i}`,
+        body: `Comment for ${finding.id}`,
+      })),
+    } as never);
+
+    const postResult = await postTriggerReview({
+      result,
+      existingComments: [],
+      apiKey: 'test-key',
+    }, mockDeps);
+
+    expect(mockOctokit.pulls.listCommentsForReview).toHaveBeenCalledWith(
+      expect.objectContaining({ per_page: 100 })
+    );
+    expect(postResult.findingObservations).toHaveLength(findingCount);
+    expect(postResult.findingObservations.every((obs) => 'githubCommentId' in obs && obs.githubCommentId !== undefined)).toBe(true);
+  });
+
   it('still reports the finding as posted when fetching the real comment id fails', async () => {
     const finding = createFinding();
     const result: TriggerResult = {

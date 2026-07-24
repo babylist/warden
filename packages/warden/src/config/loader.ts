@@ -511,6 +511,13 @@ export function resolveSkillConfigs(
   const defaults = config.defaults;
   const envModel = emptyToUndefined(process.env['WARDEN_MODEL']);
   const result: ResolvedTrigger[] = [];
+  /** Two trigger blocks resolving to the same identity (e.g. a copy-pasted duplicate) would otherwise collide on `id`/`skillExecutionId` and silently swap findings between executions during replay - disambiguate every occurrence after the first. */
+  const identityOccurrences = new Map<string, number>();
+  const dedupeIdentity = (identity: string): string => {
+    const occurrence = identityOccurrences.get(identity) ?? 0;
+    identityOccurrences.set(identity, occurrence + 1);
+    return occurrence === 0 ? identity : `${identity}#${occurrence}`;
+  };
   const runtime = defaults?.runtime ?? 'pi';
   const auxiliaryModel = emptyToUndefined(defaults?.auxiliary?.model);
   const synthesisModel =
@@ -544,7 +551,7 @@ export function resolveSkillConfigs(
 
     if (!skill.triggers || skill.triggers.length === 0) {
       // Wildcard: no triggers means run everywhere
-      const identity = triggerIdentity(skill, undefined);
+      const identity = dedupeIdentity(triggerIdentity(skill, undefined));
       result.push({
         id: identity,
         skillExecutionId: deriveSkillExecutionId(identity),
@@ -577,7 +584,7 @@ export function resolveSkillConfigs(
       });
     } else {
       for (const trigger of skill.triggers) {
-        const identity = triggerIdentity(skill, trigger);
+        const identity = dedupeIdentity(triggerIdentity(skill, trigger));
         result.push({
           id: identity,
           skillExecutionId: deriveSkillExecutionId(identity),

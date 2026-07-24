@@ -309,7 +309,15 @@ export async function executeTrigger(
 
         console.error(`::warning::Trigger ${trigger.name} failed: ${error}`);
         logGroupEnd();
-        return { triggerId: trigger.id, triggerName: trigger.name, skillName: trigger.skill, skillExecutionId: trigger.skillExecutionId, error };
+        return {
+          triggerId: trigger.id,
+          triggerName: trigger.name,
+          skillName: trigger.skill,
+          skillExecutionId: trigger.skillExecutionId,
+          checkRunUrl: skillCheckUrl,
+          checkRunId: skillCheckId,
+          error,
+        };
       }
     },
   );

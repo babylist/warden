@@ -1395,6 +1395,42 @@ describe('runRunsFollowV2', () => {
     expect(logSpy).toHaveBeenCalledTimes(2);
   }, 8000);
 
+  it('with --json, emits one line per genuine change and suppresses an unchanged re-poll', async () => {
+    const { metadataPath, findingsPath } = writeV2FollowFixture('run-live', ['exec-1']);
+
+    const writes: string[] = [];
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation((chunk) => {
+      writes.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk as Uint8Array).toString('utf-8'));
+      return true;
+    });
+
+    const reporter = createTestReporter();
+    const followPromise = runRunsFollow(
+      { subcommand: 'follow', files: [metadataPath, findingsPath] },
+      { ...createDefaultOptions(), json: true },
+      reporter,
+    );
+
+    await vi.waitFor(() => expect(writes.length).toBe(1), { timeout: 3000 });
+
+    // An unchanged re-poll (no rewrite at all) must not emit a duplicate line.
+    await new Promise((r) => setTimeout(r, 1200));
+    expect(writes.length).toBe(1);
+
+    writeV2FollowFixture('run-live', ['exec-1', 'exec-2']);
+    await vi.waitFor(() => expect(writes.length).toBe(2), { timeout: 3000 });
+
+    writeFileSync(`${findingsPath}.done`, '');
+    const exit = await followPromise;
+
+    expect(exit).toBe(0);
+    expect(writes.length).toBe(2);
+    expect(JSON.parse(writes[0]!).findings.skillExecutions).toHaveLength(1);
+    expect(JSON.parse(writes[1]!).findings.skillExecutions).toHaveLength(2);
+
+    stdoutSpy.mockRestore();
+  }, 8000);
+
   it('errors when given a file count other than exactly 2', async () => {
     const { metadataPath, findingsPath } = writeV2FollowFixture('run-live', ['exec-1']);
     const thirdPath = join(testDir, 'extra.json');
@@ -1454,5 +1490,27 @@ describe('runRunsFollowV2', () => {
 
     expect(exit).toBe(0);
     expect(logSpy).toHaveBeenCalledTimes(2);
+  }, 8000);
+
+  it('warns instead of silently exiting when .done lands but the pair still will not parse', async () => {
+    const { metadataPath, findingsPath } = writeV2FollowFixture('run-live', ['exec-1']);
+    vi.spyOn(console, 'log').mockImplementation(() => undefined);
+
+    const reporter = createTestReporter();
+    const warningSpy = vi.spyOn(reporter, 'warning');
+    const followPromise = runRunsFollow(
+      { subcommand: 'follow', files: [metadataPath, findingsPath] },
+      createDefaultOptions(),
+      reporter,
+    );
+
+    await new Promise((r) => setTimeout(r, 50));
+    writeFileSync(findingsPath, '{"still not valid json');
+    writeFileSync(`${findingsPath}.done`, '');
+
+    const exit = await followPromise;
+
+    expect(exit).toBe(0);
+    expect(warningSpy).toHaveBeenCalledWith('Run finished but its output could not be read');
   }, 8000);
 });

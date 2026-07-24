@@ -721,6 +721,8 @@ async function runRunsFollowV2(
         const reports = reconstructSkillReportsFromV2(finalResult.findings);
         const totalDurationMs = reports.reduce((sum, r) => sum + (r.durationMs ?? 0), 0);
         reporter.renderSummary(reports, totalDurationMs);
+      } else {
+        reporter.warning('Run finished but its output could not be read');
       }
     }
     stopped = true;

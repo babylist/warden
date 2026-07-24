@@ -38,6 +38,35 @@ describe('resolveSkillConfigs', () => {
     expect(resolved?.model).toBeUndefined();
   });
 
+  it('gives two identical trigger blocks on the same skill distinct ids instead of colliding', () => {
+    const config: WardenConfig = {
+      version: 1,
+      skills: [
+        {
+          name: 'test-skill',
+          triggers: [
+            { type: 'pull_request', actions: ['opened'] },
+            { type: 'pull_request', actions: ['opened'] },
+          ],
+        },
+      ],
+    };
+
+    const resolved = resolveSkillConfigs(config);
+
+    expect(resolved).toHaveLength(2);
+    expect(resolved[0]?.id).not.toBe(resolved[1]?.id);
+    expect(resolved[0]?.skillExecutionId).not.toBe(resolved[1]?.skillExecutionId);
+  });
+
+  it('leaves a non-duplicated trigger identity unchanged', () => {
+    const [resolvedA] = resolveSkillConfigs(baseConfig);
+    const [resolvedB] = resolveSkillConfigs(baseConfig);
+
+    expect(resolvedA?.id).toBe(resolvedB?.id);
+    expect(resolvedA?.skillExecutionId).toBe(resolvedB?.skillExecutionId);
+  });
+
   it('applies defaults when skill has no config', () => {
     const config: WardenConfig = {
       ...baseConfig,

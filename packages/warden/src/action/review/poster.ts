@@ -242,6 +242,7 @@ async function postReviewToGitHub(
       repo,
       pull_number: pullNumber,
       review_id: review.id,
+      per_page: 100,
     });
     return {
       outcome: 'posted',

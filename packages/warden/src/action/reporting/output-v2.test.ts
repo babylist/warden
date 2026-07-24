@@ -489,6 +489,79 @@ describe('buildFindingsOutputV2', () => {
     ]);
   });
 
+  it('does not let a second own-finding anchor overwrite the first when two findings from one execution share a bare prior id', () => {
+    const primaryTrigger = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
+    const corroboratingTrigger = createTrigger({
+      id: 'trigger-2',
+      skillExecutionId: 'exec-2',
+      name: 'security-review-trigger',
+      skill: 'security-review',
+    });
+
+    const primaryResult = createResult({
+      triggerId: 'trigger-1',
+      report: createReport({
+        skill: 'code-review',
+        findings: [
+          createFinding({ id: 'WRD-001', reportedId: 'WRD-777' }),
+          createFinding({ id: 'WRD-002', reportedId: 'WRD-777' }),
+        ],
+      }),
+    });
+
+    // Both of code-review's own findings dedupe against prior comments that
+    // happen to share the same bare external id - only the first (comment
+    // 100) is truly corroborated by security-review; the second (comment
+    // 200) is not.
+    const observations: FindingObservation[] = [
+      {
+        outcome: 'deduped',
+        finding: createFinding({ id: 'WRD-001' }),
+        skill: 'code-review',
+        skillExecutionId: 'exec-1',
+        dedupe: { source: 'warden', matchType: 'hash', existingFindingId: 'WRD-777', existingCommentId: 100 },
+      },
+      {
+        outcome: 'deduped',
+        finding: createFinding({ id: 'WRD-002' }),
+        skill: 'code-review',
+        skillExecutionId: 'exec-1',
+        dedupe: { source: 'warden', matchType: 'hash', existingFindingId: 'WRD-777', existingCommentId: 200 },
+      },
+      {
+        outcome: 'deduped',
+        finding: createFinding({ id: 'WRD-099' }),
+        skill: 'security-review',
+        skillExecutionId: 'exec-2',
+        dedupe: {
+          source: 'warden',
+          matchType: 'hash',
+          existingFindingId: 'WRD-777',
+          existingCommentId: 100,
+          existingSkills: ['code-review'],
+        },
+      },
+    ];
+
+    const output = buildFindingsOutputV2(
+      [primaryResult],
+      [primaryTrigger, corroboratingTrigger],
+      observations,
+      { runId: '123' }
+    );
+
+    const f1 = output.findings.find((f) => f.id === 'WRD-001');
+    const f2 = output.findings.find((f) => f.id === 'WRD-002');
+
+    expect(f1?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-1', skillName: 'code-review', role: 'primary' },
+      { skillExecutionId: 'exec-2', skillName: 'security-review', role: 'corroborating', matchType: 'hash' },
+    ]);
+    expect(f2?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-1', skillName: 'code-review', role: 'primary' },
+    ]);
+  });
+
   it('does not attach corroboration to either finding when the same skill ran twice and their ids collide', () => {
     const firstExecution = createTrigger({ id: 'trigger-1', skillExecutionId: 'exec-1', skill: 'code-review' });
     const secondExecution = createTrigger({

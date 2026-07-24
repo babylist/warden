@@ -628,7 +628,14 @@ interface HeuristicCorroboratingCandidate {
 interface CorroboratingCandidates {
   exact: Map<string, FindingAttribution[]>;
   heuristic: Map<string, HeuristicCorroboratingCandidate[]>;
-  /** A resolving finding's own dedupe anchor, keyed the same as `reportedIdMap`. */
+  /**
+   * A resolving finding's own dedupe anchor, keyed by `${skillExecutionId}:${finding.id}` -
+   * the finding's own internal id, never its bare `existingFindingId`. Two
+   * findings from the same execution routinely share a bare `existingFindingId`
+   * (sequential model-assigned continuity ids collide across historical runs),
+   * so keying on that would let the second overwrite the first's anchor and
+   * silently drop a real corroborator resolved against the first.
+   */
   ownAnchors: Map<string, DedupeAnchor>;
 }
 
@@ -677,12 +684,7 @@ function buildCorroboratingAttributions(
       existingCommentId: observation.dedupe.existingCommentId,
       existingThreadId: observation.dedupe.existingThreadId,
     };
-    // syncReportedIds sets a deduped finding's reportedId to its own existingFindingId,
-    // so this observation's own resolution lookup uses existingFindingId, not the raw id.
-    // Assumes at most one anchor per (skillExecutionId, existingFindingId): the same
-    // execution deduping two of its own findings against different prior comments that
-    // coincidentally share an existingFindingId would have the second silently win here.
-    ownAnchors.set(`${skillExecutionId}:${observation.dedupe.existingFindingId}`, anchor);
+    ownAnchors.set(`${skillExecutionId}:${observation.finding.id}`, anchor);
 
     if (observation.dedupe.existingSkillExecutionId) {
       const key = exactCorroborationKey(observation.dedupe.existingSkillExecutionId, observation.dedupe.existingFindingId);
@@ -731,6 +733,7 @@ function buildCorroboratingAttributions(
 function resolveCorroboratingAttributions(
   candidates: CorroboratingCandidates,
   findingId: string,
+  ownFindingId: string,
   targetSkillName: string,
   targetSkillExecutionId: string,
   skillExecutionIdByName: Map<string, string>
@@ -746,7 +749,7 @@ function resolveCorroboratingAttributions(
   }
 
   if (skillExecutionIdByName.get(targetSkillName) === targetSkillExecutionId) {
-    const ownAnchor = candidates.ownAnchors.get(`${targetSkillExecutionId}:${findingId}`);
+    const ownAnchor = candidates.ownAnchors.get(`${targetSkillExecutionId}:${ownFindingId}`);
     const heuristicMatches = candidates.heuristic.get(findingId) ?? [];
     for (const candidate of heuristicMatches) {
       if (candidate.targetSkills && candidate.targetSkills.length > 0 && !candidate.targetSkills.includes(targetSkillName)) {
@@ -916,6 +919,7 @@ export function patchFindingsOutputV2Observations(
     const newCorroborators = resolveCorroboratingAttributions(
       corroboratingById,
       displayFindingId(finding),
+      finding.id,
       primarySkillName,
       originSkillExecutionId,
       skillExecutionIdByName
@@ -1102,6 +1106,7 @@ export function buildFindingsOutputV2(
           ...resolveCorroboratingAttributions(
             corroboratingById,
             displayFindingId(finding),
+            finding.id,
             report.skill,
             skillExecutionId,
             skillExecutionIdByName

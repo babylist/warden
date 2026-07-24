@@ -36,6 +36,7 @@ vi.mock('./base.js', async () => {
     ...actual,
     setFailed: mockedSetFailed,
     writeFindingsOutput: vi.fn(actual['writeFindingsOutput'] as (...args: unknown[]) => unknown),
+    writeSchemaV2OutputLive: vi.fn(actual['writeSchemaV2OutputLive'] as (...args: unknown[]) => unknown),
     ensureClaudeAuth: vi.fn((inputs: ActionInputs): void => {
       if (inputs.anthropicApiKey || inputs.oauthToken) {
         return;
@@ -105,7 +106,8 @@ import { runSkill } from '../../sdk/runner.js';
 import { buildScheduleEventContext } from '../../event/schedule-context.js';
 import { createOrUpdateIssue } from '../../output/github-issues.js';
 import { resolveSkillAsync } from '../../skills/loader.js';
-import { setFailed, writeFindingsOutput } from './base.js';
+import { setFailed, writeFindingsOutput, writeSchemaV2OutputLive } from './base.js';
+import { buildMetadataOutputV2 } from '../reporting/output-v2.js';
 import { runScheduleWorkflow } from './schedule.js';
 import { clearSkillsCache } from '../../skills/loader.js';
 
@@ -781,6 +783,37 @@ describe('runScheduleWorkflow', () => {
         const finalMetadata = JSON.parse(readFileSync(metadataFile, 'utf-8'));
         expect(finalMetadata.triggerResults).toHaveLength(2);
         expect(finalMetadata.skippedTriggers ?? []).toHaveLength(0);
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+        rmSync(`${findingsFile}.done`, { force: true });
+      }
+    });
+
+    it('reports a non-schedule trigger as no_event_match during a live write, never as pending', async () => {
+      mockRunSkill.mockResolvedValue(createSkillReport({ findings: [] }));
+
+      const metadataFile = getMetadataOutputPath(SCHEDULE_WITH_PR_SKILL_FIXTURES);
+      const findingsFile = getFindingsOutputPathV2(SCHEDULE_WITH_PR_SKILL_FIXTURES);
+
+      try {
+        await runScheduleWorkflow(
+          mockOctokit,
+          createDefaultInputs({ outputSchemaVersion: '2' }),
+          SCHEDULE_WITH_PR_SKILL_FIXTURES
+        );
+
+        const liveCalls = vi.mocked(writeSchemaV2OutputLive).mock.calls;
+        expect(liveCalls.length).toBeGreaterThan(0);
+
+        // The first live write fires right after the only schedule trigger
+        // completes, while the pull_request-type trigger is still unprocessed
+        // by this loop — exactly the state that used to mislabel it 'pending'.
+        const [context, resolvedTriggers, matchedTriggers, results, , options] = liveCalls[0]!;
+        const liveMetadata = buildMetadataOutputV2(context, resolvedTriggers, matchedTriggers, results, options);
+
+        const prOnlySkipped = liveMetadata.skippedTriggers?.find((t) => t.skillName === 'pr-only-skill');
+        expect(prOnlySkipped?.reason).toBe('no_event_match');
       } finally {
         rmSync(metadataFile, { force: true });
         rmSync(findingsFile, { force: true });

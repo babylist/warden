@@ -90,7 +90,9 @@ function writeSchemaV2ScheduleOutputsLive(
 ): void {
   if (inputs.outputSchemaVersion !== '2') return;
   const pendingTriggerIds = new Set(
-    resolvedTriggers.filter((t) => !processedTriggerIds.has(t.id)).map((t) => t.id)
+    resolvedTriggers
+      .filter((t) => t.type === 'schedule' && !processedTriggerIds.has(t.id))
+      .map((t) => t.id)
   );
   writeSchemaV2OutputLive(context, resolvedTriggers, matchedTriggers, results, [], {
     ...buildV2WriteOptions(inputs),
