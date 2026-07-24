@@ -216,7 +216,7 @@ function notifyVerdict(
     return;
   }
 
-  if (verdict.verdict === 'revise' && next) {
+  if (verdict.verdict === 'revise' && next && next !== finding) {
     options.onFindingProcessing?.({
       stage: 'verification',
       action: 'revised',
@@ -229,7 +229,10 @@ function notifyVerdict(
     return;
   }
 
-  if (verdict.verdict === 'keep') {
+  // 'revise' falls through here when applyVerdict couldn't produce a usable
+  // replacement (missing/invalid verdict.finding) and returned the original
+  // finding unchanged - that's a no-op, not a real revision.
+  if (verdict.verdict === 'keep' || verdict.verdict === 'revise') {
     options.onFindingProcessing?.({
       stage: 'verification',
       action: 'kept',

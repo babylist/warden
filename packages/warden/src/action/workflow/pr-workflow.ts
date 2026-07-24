@@ -1561,13 +1561,13 @@ async function createCompletedSkillChecksForReport(
       continue;
     }
 
-    await createFailedSkillCheck(
+    const failedCheck = await createFailedSkillCheck(
       octokit,
       result.skillName,
       result.error ?? new Error('Trigger did not produce a report'),
       options
     );
-    updatedResults.push(result);
+    updatedResults.push({ ...result, checkRunUrl: failedCheck.url, checkRunId: failedCheck.checkRunId });
   }
 
   return updatedResults;

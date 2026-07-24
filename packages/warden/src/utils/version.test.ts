@@ -12,7 +12,7 @@ describe('getVersion', () => {
   it('reads the package.json two levels up from the compiled file', async () => {
     vi.doMock('node:fs', () => ({
       existsSync: (path: string) => occurrencesOf('packages/warden', path) <= 1,
-      readFileSync: () => JSON.stringify({ version: '1.2.3' }),
+      readFileSync: () => JSON.stringify({ name: '@sentry/warden', version: '1.2.3' }),
     }));
     const { getVersion } = await import('./version.js');
     expect(getVersion()).toBe('1.2.3');
@@ -23,8 +23,20 @@ describe('getVersion', () => {
       existsSync: (path: string) => occurrencesOf('packages/warden', path) === 2,
       readFileSync: (path: string) =>
         occurrencesOf('packages/warden', path) === 2
-          ? JSON.stringify({ version: '0.42.0' })
+          ? JSON.stringify({ name: '@sentry/warden', version: '0.42.0' })
           : JSON.stringify({ name: 'warden-monorepo' }),
+    }));
+    const { getVersion } = await import('./version.js');
+    expect(getVersion()).toBe('0.42.0');
+  });
+
+  it('ignores a version field on a package.json that is not @sentry/warden (e.g. the monorepo root)', async () => {
+    vi.doMock('node:fs', () => ({
+      existsSync: () => true,
+      readFileSync: (path: string) =>
+        occurrencesOf('packages/warden', path) === 2
+          ? JSON.stringify({ name: '@sentry/warden', version: '0.42.0' })
+          : JSON.stringify({ name: 'warden-monorepo', version: '1.0.0' }),
     }));
     const { getVersion } = await import('./version.js');
     expect(getVersion()).toBe('0.42.0');

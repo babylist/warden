@@ -247,6 +247,31 @@ describe('verifyFindings', () => {
     expect(verified?.additionalLocations).toBeUndefined();
   });
 
+  it('emits a kept processing event, not revised, when a revise verdict has no usable finding', async () => {
+    const runtime = mockRuntime(JSON.stringify({
+      verdict: 'revise',
+      finding: null,
+      reason: 'impact is narrower',
+    }));
+    vi.mocked(getRuntime).mockReturnValue(runtime);
+    const onFindingProcessing = vi.fn();
+
+    const finding = makeFinding();
+    const result = await verifyFindings([finding], {
+      repoPath: '/repo',
+      skill: makeSkill(),
+      onFindingProcessing,
+    });
+
+    expect(result.findings).toEqual([finding]);
+    expect(onFindingProcessing).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'verification',
+      action: 'kept',
+      finding,
+    }));
+    expect(onFindingProcessing).not.toHaveBeenCalledWith(expect.objectContaining({ action: 'revised' }));
+  });
+
   it('accepts verifier JSON when verdict is not the first key', async () => {
     const runtime = mockRuntime('{"reason":"guarded upstream","verdict":"reject"}');
     vi.mocked(getRuntime).mockReturnValue(runtime);

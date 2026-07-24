@@ -37,7 +37,7 @@ treat a `runId`/`schemaVersion` mismatch between the two as a hard error.
   result or a finding: repo/PR identity, harness version, resolved run-wide
   config, which skills/triggers were configured and whether they fired, and
   why any were skipped.
-- **`warden-findings.json`** — everything that's a direct, detailed record of
+- **`warden-findings-v2.json`** — everything that's a direct, detailed record of
   a skill executing and what it produced: skill executions (model, duration,
   cost, severity breakdown, errors — these are results, not context) and the
   findings themselves.

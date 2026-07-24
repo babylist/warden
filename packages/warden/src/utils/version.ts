@@ -4,10 +4,11 @@ import { fileURLToPath } from 'node:url';
 
 let cachedVersion: string | undefined;
 
+/** Only trusts a version from the actual @sentry/warden package.json, not just any package.json that happens to exist at a candidate path. */
 function readPackageVersion(path: string): string | undefined {
   if (!existsSync(path)) return undefined;
-  const pkg = JSON.parse(readFileSync(path, 'utf-8')) as { version?: string };
-  return pkg.version;
+  const pkg = JSON.parse(readFileSync(path, 'utf-8')) as { name?: string; version?: string };
+  return pkg.name === '@sentry/warden' ? pkg.version : undefined;
 }
 
 export function getVersion(): string {
