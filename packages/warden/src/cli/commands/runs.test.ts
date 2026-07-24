@@ -337,6 +337,151 @@ describe('runRunsShow', () => {
   });
 });
 
+describe('runRunsShow — schema v2 replay', () => {
+  let testDir: string;
+
+  beforeEach(() => {
+    testDir = join(tmpdir(), `warden-logs-show-v2-${Date.now()}`);
+    mkdirSync(testDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    if (existsSync(testDir)) {
+      rmSync(testDir, { recursive: true });
+    }
+  });
+
+  function writeV2Fixture(
+    dir: string,
+    runId: string,
+    overrides: { metadata?: Record<string, unknown>; findings?: Record<string, unknown> } = {},
+  ): { metadataPath: string; findingsPath: string } {
+    const metadata = {
+      schemaVersion: '2',
+      runId,
+      generatedAt: new Date('2026-02-18T10:00:00.000Z').toISOString(),
+      harness: { name: 'warden', version: '0.42.0' },
+      repository: { owner: 'acme', name: 'repo', fullName: 'acme/repo' },
+      event: 'pull_request',
+      ...overrides.metadata,
+    };
+
+    const findings = {
+      schemaVersion: '2',
+      runId,
+      skillExecutions: [
+        {
+          skillExecutionId: 'exec-1',
+          skillName: 'security-review',
+          summary: 'Found 1 issue',
+          durationMs: 1500,
+          findingsBySeverity: { high: 1, medium: 0, low: 0 },
+          findingIds: ['f1'],
+        },
+      ],
+      findings: [
+        {
+          id: 'f1',
+          contentHash: 'hash1',
+          severity: 'high',
+          title: 'SQL Injection',
+          description: 'Bad query',
+          reportedBy: [{ skillExecutionId: 'exec-1', skillName: 'security-review', role: 'primary' }],
+          provenance: { originSkillExecutionId: 'exec-1' },
+        },
+      ],
+      findingObservations: [],
+      summary: {
+        totalFindings: 1,
+        totalSkillExecutions: 1,
+        bySeverity: { high: 1, medium: 0, low: 0 },
+        byOutcome: { posted: 1, deduped: 0, skipped: 0, resolved: 0, failed: 0 },
+      },
+      ...overrides.findings,
+    };
+
+    const metadataPath = join(dir, 'warden-metadata.json');
+    const findingsPath = join(dir, 'warden-findings-v2.json');
+    writeFileSync(metadataPath, JSON.stringify(metadata));
+    writeFileSync(findingsPath, JSON.stringify(findings));
+    return { metadataPath, findingsPath };
+  }
+
+  it('replays a schema-v2 metadata+findings pair', async () => {
+    const { metadataPath, findingsPath } = writeV2Fixture(testDir, 'run-1234');
+
+    const reporter = createTestReporter();
+    const options = createDefaultOptions();
+
+    const exitCode = await runRunsShow(
+      { subcommand: 'show', files: [metadataPath, findingsPath] },
+      options,
+      reporter,
+    );
+    expect(exitCode).toBe(0);
+  });
+
+  it('renders the finding in JSON mode regardless of file order', async () => {
+    const { metadataPath, findingsPath } = writeV2Fixture(testDir, 'run-1234');
+
+    const reporter = createTestReporter();
+    const stdoutSpy = vi.spyOn(process.stdout, 'write').mockImplementation(() => true);
+
+    const exitCode = await runRunsShow(
+      { subcommand: 'show', files: [findingsPath, metadataPath] },
+      { ...createDefaultOptions(), json: true },
+      reporter,
+    );
+
+    expect(exitCode).toBe(0);
+    const output = stdoutSpy.mock.calls.map((call) => call[0]).join('');
+    expect(output).toContain('SQL Injection');
+
+    stdoutSpy.mockRestore();
+  });
+
+  it('errors when runId mismatches between metadata and findings', async () => {
+    const { metadataPath, findingsPath } = writeV2Fixture(testDir, 'run-1234', {
+      findings: { runId: 'run-9999' },
+    });
+
+    const reporter = createTestReporter();
+    const exitCode = await runRunsShow(
+      { subcommand: 'show', files: [metadataPath, findingsPath] },
+      createDefaultOptions(),
+      reporter,
+    );
+    expect(exitCode).toBe(1);
+  });
+
+  it('errors when only one file of the pair is given', async () => {
+    const { metadataPath } = writeV2Fixture(testDir, 'run-1234');
+
+    const reporter = createTestReporter();
+    const exitCode = await runRunsShow(
+      { subcommand: 'show', files: [metadataPath] },
+      createDefaultOptions(),
+      reporter,
+    );
+    expect(exitCode).toBe(1);
+  });
+
+  it('errors when both files parse as the same schema-v2 kind', async () => {
+    const { metadataPath } = writeV2Fixture(testDir, 'run-1234');
+    const secondMetadataPath = join(testDir, 'warden-metadata-2.json');
+    writeFileSync(secondMetadataPath, readFileSync(metadataPath, 'utf-8'));
+
+    const reporter = createTestReporter();
+    const exitCode = await runRunsShow(
+      { subcommand: 'show', files: [metadataPath, secondMetadataPath] },
+      createDefaultOptions(),
+      reporter,
+    );
+    expect(exitCode).toBe(1);
+  });
+});
+
 describe('runRunsGc', () => {
   let testDir: string;
 

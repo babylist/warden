@@ -36,6 +36,8 @@ interface BaseFindingObservation {
 
 export interface PostedFindingObservation extends BaseFindingObservation {
   outcome: 'posted';
+  githubCommentId?: number;
+  githubCommentUrl?: string;
 }
 
 export interface DedupedFindingObservation extends BaseFindingObservation {
@@ -70,6 +72,8 @@ export const FindingObservationSchema = z.discriminatedUnion('outcome', [
     finding: FindingSchema,
     skill: z.string().optional(),
     skillExecutionId: z.string().optional(),
+    githubCommentId: z.number().int().positive().optional(),
+    githubCommentUrl: z.string().optional(),
   }),
   z.object({
     outcome: z.literal('deduped'),

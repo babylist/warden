@@ -9,7 +9,7 @@ import type { Octokit } from '@octokit/rest';
 import type { EventContext, Finding } from '../../types/index.js';
 import { filterFindings } from '../../types/index.js';
 import { shouldFail } from '../../triggers/matcher.js';
-import type { RenderResult } from '../../output/types.js';
+import type { GitHubComment, RenderResult } from '../../output/types.js';
 import { renderSkillReport, renderFindingsBody } from '../../output/renderer.js';
 import {
   deduplicateFindings,
@@ -143,6 +143,41 @@ function syncReportedIds(reportFindings: Finding[], actions: DeduplicateResult['
  */
 type PostReviewOutcome = 'posted' | 'checks_only' | 'no_review' | 'blocked';
 
+/** A newly posted review comment's real GitHub identity, keyed by the finding it renders. */
+export type PostedCommentsByFindingId = Map<string, { id: number; url: string }>;
+
+export interface PostReviewResult {
+  outcome: PostReviewOutcome;
+  commentsByFindingId?: PostedCommentsByFindingId;
+}
+
+/**
+ * Match the review's own rendered comments (which carry `findingId`) against
+ * GitHub's response for the same review (which carries the real `id`/`html_url`
+ * but not `findingId`) by exact body text - the only field both sides share
+ * that's unique enough to correlate on, since the API response doesn't echo
+ * back which request-side comment produced which result.
+ */
+function matchPostedCommentsToFindings(
+  rendered: GitHubComment[],
+  posted: { id: number; html_url: string; body: string }[]
+): PostedCommentsByFindingId {
+  const byFindingId: PostedCommentsByFindingId = new Map();
+  const availablePosted = [...posted];
+
+  for (const comment of rendered) {
+    if (!comment.findingId) continue;
+    const index = availablePosted.findIndex((p) => p.body === comment.body);
+    if (index === -1) continue;
+    const [match] = availablePosted.splice(index, 1);
+    if (match) {
+      byFindingId.set(comment.findingId, { id: match.id, url: match.html_url });
+    }
+  }
+
+  return byFindingId;
+}
+
 /**
  * Post a PR review to GitHub.
  */
@@ -151,13 +186,13 @@ async function postReviewToGitHub(
   context: EventContext,
   result: RenderResult,
   feedbackGate: ReviewFeedbackGate
-): Promise<PostReviewOutcome> {
+): Promise<PostReviewResult> {
   if (!context.pullRequest) {
-    return 'no_review';
+    return { outcome: 'no_review' };
   }
 
   if (!result.review) {
-    return 'no_review';
+    return { outcome: 'no_review' };
   }
 
   const { owner, name: repo } = context.repository;
@@ -178,16 +213,16 @@ async function postReviewToGitHub(
   // Non-blocking body-only reviews cannot be resolved as review threads.
   // Keep those findings in Checks instead of leaving stale PR timeline entries.
   if (reviewComments.length === 0 && result.review.event === 'COMMENT') {
-    return 'checks_only';
+    return { outcome: 'checks_only' };
   }
 
   // Duplicate-action comment updates between the poster's gate check and this
   // write can outlive the gate's cache window; verify once more.
   if (!(await feedbackGate.canWrite())) {
-    return 'blocked';
+    return { outcome: 'blocked' };
   }
 
-  await octokit.pulls.createReview({
+  const { data: review } = await octokit.pulls.createReview({
     owner,
     repo,
     pull_number: pullNumber,
@@ -197,7 +232,27 @@ async function postReviewToGitHub(
     comments: reviewComments,
   });
 
-  return 'posted';
+  if (reviewComments.length === 0) {
+    return { outcome: 'posted' };
+  }
+
+  try {
+    const { data: postedComments } = await octokit.pulls.listCommentsForReview({
+      owner,
+      repo,
+      pull_number: pullNumber,
+      review_id: review.id,
+    });
+    return {
+      outcome: 'posted',
+      commentsByFindingId: matchPostedCommentsToFindings(result.review.comments, postedComments),
+    };
+  } catch (error) {
+    // The review itself posted successfully; losing the comment id/url lookup
+    // only degrades output-schema linkage, not the review the user sees.
+    warnAction(`Failed to fetch posted review comment ids: ${error}`);
+    return { outcome: 'posted' };
+  }
 }
 
 /**
@@ -443,9 +498,9 @@ export async function postTriggerReview(
         });
       }
 
-      let postOutcome: PostReviewOutcome = 'no_review';
+      let postResult: PostReviewResult = { outcome: 'no_review' };
       try {
-        postOutcome = await postReviewToGitHub(octokit, context, renderResultToPost, deps.feedbackGate);
+        postResult = await postReviewToGitHub(octokit, context, renderResultToPost, deps.feedbackGate);
       } catch (error) {
         if (!isLineResolutionError(error)) {
           throw error;
@@ -453,19 +508,19 @@ export async function postTriggerReview(
         if (renderResultToPost.review?.event === 'REQUEST_CHANGES') {
           warnAction(`Inline comments failed for ${result.triggerName}, posting findings in review body`);
           const fallback = moveCommentsToBody(renderResultToPost, postedFindings, skill);
-          postOutcome = await postReviewToGitHub(octokit, context, fallback, deps.feedbackGate);
+          postResult = await postReviewToGitHub(octokit, context, fallback, deps.feedbackGate);
         } else {
           warnAction(`Inline comments failed for ${result.triggerName}, falling back to checks only`);
-          postOutcome = 'checks_only';
+          postResult = { outcome: 'checks_only' };
         }
       }
-      if (postOutcome === 'checks_only') {
+      if (postResult.outcome === 'checks_only') {
         for (const finding of postedFindings) {
           findingObservations.push({ outcome: 'skipped', finding, skill, skillExecutionId, skippedReason: 'no_inline_location' });
         }
         return emptyReviewPostResult(newComments, activeWardenCommentIds, findingObservations);
       }
-      if (postOutcome !== 'posted') {
+      if (postResult.outcome !== 'posted') {
         return emptyReviewPostResult(newComments, activeWardenCommentIds, findingObservations);
       }
       // COMMENT reviews post with an empty body, so locationless findings that
@@ -477,7 +532,15 @@ export async function postTriggerReview(
           findingObservations.push({ outcome: 'skipped', finding, skill, skillExecutionId, skippedReason: 'no_inline_location' });
           continue;
         }
-        findingObservations.push({ outcome: 'posted', finding, skill, skillExecutionId });
+        const postedComment = postResult.commentsByFindingId?.get(finding.id);
+        findingObservations.push({
+          outcome: 'posted',
+          finding,
+          skill,
+          skillExecutionId,
+          githubCommentId: postedComment?.id,
+          githubCommentUrl: postedComment?.url,
+        });
         const comment = findingToExistingComment(finding, skill, skillExecutionId);
         if (comment) {
           newComments.push(comment);

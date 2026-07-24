@@ -50,6 +50,7 @@ describe('postTriggerReview', () => {
     pulls: {
       createReview: vi.fn().mockResolvedValue({}),
       get: vi.fn().mockResolvedValue({ data: { head: { sha: 'abc123' } } }),
+      listCommentsForReview: vi.fn().mockResolvedValue({ data: [] }),
     },
   } as unknown as Octokit;
 
@@ -242,6 +243,89 @@ describe('postTriggerReview', () => {
       body: '',
       comments: [expect.objectContaining({ path: 'test.ts', line: 10, side: 'RIGHT', body: 'Test comment' })],
     });
+  });
+
+  it('attaches the real comment id/url once GitHub returns the posted review', async () => {
+    const finding = createFinding();
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      skillName: 'test-skill',
+      report: {
+        skill: 'test-skill',
+        summary: 'Found 1 issue',
+        findings: [finding],
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: createRenderResult({
+        review: {
+          event: 'COMMENT',
+          body: 'Test review',
+          comments: [{ path: 'test.ts', line: 10, body: 'Test comment', findingId: finding.id }],
+        },
+      }),
+      reportOn: 'low',
+    };
+
+    vi.mocked(findingToExistingComment).mockReturnValue(createExistingComment());
+    vi.mocked(mockOctokit.pulls.createReview).mockResolvedValueOnce({ data: { id: 555 } } as never);
+    vi.mocked(mockOctokit.pulls.listCommentsForReview).mockResolvedValueOnce({
+      data: [{ id: 987, html_url: 'https://github.com/test-owner/test-repo/pull/1#discussion_r987', body: 'Test comment' }],
+    } as never);
+
+    const postResult = await postTriggerReview({
+      result,
+      existingComments: [],
+      apiKey: 'test-key',
+    }, mockDeps);
+
+    expect(mockOctokit.pulls.listCommentsForReview).toHaveBeenCalledWith(
+      expect.objectContaining({ owner: 'test-owner', repo: 'test-repo', pull_number: 1, review_id: 555 })
+    );
+    expect(postResult.findingObservations).toEqual([
+      expect.objectContaining({
+        outcome: 'posted',
+        finding,
+        githubCommentId: 987,
+        githubCommentUrl: 'https://github.com/test-owner/test-repo/pull/1#discussion_r987',
+      }),
+    ]);
+  });
+
+  it('still reports the finding as posted when fetching the real comment id fails', async () => {
+    const finding = createFinding();
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      skillName: 'test-skill',
+      report: {
+        skill: 'test-skill',
+        summary: 'Found 1 issue',
+        findings: [finding],
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: createRenderResult({
+        review: {
+          event: 'COMMENT',
+          body: 'Test review',
+          comments: [{ path: 'test.ts', line: 10, body: 'Test comment', findingId: finding.id }],
+        },
+      }),
+      reportOn: 'low',
+    };
+
+    vi.mocked(findingToExistingComment).mockReturnValue(createExistingComment());
+    vi.mocked(mockOctokit.pulls.createReview).mockResolvedValueOnce({ data: { id: 555 } } as never);
+    vi.mocked(mockOctokit.pulls.listCommentsForReview).mockRejectedValueOnce(new Error('rate limited'));
+
+    const postResult = await postTriggerReview({
+      result,
+      existingComments: [],
+      apiKey: 'test-key',
+    }, mockDeps);
+
+    expect(postResult.posted).toBe(true);
+    expect(postResult.findingObservations).toEqual([
+      expect.objectContaining({ outcome: 'posted', finding, githubCommentId: undefined, githubCommentUrl: undefined }),
+    ]);
   });
 
   it('stamps the posted observation with the trigger result\'s own skillExecutionId', async () => {

@@ -59,6 +59,7 @@ function toAnalysisChunkingConfig(
  */
 export interface TriggerCheckRun {
   url?: string;
+  checkRunId?: number;
   complete(report: SkillReport, options: TriggerCheckCompleteOptions): Promise<void>;
   fail(error: unknown): Promise<void>;
 }
@@ -125,6 +126,9 @@ export interface TriggerResult {
   requestChanges?: boolean;
   failCheck?: boolean;
   checkRunUrl?: string;
+  checkRunId?: number;
+  issueNumber?: number;
+  issueUrl?: string;
   maxFindings?: number;
   error?: unknown;
   /** Verification/merge events for this run, independent of CLI debug verbosity. */
@@ -159,10 +163,12 @@ export async function executeTrigger(
       // Create skill check (only for PRs)
       let skillCheck: TriggerCheckRun | undefined;
       let skillCheckUrl: string | undefined;
+      let skillCheckId: number | undefined;
       if (deps.checks && context.pullRequest) {
         try {
           skillCheck = await deps.checks.start(trigger.skill);
           skillCheckUrl = skillCheck.url;
+          skillCheckId = skillCheck.checkRunId;
         } catch (error) {
           console.error(`::warning::Failed to create skill check for ${trigger.skill}: ${error}`);
         }
@@ -281,6 +287,7 @@ export async function executeTrigger(
           requestChanges,
           failCheck,
           checkRunUrl: skillCheckUrl,
+          checkRunId: skillCheckId,
           maxFindings,
           findingProcessingEvents,
         };

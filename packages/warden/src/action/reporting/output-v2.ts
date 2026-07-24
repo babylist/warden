@@ -15,14 +15,17 @@ import type {
   AuxiliaryUsageAttributionMap,
   AuxiliaryUsageMap,
   EventContext,
+  Finding,
   Severity,
   SeverityThreshold,
+  SkillReport,
 } from '../../types/index.js';
 import type { ResolvedTrigger } from '../../config/loader.js';
 import { matchPullRequestState } from '../../triggers/matcher.js';
 import type { TriggerResult } from '../triggers/executor.js';
 import { buildConfiguredSkillsList, serializeTriggerError } from './output.js';
 import { generateContentHash } from '../../output/dedup.js';
+import { determineConclusion } from '../../output/github-checks.js';
 import { getVersion } from '../../utils/version.js';
 import { displayFindingId } from '../../cli/output/formatters.js';
 import type { FindingObservation } from './outcomes.js';
@@ -105,6 +108,9 @@ const ResolvedDefaultsSchema = z.object({
   synthesisModel: z.string().optional(),
   runtime: z.string().optional(),
   verifyFindings: z.boolean().optional(),
+  failCheck: z.boolean().optional(),
+  requestChanges: z.boolean().optional(),
+  maxFindings: z.number().int().nonnegative().optional(),
 });
 
 export const WardenMetadataSchema = z.object({
@@ -149,6 +155,12 @@ export const SkillExecutionSchema = z.object({
   failedExtractions: z.number().int().nonnegative().optional(),
   error: SkillErrorSchema.optional(),
   verifierRejections: VerifierRejectionsSchema.optional(),
+  checkRunUrl: z.string().optional(),
+  checkRunId: z.number().int().positive().optional(),
+  reviewEvent: z.enum(['APPROVE', 'REQUEST_CHANGES', 'COMMENT']).optional(),
+  checkConclusion: z.enum(['success', 'failure', 'neutral', 'cancelled']).optional(),
+  issueNumber: z.number().int().positive().optional(),
+  issueUrl: z.string().optional(),
 });
 export type SkillExecution = z.infer<typeof SkillExecutionSchema>;
 
@@ -213,6 +225,8 @@ export const ExportedFindingV2Schema = z.object({
   sourceSnippet: SourceSnippetSchema.optional(),
   reportedBy: z.array(FindingAttributionSchema).min(1),
   provenance: FindingProvenanceSchema,
+  githubCommentId: z.number().int().positive().optional(),
+  githubCommentUrl: z.string().optional(),
 });
 export type ExportedFindingV2 = z.infer<typeof ExportedFindingV2Schema>;
 
@@ -262,6 +276,8 @@ export const FindingObservationV2Schema = z.discriminatedUnion('outcome', [
     outcome: z.literal('posted'),
     origin: FindingOriginSchema,
     finding: ObservedFindingSchema,
+    githubCommentId: z.number().int().positive().optional(),
+    githubCommentUrl: z.string().optional(),
   }),
   z.object({
     outcome: z.literal('deduped'),
@@ -393,6 +409,12 @@ export interface BuildMetadataOutputV2Options {
   failOn?: SeverityThreshold;
   /** Action-level fallback used by every trigger via `trigger.reportOn ?? inputs.reportOn`. */
   reportOn?: SeverityThreshold;
+  /** Action-level fallback used by every trigger via `trigger.failCheck ?? inputs.failCheck`. */
+  failCheck?: boolean;
+  /** Action-level fallback used by every trigger via `trigger.requestChanges ?? inputs.requestChanges`. */
+  requestChanges?: boolean;
+  /** Action-level fallback used by every trigger via `trigger.maxFindings ?? inputs.maxFindings`. */
+  maxFindings?: number;
 }
 
 /** Build the schema-v2 metadata output: static run/repo/harness identity plus the resolved trigger roster. */
@@ -471,6 +493,9 @@ export function buildMetadataOutputV2(
         synthesisModel: primary.synthesisModel,
         runtime: primary.runtime,
         verifyFindings: primary.verifyFindings,
+        failCheck: primary.failCheck ?? options.failCheck,
+        requestChanges: primary.requestChanges ?? options.requestChanges,
+        maxFindings: primary.maxFindings ?? options.maxFindings,
       },
     }),
   });
@@ -550,7 +575,13 @@ function buildFindingObservationsV2(
       case 'resolved':
         return { outcome: 'resolved', origin, finding: findingSnapshot, resolvedReason: observation.resolvedReason };
       case 'posted':
-        return { outcome: 'posted', origin, finding: findingSnapshot };
+        return {
+          outcome: 'posted',
+          origin,
+          finding: findingSnapshot,
+          githubCommentId: observation.githubCommentId,
+          githubCommentUrl: observation.githubCommentUrl,
+        };
       case 'failed':
         return { outcome: 'failed', origin, finding: findingSnapshot };
     }
@@ -748,9 +779,40 @@ function buildReportedIdMap(
   return reportedIds;
 }
 
+interface GithubCommentRef {
+  githubCommentId?: number;
+  githubCommentUrl?: string;
+}
+
+/**
+ * `githubCommentId`/`githubCommentUrl` only exist on the `posted` variant of
+ * a `FindingObservation` (they come back from the GitHub API at posting
+ * time, unlike `reportedId` which `syncReportedIds` writes onto the `Finding`
+ * object itself) - so, unlike reportedId, this has no live-object fallback
+ * and must always be looked up from `findingObservations`.
+ */
+function buildGithubCommentMap(
+  findingObservations: FindingObservation[],
+  skillExecutionIdByName: Map<string, string>
+): Map<string, GithubCommentRef> {
+  const commentsById = new Map<string, GithubCommentRef>();
+  for (const observation of findingObservations) {
+    if (observation.outcome !== 'posted') continue;
+    if (!observation.githubCommentId && !observation.githubCommentUrl) continue;
+    const skillExecutionId = resolveObservationSkillExecutionId(observation.skillExecutionId, observation.skill, skillExecutionIdByName);
+    commentsById.set(`${skillExecutionId}:${observation.finding.id}`, {
+      githubCommentId: observation.githubCommentId,
+      githubCommentUrl: observation.githubCommentUrl,
+    });
+  }
+  return commentsById;
+}
+
 interface SkillExecutionUsageUpdate {
   usage: SkillExecution['usage'];
   auxiliaryUsage: SkillExecution['auxiliaryUsage'];
+  checkRunUrl: SkillExecution['checkRunUrl'];
+  checkRunId: SkillExecution['checkRunId'];
 }
 
 /**
@@ -759,7 +821,11 @@ interface SkillExecutionUsageUpdate {
  * patched here was already built. Unlike verification/merge provenance,
  * this isn't data that only `findingProcessingEvents` can reconstruct -
  * `results` carries the live, already-mutated report at patch time, the
- * same source v1's write reads from, so it can be folded in directly.
+ * same source v1's write reads from, so it can be folded in directly. The
+ * same is true of `checkRunUrl`/`checkRunId`: report mode creates its skill
+ * checks as already-completed check runs (`createCompletedSkillChecksForReport`)
+ * only after the analyze-phase payload was built, so `result` is the only
+ * place this run's real check identity exists.
  */
 function buildSkillExecutionUsageUpdates(
   results: TriggerResult[],
@@ -779,6 +845,8 @@ function buildSkillExecutionUsageUpdates(
     updates.set(skillExecutionId, {
       usage: report.usage,
       auxiliaryUsage: auxiliaryUsageEntries.length > 0 ? auxiliaryUsageEntries : undefined,
+      checkRunUrl: result.checkRunUrl,
+      checkRunId: result.checkRunId,
     });
   }
 
@@ -811,18 +879,33 @@ export function patchFindingsOutputV2Observations(
   const { observations, byOutcome } = buildFindingObservationsV2(findingObservations, skillExecutionIdByName);
   const corroboratingById = buildCorroboratingAttributions(findingObservations, skillExecutionIdByName);
   const reportedIdMap = buildReportedIdMap(findingObservations, skillExecutionIdByName);
+  const githubCommentMap = buildGithubCommentMap(findingObservations, skillExecutionIdByName);
   const usageUpdates = buildSkillExecutionUsageUpdates(results, triggerById, skillExecutionIdByName);
 
   const skillExecutions = base.skillExecutions.map((execution) => {
     const update = usageUpdates.get(execution.skillExecutionId);
     if (!update) return execution;
-    return { ...execution, usage: update.usage, auxiliaryUsage: update.auxiliaryUsage };
+    return {
+      ...execution,
+      usage: update.usage,
+      auxiliaryUsage: update.auxiliaryUsage,
+      checkRunUrl: update.checkRunUrl,
+      checkRunId: update.checkRunId,
+    };
   });
 
   const findings = base.findings.map((original) => {
     const originSkillExecutionId = original.reportedBy.find((r) => r.role === 'primary')?.skillExecutionId ?? '';
     const reportedId = reportedIdMap.get(`${originSkillExecutionId}:${original.id}`);
-    const finding = reportedId ? { ...original, reportedId } : original;
+    const githubComment = githubCommentMap.get(`${originSkillExecutionId}:${original.id}`);
+    const finding = {
+      ...original,
+      ...(reportedId && { reportedId }),
+      ...(githubComment && {
+        githubCommentId: githubComment.githubCommentId,
+        githubCommentUrl: githubComment.githubCommentUrl,
+      }),
+    };
 
     const primarySkillName = finding.reportedBy.find((r) => r.role === 'primary')?.skillName ?? '';
     const newCorroborators = resolveCorroboratingAttributions(
@@ -943,6 +1026,7 @@ export function buildFindingsOutputV2(
   const triggerById = new Map(matchedTriggers.map((t) => [t.id, t]));
   const skillExecutionIdByName = skillExecutionIdByNameFrom(matchedTriggers);
   const corroboratingById = buildCorroboratingAttributions(findingObservations, skillExecutionIdByName);
+  const githubCommentMap = buildGithubCommentMap(findingObservations, skillExecutionIdByName);
 
   const skillExecutions: SkillExecution[] = [];
   const findings: ExportedFindingV2[] = [];
@@ -982,9 +1066,16 @@ export function buildFindingsOutputV2(
       failedExtractions: report.failedExtractions,
       error: report.error,
       verifierRejections: report.verifierRejections,
+      checkRunUrl: result.checkRunUrl,
+      checkRunId: result.checkRunId,
+      reviewEvent: result.renderResult?.review?.event,
+      checkConclusion: determineConclusion(report.findings, result.failOn, result.failCheck),
+      issueNumber: result.issueNumber,
+      issueUrl: result.issueUrl,
     });
 
     for (const finding of report.findings) {
+      const githubComment = githubCommentMap.get(`${skillExecutionId}:${finding.id}`);
       findings.push({
         id: finding.id,
         reportedId: finding.reportedId,
@@ -1013,6 +1104,8 @@ export function buildFindingsOutputV2(
           verification: verificationById.get(finding.id),
           merge: mergeById.get(finding.id),
         },
+        githubCommentId: githubComment?.githubCommentId,
+        githubCommentUrl: githubComment?.githubCommentUrl,
       });
     }
   }
@@ -1032,5 +1125,59 @@ export function buildFindingsOutputV2(
       bySeverity: severityBreakdown(findings),
       byOutcome,
     },
+  });
+}
+
+export function toFindingFromV2(finding: ExportedFindingV2): Finding {
+  return {
+    id: finding.id,
+    reportedId: finding.reportedId,
+    severity: finding.severity,
+    confidence: finding.confidence,
+    title: finding.title,
+    description: finding.description,
+    verification: finding.verification,
+    location: finding.location,
+    additionalLocations: finding.additionalLocations,
+    sourceSnippet: finding.sourceSnippet,
+  };
+}
+
+/**
+ * Rebuild the `SkillReport[]` a v2 artifact pair describes, independent of any
+ * currently-configured triggers. Used for CLI replay (`warden runs show`),
+ * where the goal is "show me what this run produced," not
+ * `buildReportModeResultsV2`'s "should I re-post this against current config."
+ */
+export function reconstructSkillReportsFromV2(findingsOutput: WardenFindingsV2): SkillReport[] {
+  const findingsByExecutionScopedId = new Map(
+    findingsOutput.findings.map((finding) => [`${finding.provenance.originSkillExecutionId}:${finding.id}`, finding])
+  );
+
+  return findingsOutput.skillExecutions.map((execution) => {
+    const findings = execution.findingIds.flatMap((id) => {
+      const finding = findingsByExecutionScopedId.get(`${execution.skillExecutionId}:${id}`);
+      return finding ? [toFindingFromV2(finding)] : [];
+    });
+
+    const { usage: auxiliaryUsage, attribution: auxiliaryUsageAttribution } = fromAuxiliaryUsageEntries(
+      execution.auxiliaryUsage
+    );
+
+    return {
+      skill: execution.skillName,
+      summary: execution.summary,
+      findings,
+      durationMs: execution.durationMs,
+      usage: execution.usage,
+      auxiliaryUsage,
+      auxiliaryUsageAttribution,
+      failedHunks: execution.failedHunks,
+      failedExtractions: execution.failedExtractions,
+      error: execution.error,
+      verifierRejections: execution.verifierRejections,
+      model: execution.model,
+      runtime: execution.runtime,
+    };
   });
 }

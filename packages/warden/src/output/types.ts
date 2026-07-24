@@ -10,6 +10,8 @@ export interface GitHubComment {
   side?: 'LEFT' | 'RIGHT';
   start_line?: number;
   start_side?: 'LEFT' | 'RIGHT';
+  /** The finding this comment renders, for matching back to the real comment id/url once posted. */
+  findingId?: string;
 }
 
 export interface GitHubReview {

@@ -406,15 +406,16 @@ const HELP_COMMANDS: Record<HelpTarget, HelpCommandSpec> = {
   },
   'runs:show': {
     summary: 'Show results from saved logs or run IDs',
-    description: 'Render findings from one or more saved JSONL logs or short run IDs.',
+    description: 'Render findings from one or more saved JSONL logs, short run IDs, or a schema-v2 metadata+findings file pair from the GitHub Action.',
     usage: ['warden runs show <files...> [options]'],
     arguments: [
-      { label: 'files...', description: 'JSONL paths or short run IDs' },
+      { label: 'files...', description: 'JSONL paths, short run IDs, or a warden-metadata.json + warden-findings-v2.json pair' },
     ],
     options: ['cwd', 'json', 'reportOn', 'minConfidence', ...SHARED_COMMAND_OPTIONS],
     examples: [
       'warden runs show deadbeef',
       'warden runs show .warden/logs/a1b2c3d4-2026-04-25T13-00-00-000Z.jsonl',
+      'warden runs show warden-metadata.json warden-findings-v2.json',
     ],
   },
   'runs:follow': {

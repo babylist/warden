@@ -541,6 +541,34 @@ describe('runScheduleWorkflow', () => {
       }
     });
 
+    it('links the schedule-created GitHub issue onto the skill execution in v2 output', async () => {
+      mockRunSkill.mockResolvedValue(createSkillReport({ findings: [createFinding({ severity: 'high' })] }));
+      mockCreateOrUpdateIssue.mockResolvedValue({
+        issueNumber: 42,
+        issueUrl: 'https://github.com/test-owner/test-repo/issues/42',
+        created: true,
+      });
+
+      const metadataFile = getMetadataOutputPath(SCHEDULE_FIXTURES);
+      const findingsFile = getFindingsOutputPathV2(SCHEDULE_FIXTURES);
+
+      try {
+        await runScheduleWorkflow(
+          mockOctokit,
+          createDefaultInputs({ outputSchemaVersion: '2' }),
+          SCHEDULE_FIXTURES
+        );
+
+        const findings = JSON.parse(readFileSync(findingsFile, 'utf-8'));
+
+        expect(findings.skillExecutions[0]?.issueNumber).toBe(42);
+        expect(findings.skillExecutions[0]?.issueUrl).toBe('https://github.com/test-owner/test-repo/issues/42');
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+      }
+    });
+
     it('records verification provenance from onFindingProcessing in schedule v2 output', async () => {
       const finding = createFinding({ severity: 'high' });
       mockRunSkill.mockImplementation(async (_skill, _context, options) => {

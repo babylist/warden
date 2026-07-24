@@ -105,6 +105,7 @@ function renderReview(
       side: 'RIGHT' as const,
       start_line: isMultiLine ? location.startLine : undefined,
       start_side: isMultiLine ? ('RIGHT' as const) : undefined,
+      findingId: finding.id,
     };
   });
 

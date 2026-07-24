@@ -64,7 +64,11 @@ function writeSchemaV2ScheduleOutputs(
   try {
     const { metadataPath, findingsPath } = writeSchemaV2Output(
       context, resolvedTriggers, matchedTriggers, results, [],
-      { runId, runAttempt, actionRef: inputs.actionRef, failOn: inputs.failOn, reportOn: inputs.reportOn }
+      {
+        runId, runAttempt, actionRef: inputs.actionRef,
+        failOn: inputs.failOn, reportOn: inputs.reportOn,
+        failCheck: inputs.failCheck, requestChanges: inputs.requestChanges, maxFindings: inputs.maxFindings,
+      }
     );
     console.log(`Metadata written to ${metadataPath}`);
     console.log(`Findings (v2) written to ${findingsPath}`);
@@ -271,15 +275,6 @@ async function runScheduleWorkflowInner(
 
       allReports.push(report);
       matchedTriggers.push(resolved);
-      results.push({
-        triggerId: resolved.id,
-        triggerName: resolved.name,
-        skillName: resolved.skill,
-        skillExecutionId: resolved.skillExecutionId,
-        report,
-        findingProcessingEvents,
-      });
-      totalFindings += report.findings.length;
 
       // Create/update issue with findings
       const scheduleConfig: Partial<ScheduleConfig> = resolved.schedule ?? {};
@@ -294,6 +289,18 @@ async function runScheduleWorkflowInner(
         console.log(`${issueResult.created ? 'Created' : 'Updated'} issue #${issueResult.issueNumber}`);
         console.log(`Issue URL: ${issueResult.issueUrl}`);
       }
+
+      results.push({
+        triggerId: resolved.id,
+        triggerName: resolved.name,
+        skillName: resolved.skill,
+        skillExecutionId: resolved.skillExecutionId,
+        report,
+        findingProcessingEvents,
+        issueNumber: issueResult?.issueNumber,
+        issueUrl: issueResult?.issueUrl,
+      });
+      totalFindings += report.findings.length;
 
       // Check failure condition
       // Filter by confidence first so low-confidence findings don't cause failure

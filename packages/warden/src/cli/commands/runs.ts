@@ -24,6 +24,13 @@ import {
   type JsonlSummaryRecord,
   type LogFileMetadata,
 } from '../output/index.js';
+import {
+  WardenMetadataSchema,
+  WardenFindingsSchemaV2,
+  reconstructSkillReportsFromV2,
+  type WardenMetadata,
+  type WardenFindingsV2,
+} from '../../action/reporting/output-v2.js';
 
 /**
  * Resolve a log directory path from the repo root.
@@ -434,6 +441,10 @@ export async function runRunsShow(
     return 1;
   }
 
+  if (resolvedFiles.every((file) => !file.endsWith('.jsonl'))) {
+    return runRunsShowV2(resolvedFiles, options, reporter);
+  }
+
   // Parse and merge reports from all files
   const allReports: SkillReport[] = [];
   let totalDurationMs = 0;
@@ -497,6 +508,118 @@ export async function runRunsShow(
   }
 
   // Show summary
+  reporter.blank();
+  reporter.renderSummary(filteredReports, totalDurationMs);
+
+  return 0;
+}
+
+/** Try to parse a file as one half of a schema-v2 metadata/findings artifact pair. */
+function parseV2File(
+  filePath: string,
+): { kind: 'metadata'; data: WardenMetadata } | { kind: 'findings'; data: WardenFindingsV2 } | { kind: 'invalid' } {
+  let json: unknown;
+  try {
+    json = JSON.parse(readFileSync(filePath, 'utf-8'));
+  } catch {
+    return { kind: 'invalid' };
+  }
+
+  const metadataResult = WardenMetadataSchema.safeParse(json);
+  if (metadataResult.success) return { kind: 'metadata', data: metadataResult.data };
+
+  const findingsResult = WardenFindingsSchemaV2.safeParse(json);
+  if (findingsResult.success) return { kind: 'findings', data: findingsResult.data };
+
+  return { kind: 'invalid' };
+}
+
+/**
+ * Show results from a schema-v2 metadata+findings artifact pair (the GitHub
+ * Action's `output-schema-version: '2'` output) — the same after-the-fact
+ * replay `runRunsShow` gives v1 JSONL logs, reconstructed via
+ * `reconstructSkillReportsFromV2`.
+ */
+async function runRunsShowV2(
+  files: string[],
+  options: CLIOptions,
+  reporter: Reporter,
+): Promise<number> {
+  if (files.length !== 2) {
+    reporter.error(`Schema-v2 replay needs exactly one metadata file and one findings file, got ${files.length}`);
+    reporter.tip('Usage: warden runs show <warden-metadata.json> <warden-findings-v2.json>');
+    return 1;
+  }
+
+  let metadata: WardenMetadata | undefined;
+  let findings: WardenFindingsV2 | undefined;
+
+  for (const file of files) {
+    const parsed = parseV2File(file);
+    if (parsed.kind === 'metadata') {
+      if (metadata) {
+        reporter.error(`Both files look like a schema-v2 metadata file: ${file}`);
+        return 1;
+      }
+      metadata = parsed.data;
+    } else if (parsed.kind === 'findings') {
+      if (findings) {
+        reporter.error(`Both files look like a schema-v2 findings file: ${file}`);
+        return 1;
+      }
+      findings = parsed.data;
+    } else {
+      reporter.error(`${file} is not a recognized JSONL run log or schema-v2 metadata/findings file`);
+      return 1;
+    }
+  }
+
+  if (!metadata || !findings) {
+    reporter.error('Schema-v2 replay needs one metadata file and one findings file');
+    return 1;
+  }
+
+  if (metadata.runId !== findings.runId || metadata.schemaVersion !== findings.schemaVersion) {
+    reporter.error('Metadata file and findings file do not share the same runId/schemaVersion');
+    return 1;
+  }
+
+  const reports = reconstructSkillReportsFromV2(findings);
+  if (reports.length === 0) {
+    reporter.warning('No skill executions found in findings file');
+    return 0;
+  }
+
+  const resolved = resolveLogDir();
+  let configMinConfidence: ConfidenceThreshold | undefined;
+  if (resolved) {
+    try {
+      const configPath = resolve(resolved.repoPath, 'warden.toml');
+      if (existsSync(configPath)) {
+        const config = loadWardenConfigFile(configPath);
+        configMinConfidence = config.defaults?.minConfidence;
+      }
+    } catch {
+      // Use default
+    }
+  }
+
+  const totalDurationMs = reports.reduce((sum, report) => sum + (report.durationMs ?? 0), 0);
+  const filteredReports = filterReports(reports, options.reportOn, options.minConfidence ?? configMinConfidence ?? 'medium');
+
+  reporter.blank();
+  if (options.json) {
+    const jsonlContent = renderJsonlString(filteredReports, totalDurationMs, {
+      runId: metadata.runId,
+      timestamp: new Date(metadata.generatedAt),
+      model: metadata.resolvedDefaults?.model,
+      headSha: metadata.pullRequest?.headSha,
+    });
+    process.stdout.write(jsonlContent);
+  } else {
+    console.log(renderTerminalReport(filteredReports, reporter.mode, { verbosity: reporter.verbosity }));
+  }
+
   reporter.blank();
   reporter.renderSummary(filteredReports, totalDurationMs);
 

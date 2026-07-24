@@ -94,9 +94,9 @@ import {
   patchFindingsOutputV2Observations,
   fromAuxiliaryUsageEntries,
   skillExecutionIdByNameFrom,
+  toFindingFromV2,
   type WardenMetadata,
   type WardenFindingsV2,
-  type ExportedFindingV2,
 } from '../reporting/output-v2.js';
 
 // -----------------------------------------------------------------------------
@@ -486,6 +486,7 @@ function createTriggerCheckReporter(
       const check = await createSkillCheck(octokit, skillName, checkOptions);
       return {
         url: check.url,
+        checkRunId: check.checkRunId,
         complete: (report, options) =>
           updateSkillCheck(octokit, check.checkRunId, report, {
             ...checkOptions,
@@ -1013,7 +1014,11 @@ function writeSchemaV2Outputs(
   try {
     const { metadataPath, findingsPath } = writeSchemaV2Output(
       context, resolvedTriggers, matchedTriggers, results, findingObservations,
-      { runId, runAttempt, actionRef: inputs.actionRef, failOn: inputs.failOn, reportOn: inputs.reportOn }
+      {
+        runId, runAttempt, actionRef: inputs.actionRef,
+        failOn: inputs.failOn, reportOn: inputs.reportOn,
+        failCheck: inputs.failCheck, requestChanges: inputs.requestChanges, maxFindings: inputs.maxFindings,
+      }
     );
     logAction(`Metadata written to ${metadataPath}`);
     logAction(`Findings (v2) written to ${findingsPath}`);
@@ -1541,7 +1546,7 @@ async function createCompletedSkillChecksForReport(
         minConfidence: result.minConfidence,
         failCheck: result.failCheck,
       });
-      updatedResults.push(withRenderedReviewResult({ ...result, checkRunUrl: check.url }));
+      updatedResults.push(withRenderedReviewResult({ ...result, checkRunUrl: check.url, checkRunId: check.checkRunId }));
       continue;
     }
 
@@ -1931,21 +1936,6 @@ function validateV2OutputsMatchContext(
       `Metadata file head SHA ${metadata.pullRequest.headSha} does not match current head SHA ${context.pullRequest.headSha}`
     );
   }
-}
-
-function toFindingFromV2(finding: ExportedFindingV2): Finding {
-  return {
-    id: finding.id,
-    reportedId: finding.reportedId,
-    severity: finding.severity,
-    confidence: finding.confidence,
-    title: finding.title,
-    description: finding.description,
-    verification: finding.verification,
-    location: finding.location,
-    additionalLocations: finding.additionalLocations,
-    sourceSnippet: finding.sourceSnippet,
-  };
 }
 
 /**

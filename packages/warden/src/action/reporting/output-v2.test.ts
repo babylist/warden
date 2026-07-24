@@ -212,6 +212,44 @@ describe('buildMetadataOutputV2', () => {
       expect.objectContaining({ failOn: 'high', reportOn: 'medium' })
     );
   });
+
+  it('resolves failCheck/requestChanges/maxFindings the same way as failOn/reportOn', () => {
+    const matched = createTrigger({ failCheck: undefined, requestChanges: undefined, maxFindings: undefined });
+
+    const output = buildMetadataOutputV2(
+      createContext(),
+      [matched],
+      [matched],
+      [createResult()],
+      {
+        runId: '123', generatedAt: '2026-01-01T00:00:00.000Z',
+        failCheck: true, requestChanges: true, maxFindings: 10,
+      }
+    );
+
+    expect(output.resolvedDefaults).toEqual(
+      expect.objectContaining({ failCheck: true, requestChanges: true, maxFindings: 10 })
+    );
+  });
+
+  it('prefers the primary trigger override over the action-level failCheck/requestChanges/maxFindings', () => {
+    const matched = createTrigger({ failCheck: false, requestChanges: false, maxFindings: 5 });
+
+    const output = buildMetadataOutputV2(
+      createContext(),
+      [matched],
+      [matched],
+      [createResult()],
+      {
+        runId: '123', generatedAt: '2026-01-01T00:00:00.000Z',
+        failCheck: true, requestChanges: true, maxFindings: 10,
+      }
+    );
+
+    expect(output.resolvedDefaults).toEqual(
+      expect.objectContaining({ failCheck: false, requestChanges: false, maxFindings: 5 })
+    );
+  });
 });
 
 describe('buildFindingsOutputV2', () => {
@@ -225,6 +263,79 @@ describe('buildFindingsOutputV2', () => {
       { skillExecutionId: 'exec-1', skillName: 'code-review', role: 'primary' },
     ]);
     expect(output.skillExecutions[0]?.findingsBySeverity).toEqual({ high: 1, medium: 0, low: 0 });
+  });
+
+  it('carries the check run url/id from the trigger result onto the skill execution', () => {
+    const trigger = createTrigger();
+    const result = createResult({ checkRunUrl: 'https://github.com/getsentry/warden/runs/999', checkRunId: 999 });
+
+    const output = buildFindingsOutputV2([result], [trigger], [], { runId: '123' });
+
+    expect(output.skillExecutions[0]?.checkRunUrl).toBe('https://github.com/getsentry/warden/runs/999');
+    expect(output.skillExecutions[0]?.checkRunId).toBe(999);
+  });
+
+  it('exports the already-computed review event and check conclusion per execution', () => {
+    const trigger = createTrigger();
+    const result = createResult({
+      report: createReport({ findings: [createFinding({ severity: 'high' })] }),
+      failOn: 'high',
+      failCheck: true,
+      renderResult: { review: { event: 'REQUEST_CHANGES', body: '', comments: [] }, summaryComment: '' },
+    });
+
+    const output = buildFindingsOutputV2([result], [trigger], [], { runId: '123' });
+
+    expect(output.skillExecutions[0]?.reviewEvent).toBe('REQUEST_CHANGES');
+    expect(output.skillExecutions[0]?.checkConclusion).toBe('failure');
+  });
+
+  it('carries the schedule-created GitHub issue number/url onto the skill execution', () => {
+    const trigger = createTrigger();
+    const result = createResult({
+      issueNumber: 42,
+      issueUrl: 'https://github.com/getsentry/warden/issues/42',
+    });
+
+    const output = buildFindingsOutputV2([result], [trigger], [], { runId: '123' });
+
+    expect(output.skillExecutions[0]?.issueNumber).toBe(42);
+    expect(output.skillExecutions[0]?.issueUrl).toBe('https://github.com/getsentry/warden/issues/42');
+  });
+
+  it('leaves reviewEvent unset and reports a success conclusion when there are no findings', () => {
+    const trigger = createTrigger();
+    const result = createResult({ report: createReport({ findings: [] }), failOn: 'high', failCheck: true });
+
+    const output = buildFindingsOutputV2([result], [trigger], [], { runId: '123' });
+
+    expect(output.skillExecutions[0]?.reviewEvent).toBeUndefined();
+    expect(output.skillExecutions[0]?.checkConclusion).toBe('success');
+  });
+
+  it('attaches githubCommentId/githubCommentUrl from a posted finding observation', () => {
+    const trigger = createTrigger();
+    const finding = createFinding({ id: 'WRD-501' });
+    const observations: FindingObservation[] = [
+      {
+        outcome: 'posted',
+        finding,
+        skill: 'code-review',
+        skillExecutionId: 'exec-1',
+        githubCommentId: 42,
+        githubCommentUrl: 'https://github.com/getsentry/warden/pull/1#discussion_r42',
+      },
+    ];
+
+    const output = buildFindingsOutputV2(
+      [createResult({ report: createReport({ findings: [finding] }) })],
+      [trigger],
+      observations,
+      { runId: '123' }
+    );
+
+    expect(output.findings[0]?.githubCommentId).toBe(42);
+    expect(output.findings[0]?.githubCommentUrl).toBe('https://github.com/getsentry/warden/pull/1#discussion_r42');
   });
 
   it('records verifier revisions in per-finding provenance', () => {
@@ -881,6 +992,62 @@ describe('patchFindingsOutputV2Observations', () => {
         usage: { inputTokens: 100, outputTokens: 20, costUSD: 0.01 },
       },
     ]);
+  });
+
+  it('backfills skillExecutions checkRunUrl/checkRunId from report-phase check creation', () => {
+    const trigger = createTrigger();
+    const finding = createFinding({ id: 'WRD-402' });
+
+    const analyzePhaseOutput = buildFindingsOutputV2(
+      [createResult({ report: createReport({ findings: [finding] }) })],
+      [trigger],
+      [],
+      { runId: '123' }
+    );
+    expect(analyzePhaseOutput.skillExecutions[0]?.checkRunUrl).toBeUndefined();
+    expect(analyzePhaseOutput.skillExecutions[0]?.checkRunId).toBeUndefined();
+
+    // Report mode creates its skill checks as already-completed check runs
+    // only after the analyze-phase payload above was already built (see
+    // createCompletedSkillChecksForReport in pr-workflow.ts).
+    const postedResult = createResult({
+      report: createReport({ findings: [finding] }),
+      checkRunUrl: 'https://github.com/getsentry/warden/runs/555',
+      checkRunId: 555,
+    });
+
+    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [postedResult], [trigger], []);
+
+    expect(patched.skillExecutions[0]?.checkRunUrl).toBe('https://github.com/getsentry/warden/runs/555');
+    expect(patched.skillExecutions[0]?.checkRunId).toBe(555);
+  });
+
+  it('backfills a finding githubCommentId/githubCommentUrl from report-phase posting', () => {
+    const trigger = createTrigger();
+    const finding = createFinding({ id: 'WRD-502' });
+
+    const analyzePhaseOutput = buildFindingsOutputV2(
+      [createResult({ report: createReport({ findings: [finding] }) })],
+      [trigger],
+      [],
+      { runId: '123' }
+    );
+    expect(analyzePhaseOutput.findings[0]?.githubCommentId).toBeUndefined();
+
+    const reportPhaseObservations: FindingObservation[] = [
+      {
+        outcome: 'posted',
+        finding,
+        skill: 'code-review',
+        skillExecutionId: 'exec-1',
+        githubCommentId: 77,
+        githubCommentUrl: 'https://github.com/getsentry/warden/pull/1#discussion_r77',
+      },
+    ];
+    const patched = patchFindingsOutputV2Observations(analyzePhaseOutput, [createResult()], [trigger], reportPhaseObservations);
+
+    expect(patched.findings[0]?.githubCommentId).toBe(77);
+    expect(patched.findings[0]?.githubCommentUrl).toBe('https://github.com/getsentry/warden/pull/1#discussion_r77');
   });
 
   it('preserves skillExecutions/findings/discardedFindings/provenance while updating only observations and byOutcome', () => {

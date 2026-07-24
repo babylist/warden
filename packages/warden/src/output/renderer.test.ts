@@ -46,6 +46,7 @@ describe('renderSkillReport', () => {
     expect(review.comments[0]!.path).toBe('src/db.ts');
     expect(review.comments[0]!.line).toBe(45);
     expect(review.comments[0]!.body).toContain('SQL Injection');
+    expect(review.comments[0]!.findingId).toBe('sql-injection-1');
   });
 
   it('includes skill attribution footnote in comments', () => {
