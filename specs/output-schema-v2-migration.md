@@ -64,7 +64,8 @@ treat a `runId`/`schemaVersion` mismatch between the two as a hard error.
 | `skills[]` | `findings.skillExecutions[]` | now keyed by `skillExecutionId`, not array position — a skill with multiple triggers (e.g. different models per action) gets one row per execution, disambiguated |
 | `skills[].name` | `skillExecutions[].skillName` | |
 | — | `skillExecutions[].skillExecutionId`, `.triggerId`, `.triggerName` | new — stable identity per skill×trigger |
-| `skills[].model` | `skillExecutions[].model` | |
+| `skills[].model` | `skillExecutions[].model` | value now reflects the model that actually answered (from the live API response), not just the configured override — see `metadata.resolvedDefaults.model` for the configured value; the two intentionally diverge when no model override was set or hunks didn't all agree |
+| — | `skillExecutions[].models` | new — full set of distinct observed models across this execution's hunks, present only when they disagree (otherwise collapsed into `.model`) |
 | — | `skillExecutions[].runtime`, `.auxiliaryModel`, `.synthesisModel` | new |
 | `skills[].durationMs` | `skillExecutions[].durationMs` | |
 | `skills[].usage` | `skillExecutions[].usage` | unchanged shape |

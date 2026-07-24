@@ -144,6 +144,7 @@ export const SkillExecutionSchema = z.object({
   triggerId: z.string().optional(),
   triggerName: z.string().optional(),
   model: z.string().optional(),
+  models: z.array(z.string()).optional(),
   runtime: z.string().optional(),
   auxiliaryModel: z.string().optional(),
   synthesisModel: z.string().optional(),
@@ -1062,6 +1063,7 @@ export function buildFindingsOutputV2(
       triggerId: result.triggerId,
       triggerName: result.triggerName,
       model: report.model,
+      models: report.models,
       runtime: report.runtime,
       auxiliaryModel: trigger?.auxiliaryModel,
       synthesisModel: trigger?.synthesisModel,
@@ -1191,6 +1193,7 @@ export function reconstructSkillReportsFromV2(findingsOutput: WardenFindingsV2):
       error: execution.error,
       verifierRejections: execution.verifierRejections,
       model: execution.model,
+      models: execution.models,
       runtime: execution.runtime,
     };
   });

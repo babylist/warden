@@ -755,6 +755,12 @@
         "model": {
           "type": "string"
         },
+        "models": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "runtime": {
           "type": "string"
         },

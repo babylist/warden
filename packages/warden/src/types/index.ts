@@ -367,6 +367,8 @@ export const SkillReportSchema = z.object({
   files: z.array(FileReportSchema).optional(),
   /** Model used for this skill's analysis */
   model: z.string().optional(),
+  /** Distinct models observed across hunks, when they disagree */
+  models: z.array(z.string()).optional(),
   /** Runtime backend used for this skill's analysis. */
   runtime: z.string().optional(),
 });

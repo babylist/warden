@@ -8,6 +8,7 @@ import {
   buildMetadataOutputV2,
   fromAuxiliaryUsageEntries,
   patchFindingsOutputV2Observations,
+  reconstructSkillReportsFromV2,
   WardenFindingsSchemaV2,
   WardenMetadataSchema,
 } from './output-v2.js';
@@ -311,6 +312,37 @@ describe('buildFindingsOutputV2', () => {
 
     expect(output.skillExecutions[0]?.reviewEvent).toBeUndefined();
     expect(output.skillExecutions[0]?.checkConclusion).toBe('success');
+  });
+
+  it('reports the observed model on the skill execution and finding provenance, distinct from the configured model', () => {
+    const trigger = createTrigger({ model: 'claude-opus-4-5' });
+    const result = createResult({ report: createReport({ model: 'claude-haiku-4-5' }) });
+
+    const output = buildFindingsOutputV2([result], [trigger], [], { runId: '123' });
+
+    expect(output.skillExecutions[0]?.model).toBe('claude-haiku-4-5');
+    expect(output.findings[0]?.provenance.originModel).toBe('claude-haiku-4-5');
+
+    const metadata = buildMetadataOutputV2(createContext(), [trigger], [trigger], [result], {
+      runId: '123',
+      generatedAt: '2026-01-01T00:00:00.000Z',
+    });
+    expect(metadata.resolvedDefaults?.model).toBe('claude-opus-4-5');
+  });
+
+  it('round-trips the disagreement-visibility models[] field onto the skill execution', () => {
+    const trigger = createTrigger();
+    const result = createResult({
+      report: createReport({ model: 'claude-opus-4-5', models: ['claude-haiku-4-5', 'claude-sonnet-5'] }),
+    });
+
+    const output = buildFindingsOutputV2([result], [trigger], [], { runId: '123' });
+
+    expect(output.skillExecutions[0]?.model).toBe('claude-opus-4-5');
+    expect(output.skillExecutions[0]?.models).toEqual(['claude-haiku-4-5', 'claude-sonnet-5']);
+
+    const reconstructed = reconstructSkillReportsFromV2(output);
+    expect(reconstructed[0]?.models).toEqual(['claude-haiku-4-5', 'claude-sonnet-5']);
   });
 
   it('computes checkConclusion from confidence-filtered findings, matching the real GitHub check', () => {
