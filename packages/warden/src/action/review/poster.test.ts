@@ -271,7 +271,13 @@ describe('postTriggerReview', () => {
     vi.mocked(findingToExistingComment).mockReturnValue(createExistingComment());
     vi.mocked(mockOctokit.pulls.createReview).mockResolvedValueOnce({ data: { id: 555 } } as never);
     vi.mocked(mockOctokit.paginate).mockResolvedValueOnce([
-      { id: 987, html_url: 'https://github.com/test-owner/test-repo/pull/1#discussion_r987', body: 'Test comment' },
+      {
+        id: 987,
+        html_url: 'https://github.com/test-owner/test-repo/pull/1#discussion_r987',
+        body: 'Test comment',
+        path: 'test.ts',
+        line: 10,
+      },
     ]);
 
     const postResult = await postTriggerReview({
@@ -330,6 +336,8 @@ describe('postTriggerReview', () => {
         id: 1000 + i,
         html_url: `https://github.com/test-owner/test-repo/pull/1#discussion_r${1000 + i}`,
         body: `Comment for ${finding.id}`,
+        path: 'test.ts',
+        line: finding.location!.startLine,
       }))
     );
 
@@ -345,6 +353,50 @@ describe('postTriggerReview', () => {
     );
     expect(postResult.findingObservations).toHaveLength(findingCount);
     expect(postResult.findingObservations.every((obs) => 'githubCommentId' in obs && obs.githubCommentId !== undefined)).toBe(true);
+  });
+
+  it('matches identically-worded comments to the right posted id by location, not body order', async () => {
+    const findingA = createFinding({ id: 'finding-a', location: { path: 'a.ts', startLine: 10 } });
+    const findingB = createFinding({ id: 'finding-b', location: { path: 'b.ts', startLine: 20 } });
+    const result: TriggerResult = {
+      triggerName: 'test-trigger',
+      skillName: 'test-skill',
+      report: {
+        skill: 'test-skill',
+        summary: 'Found 2 issues',
+        findings: [findingA, findingB],
+        usage: { inputTokens: 100, outputTokens: 50, costUSD: 0.01 },
+      },
+      renderResult: createRenderResult({
+        review: {
+          event: 'COMMENT',
+          body: 'Test review',
+          comments: [
+            { path: 'a.ts', line: 10, body: 'Duplicate wording', findingId: findingA.id },
+            { path: 'b.ts', line: 20, body: 'Duplicate wording', findingId: findingB.id },
+          ],
+        },
+      }),
+      reportOn: 'low',
+    };
+
+    vi.mocked(findingToExistingComment).mockReturnValue(createExistingComment());
+    vi.mocked(mockOctokit.pulls.createReview).mockResolvedValueOnce({ data: { id: 555 } } as never);
+    vi.mocked(mockOctokit.paginate).mockResolvedValueOnce([
+      { id: 200, html_url: 'https://github.com/test-owner/test-repo/pull/1#discussion_r200', body: 'Duplicate wording', path: 'b.ts', line: 20 },
+      { id: 100, html_url: 'https://github.com/test-owner/test-repo/pull/1#discussion_r100', body: 'Duplicate wording', path: 'a.ts', line: 10 },
+    ]);
+
+    const postResult = await postTriggerReview({
+      result,
+      existingComments: [],
+      apiKey: 'test-key',
+    }, mockDeps);
+
+    expect(postResult.findingObservations).toEqual([
+      expect.objectContaining({ finding: findingA, githubCommentId: 100, githubCommentUrl: expect.stringContaining('r100') }),
+      expect.objectContaining({ finding: findingB, githubCommentId: 200, githubCommentUrl: expect.stringContaining('r200') }),
+    ]);
   });
 
   it('still reports the finding as posted when fetching the real comment id fails', async () => {

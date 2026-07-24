@@ -154,20 +154,24 @@ export interface PostReviewResult {
 /**
  * Match the review's own rendered comments (which carry `findingId`) against
  * GitHub's response for the same review (which carries the real `id`/`html_url`
- * but not `findingId`) by exact body text - the only field both sides share
- * that's unique enough to correlate on, since the API response doesn't echo
- * back which request-side comment produced which result.
+ * but not `findingId`) by `path` + `line` + body text, since the API response
+ * doesn't echo back which request-side comment produced which result.
+ * Body text alone can collide when a batch renders two comments with
+ * identical text; pairing it with the comment's location narrows a match to
+ * comments GitHub itself would place at the same spot.
  */
 function matchPostedCommentsToFindings(
   rendered: GitHubComment[],
-  posted: { id: number; html_url: string; body: string }[]
+  posted: { id: number; html_url: string; body: string; path?: string; line?: number | null }[]
 ): PostedCommentsByFindingId {
   const byFindingId: PostedCommentsByFindingId = new Map();
   const availablePosted = [...posted];
 
   for (const comment of rendered) {
     if (!comment.findingId) continue;
-    const index = availablePosted.findIndex((p) => p.body === comment.body);
+    const index = availablePosted.findIndex(
+      (p) => p.body === comment.body && p.path === comment.path && p.line === comment.line
+    );
     if (index === -1) continue;
     const [match] = availablePosted.splice(index, 1);
     if (match) {
