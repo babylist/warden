@@ -11,7 +11,7 @@ import { randomUUID } from 'node:crypto';
 import type { Octokit } from '@octokit/rest';
 import { execFileNonInteractive, execNonInteractive } from '../../utils/exec.js';
 import { isRepoRelativePath, normalizePath } from '../../utils/path.js';
-import { writeFileAtomic } from '../../utils/fs.js';
+import { writeFileAtomic, writeFilesAtomicPair } from '../../utils/fs.js';
 import type { EventContext, SkillReport } from '../../types/index.js';
 import type { FindingObservation } from '../reporting/outcomes.js';
 import { buildFindingsOutput } from '../reporting/output.js';
@@ -452,23 +452,18 @@ export function getFindingsOutputPathV2(repoPath?: string): string {
   return join(tmpDir, 'warden-findings-v2.json');
 }
 
-function writeFileAtomicJson(path: string, value: unknown): void {
-  writeFileAtomic(path, JSON.stringify(value, null, 2));
-}
-
 /**
  * Write both schema-v2 files atomically, then set their action outputs
  * together, then mark the pair done with a sidecar file next to the
  * findings file.
  *
  * `metadata-file` and `findings-file` must never disagree on which schema
- * version they point at. Writing the two files independently (each setting
- * its own outputs as it goes) can leave `metadata-file` pointed at v2 while
- * a subsequent findings-file write failure leaves `findings-file` on
- * whatever v1 already set — a schema mismatch downstream consumers treat as
- * a hard error. Serializing both files to disk before setting any output
- * means a failure here leaves neither v2 output set, so a prior v1
- * `findings-file` output remains the last consistent value.
+ * version they point at. `writeFilesAtomicPair` stages both files' content
+ * before renaming either into place, so a staging failure on one file never
+ * leaves the other committed to a new run while its partner still holds a
+ * prior one. Setting outputs only after that call means a failure here
+ * leaves neither v2 output set, so a prior v1 `findings-file` output remains
+ * the last consistent value.
  *
  * This is the run's one true "done" checkpoint — every intermediate write
  * during the run goes through `writeSchemaV2OutputPairLive` instead, which
@@ -482,8 +477,10 @@ export function writeSchemaV2OutputPair(
   const metadataPath = getMetadataOutputPath(context.repoPath);
   const findingsPath = getFindingsOutputPathV2(context.repoPath);
 
-  writeFileAtomicJson(metadataPath, metadata);
-  writeFileAtomicJson(findingsPath, findings);
+  writeFilesAtomicPair([
+    { path: metadataPath, content: JSON.stringify(metadata, null, 2) },
+    { path: findingsPath, content: JSON.stringify(findings, null, 2) },
+  ]);
   writeFileAtomic(`${findingsPath}.done`, '');
 
   setOutput('metadata-file', getFindingsOutputValue(metadataPath, context.repoPath));
@@ -510,8 +507,10 @@ export function writeSchemaV2OutputPairLive(
   try {
     const metadataPath = getMetadataOutputPath(context.repoPath);
     const findingsPath = getFindingsOutputPathV2(context.repoPath);
-    writeFileAtomicJson(metadataPath, metadata);
-    writeFileAtomicJson(findingsPath, findings);
+    writeFilesAtomicPair([
+      { path: metadataPath, content: JSON.stringify(metadata, null, 2) },
+      { path: findingsPath, content: JSON.stringify(findings, null, 2) },
+    ]);
   } catch (error) {
     console.error(`::warning::Failed to write live schema-v2 output: ${error}`);
   }
