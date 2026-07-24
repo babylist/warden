@@ -16,7 +16,7 @@ import type { ScheduleConfig } from '../../config/schema.js';
 import { buildScheduleEventContext } from '../../event/schedule-context.js';
 import { runSkill } from '../../sdk/runner.js';
 import { assertValidPiModelSelectors } from '../../sdk/runtimes/model-selectors.js';
-import { createOrUpdateIssue } from '../../output/github-issues.js';
+import { createOrUpdateIssue, type IssueResult } from '../../output/github-issues.js';
 import { shouldFail, countFindingsAtOrAbove, countSeverity } from '../../triggers/matcher.js';
 import { resolveSkillAsync } from '../../skills/loader.js';
 import { filterFindings } from '../../types/index.js';
@@ -276,14 +276,22 @@ async function runScheduleWorkflowInner(
       allReports.push(report);
       matchedTriggers.push(resolved);
 
-      // Create/update issue with findings
+      // Create/update issue with findings. Failures here are logged but must
+      // not drop the trigger's own successful report/findings from `results`
+      // - that would desync the v2 output (which reads from `results`) from
+      // `allReports`/`totalFindings` (which already counted this report).
       const scheduleConfig: Partial<ScheduleConfig> = resolved.schedule ?? {};
       const issueTitle = scheduleConfig.issueTitle ?? `Warden: ${resolved.name}`;
 
-      const issueResult = await createOrUpdateIssue(octokit, owner, repo, [report], {
-        title: issueTitle,
-        commitSha: headSha,
-      });
+      let issueResult: IssueResult | null = null;
+      try {
+        issueResult = await createOrUpdateIssue(octokit, owner, repo, [report], {
+          title: issueTitle,
+          commitSha: headSha,
+        });
+      } catch (error) {
+        console.error(`::warning::Failed to create/update issue for ${resolved.name}: ${error}`);
+      }
 
       if (issueResult) {
         console.log(`${issueResult.created ? 'Created' : 'Updated'} issue #${issueResult.issueNumber}`);

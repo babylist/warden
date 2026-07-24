@@ -313,6 +313,23 @@ describe('buildFindingsOutputV2', () => {
     expect(output.skillExecutions[0]?.checkConclusion).toBe('success');
   });
 
+  it('computes checkConclusion from confidence-filtered findings, matching the real GitHub check', () => {
+    const trigger = createTrigger();
+    const result = createResult({
+      report: createReport({ findings: [createFinding({ severity: 'high', confidence: 'low' })] }),
+      failOn: 'high',
+      failCheck: true,
+      minConfidence: 'high',
+    });
+
+    const output = buildFindingsOutputV2([result], [trigger], [], { runId: '123' });
+
+    // buildSkillCheckPayload (github-checks.ts) filters by minConfidence before
+    // computing conclusion, so a low-confidence finding filtered out by
+    // minConfidence: 'high' must not count toward failure here either.
+    expect(output.skillExecutions[0]?.checkConclusion).toBe('success');
+  });
+
   it('attaches githubCommentId/githubCommentUrl from a posted finding observation', () => {
     const trigger = createTrigger();
     const finding = createFinding({ id: 'WRD-501' });

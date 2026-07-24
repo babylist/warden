@@ -2,6 +2,7 @@ import { z } from 'zod';
 import {
   ConfidenceSchema,
   ConfidenceThresholdSchema,
+  filterFindings,
   GitHubEventTypeSchema,
   LocationSchema,
   SeveritySchema,
@@ -1069,7 +1070,11 @@ export function buildFindingsOutputV2(
       checkRunUrl: result.checkRunUrl,
       checkRunId: result.checkRunId,
       reviewEvent: result.renderResult?.review?.event,
-      checkConclusion: determineConclusion(report.findings, result.failOn, result.failCheck),
+      checkConclusion: determineConclusion(
+        filterFindings(report.findings, undefined, result.minConfidence),
+        result.failOn,
+        result.failCheck
+      ),
       issueNumber: result.issueNumber,
       issueUrl: result.issueUrl,
     });

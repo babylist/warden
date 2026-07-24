@@ -569,6 +569,35 @@ describe('runScheduleWorkflow', () => {
       }
     });
 
+    it('keeps the real report in v2 output when creating the tracking issue fails', async () => {
+      const finding = createFinding({ severity: 'high' });
+      mockRunSkill.mockResolvedValue(createSkillReport({ findings: [finding] }));
+      mockCreateOrUpdateIssue.mockRejectedValue(new Error('rate limited'));
+
+      const metadataFile = getMetadataOutputPath(SCHEDULE_FIXTURES);
+      const findingsFile = getFindingsOutputPathV2(SCHEDULE_FIXTURES);
+
+      try {
+        await runScheduleWorkflow(
+          mockOctokit,
+          createDefaultInputs({ outputSchemaVersion: '2' }),
+          SCHEDULE_FIXTURES
+        );
+
+        const findings = JSON.parse(readFileSync(findingsFile, 'utf-8'));
+
+        expect(findings.skillExecutions).toHaveLength(1);
+        expect(findings.skillExecutions[0]?.error).toBeUndefined();
+        expect(findings.skillExecutions[0]?.issueNumber).toBeUndefined();
+        expect(findings.findings).toHaveLength(1);
+        expect(findings.findings[0]?.id).toBe(finding.id);
+        expect(consoleErrorSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to create/update issue'));
+      } finally {
+        rmSync(metadataFile, { force: true });
+        rmSync(findingsFile, { force: true });
+      }
+    });
+
     it('records verification provenance from onFindingProcessing in schedule v2 output', async () => {
       const finding = createFinding({ severity: 'high' });
       mockRunSkill.mockImplementation(async (_skill, _context, options) => {
