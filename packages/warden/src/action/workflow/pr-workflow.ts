@@ -85,6 +85,7 @@ import type { z } from 'zod';
 import {
   FindingsOutputSchema,
   buildConfiguredSkillsList,
+  buildResolvedDefaults,
   type SkippedTriggerReasonSchema,
   type FindingsOutput,
   type ReplayTriggerResult,
@@ -219,6 +220,9 @@ function toSkillExecutions(results: TriggerResult[]): SkillExecutionMeta[] {
       checkRunUrl: r.checkRunUrl,
       checkRunId: r.checkRunId,
       reviewEvent: r.renderResult?.review?.event,
+      // determineConclusion never returns 'cancelled' — that value exists on
+      // CheckConclusion for actual check-run API responses (aborted runs),
+      // which this export doesn't currently read from.
       checkConclusion: determineConclusion(r.report.findings, r.failOn, r.failCheck),
       findingProcessingEvents: r.findingProcessingEvents,
     }));
@@ -1098,13 +1102,7 @@ async function finalizeWorkflow(
       actionRef: inputs.actionRef,
       skippedTriggers: toSkippedTriggers(skippedTriggers, context),
       skillExecutions: toSkillExecutions(results),
-      resolvedDefaults: {
-        failOn: inputs.failOn,
-        reportOn: inputs.reportOn,
-        failCheck: inputs.failCheck,
-        requestChanges: inputs.requestChanges,
-        maxFindings: inputs.maxFindings,
-      },
+      resolvedDefaults: buildResolvedDefaults(inputs),
     });
     logAction(`Findings written to ${findingsPath}`);
   } catch (error) {
@@ -1721,13 +1719,7 @@ async function finalizeReportWorkflow(
       actionRef: options.inputs.actionRef,
       skippedTriggers: toSkippedTriggers(options.skippedTriggers ?? [], context),
       skillExecutions: toSkillExecutions(results),
-      resolvedDefaults: {
-        failOn: options.inputs.failOn,
-        reportOn: options.inputs.reportOn,
-        failCheck: options.inputs.failCheck,
-        requestChanges: options.inputs.requestChanges,
-        maxFindings: options.inputs.maxFindings,
-      },
+      resolvedDefaults: buildResolvedDefaults(options.inputs),
     });
     logAction(`Findings written to ${findingsPath}`);
   } catch (error) {
@@ -1905,13 +1897,7 @@ async function runAnalyzeMode(
       actionRef: inputs.actionRef,
       skippedTriggers: toSkippedTriggers(skippedTriggers, context),
       skillExecutions: toSkillExecutions(results),
-      resolvedDefaults: {
-        failOn: inputs.failOn,
-        reportOn: inputs.reportOn,
-        failCheck: inputs.failCheck,
-        requestChanges: inputs.requestChanges,
-        maxFindings: inputs.maxFindings,
-      },
+      resolvedDefaults: buildResolvedDefaults(inputs),
     });
     logAction(`Findings written to ${findingsPath}`);
   } catch (error) {

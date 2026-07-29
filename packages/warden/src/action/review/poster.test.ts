@@ -477,6 +477,7 @@ describe('postTriggerReview', () => {
     const result: TriggerResult = {
       triggerName: 'test-trigger',
       skillName: 'test-skill',
+      skillExecutionId: 'exec-mixed',
       report: {
         skill: 'test-skill',
         summary: 'Found 2 issues',
@@ -506,8 +507,8 @@ describe('postTriggerReview', () => {
       expect.objectContaining({ event: 'COMMENT', body: '' })
     );
     expect(postResult.findingObservations).toEqual([
-      { outcome: 'posted', finding: inlineFinding, skill: 'test-skill' },
-      { outcome: 'skipped', finding: bodyFinding, skill: 'test-skill', skippedReason: 'no_inline_location' },
+      { outcome: 'posted', finding: inlineFinding, skill: 'test-skill', skillExecutionId: 'exec-mixed' },
+      { outcome: 'skipped', finding: bodyFinding, skill: 'test-skill', skillExecutionId: 'exec-mixed', skippedReason: 'no_inline_location' },
     ]);
   });
 
@@ -931,6 +932,7 @@ describe('postTriggerReview', () => {
     const result: TriggerResult = {
       triggerName: 'test-trigger',
       skillName: 'test-skill',
+      skillExecutionId: 'exec-checks-only',
       report: {
         skill: 'test-skill',
         summary: 'Found 1 issue',
@@ -965,7 +967,7 @@ describe('postTriggerReview', () => {
     expect(postResult.posted).toBe(false);
     expect(postResult.newComments).toHaveLength(0);
     expect(postResult.findingObservations).toEqual([
-      { outcome: 'skipped', finding, skill: 'test-skill', skippedReason: 'no_inline_location' },
+      { outcome: 'skipped', finding, skill: 'test-skill', skillExecutionId: 'exec-checks-only', skippedReason: 'no_inline_location' },
     ]);
     expect(mockOctokit.pulls.createReview).toHaveBeenCalledTimes(1);
   });
@@ -1050,6 +1052,7 @@ describe('postTriggerReview', () => {
     const result: TriggerResult = {
       triggerName: 'test-trigger',
       skillName: 'test-skill',
+      skillExecutionId: 'exec-max-findings',
       report: {
         skill: 'test-skill',
         summary: 'Found 2 issues',
@@ -1084,12 +1087,14 @@ describe('postTriggerReview', () => {
         outcome: 'skipped',
         finding: finding2,
         skill: 'test-skill',
+        skillExecutionId: 'exec-max-findings',
         skippedReason: 'max_findings',
       },
       {
         outcome: 'failed',
         finding: finding1,
         skill: 'test-skill',
+        skillExecutionId: 'exec-max-findings',
       },
     ]);
   });
@@ -1101,6 +1106,7 @@ describe('postTriggerReview', () => {
     const result: TriggerResult = {
       triggerName: 'test-trigger',
       skillName: 'test-skill',
+      skillExecutionId: 'exec-batch',
       report: {
         skill: 'test-skill',
         summary: 'Found 2 issues',
@@ -1160,12 +1166,14 @@ describe('postTriggerReview', () => {
         outcome: 'skipped',
         finding: finding2,
         skill: 'test-skill',
+        skillExecutionId: 'exec-batch',
         skippedReason: 'duplicate_in_batch',
       },
       {
         outcome: 'posted',
         finding: finding1,
         skill: 'test-skill',
+        skillExecutionId: 'exec-batch',
       },
     ]);
   });

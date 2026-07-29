@@ -4,6 +4,7 @@ import {
   AuxiliaryUsageMapSchema,
   ConfidenceThresholdSchema,
   FindingSchema,
+  findingLine,
   GitHubEventTypeSchema,
   LocationSchema,
   SeverityThresholdSchema,
@@ -14,7 +15,7 @@ import {
 } from '../../types/index.js';
 import type { FindingObservation } from './outcomes.js';
 import { FindingObservationSchema } from './outcomes.js';
-import { generateContentHash } from '../../output/dedup.js';
+import { generateContentHash, generateLocationHashKey } from '../../output/dedup.js';
 import { getVersion } from '../../utils/version.js';
 import {
   buildProvenanceAndDiscarded,
@@ -251,6 +252,23 @@ export interface BuildFindingsOutputOptions {
   skillExecutions?: SkillExecutionMeta[];
 }
 
+/** Build the action-level `resolvedDefaults` block from parsed action inputs. */
+export function buildResolvedDefaults(inputs: {
+  failOn?: z.infer<typeof SeverityThresholdSchema>;
+  reportOn?: z.infer<typeof SeverityThresholdSchema>;
+  failCheck?: boolean;
+  requestChanges?: boolean;
+  maxFindings: number;
+}): NonNullable<BuildFindingsOutputOptions['resolvedDefaults']> {
+  return {
+    failOn: inputs.failOn,
+    reportOn: inputs.reportOn,
+    failCheck: inputs.failCheck,
+    requestChanges: inputs.requestChanges,
+    maxFindings: inputs.maxFindings,
+  };
+}
+
 export function buildConfiguredSkillsList({
   allTriggers,
   matchedTriggers,
@@ -332,10 +350,14 @@ export function buildFindingsOutput(
   const allFindings = reports.flatMap((r) => r.findings);
   const metaByReport = new Map((options.skillExecutions ?? []).map((meta) => [meta.report, meta]));
 
-  const dedupeByContentHash = new Map(
+  const dedupeByLocationHashKey = new Map(
     findingObservations
       .filter((observation) => observation.outcome === 'deduped')
-      .map((observation) => [generateContentHash(observation.finding.title, observation.finding.description), observation.dedupe])
+      .map((observation) => {
+        const hash = generateContentHash(observation.finding.title, observation.finding.description);
+        const key = generateLocationHashKey(observation.finding.location?.path, findingLine(observation.finding), hash);
+        return [key, observation.dedupe];
+      })
   );
 
   const { provenanceByFindingId, discarded } = buildProvenanceAndDiscarded(
@@ -417,7 +439,8 @@ export function buildFindingsOutput(
         issueUrl: meta?.issueUrl,
         findings: r.findings.map((f) => {
           const contentHash = generateContentHash(f.title, f.description);
-          const dedupe = dedupeByContentHash.get(contentHash);
+          const locationHashKey = generateLocationHashKey(f.location?.path, findingLine(f), contentHash);
+          const dedupe = dedupeByLocationHashKey.get(locationHashKey);
           const reportedBy = meta?.skillExecutionId !== undefined
             ? [
                 { skillExecutionId: meta.skillExecutionId, skillName: r.skill, role: 'primary' as const },

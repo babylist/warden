@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { EventContext, Finding, SkillReport } from '../../types/index.js';
-import { buildConfiguredSkillsList, buildFindingsOutput, FindingsOutputSchema } from './output.js';
+import { buildConfiguredSkillsList, buildFindingsOutput, buildResolvedDefaults, FindingsOutputSchema } from './output.js';
 
 describe('findings output schema', () => {
   it('builds a schema-valid public findings payload', () => {
@@ -460,6 +460,43 @@ describe('findings output schema', () => {
     ]);
   });
 
+  it('does not attribute dedupe corroboration to an unrelated finding that merely shares title+description', () => {
+    // Regression: two findings with identical wording but different locations
+    // and no relationship to each other. Only the one at the deduped
+    // location should inherit reportedBy corroboration.
+    const survivor = createFinding({ id: 'a', location: { path: 'src/a.ts', startLine: 1 } });
+    const dedupedElsewhere = createFinding({ id: 'b', location: { path: 'src/b.ts', startLine: 99 } });
+    const report = createReport({ findings: [survivor] });
+
+    const output = buildFindingsOutput(
+      [report],
+      createContext(),
+      [
+        {
+          outcome: 'deduped',
+          finding: dedupedElsewhere,
+          skill: 'other-skill',
+          dedupe: {
+            source: 'warden',
+            matchType: 'hash',
+            existingFindingId: 'prior-id',
+            existingSkillExecutionId: 'exec-prior',
+            existingSkills: ['other-skill', 'some-prior-skill'],
+          },
+        },
+      ],
+      {
+        timestamp: '2026-01-01T00:00:00.000Z',
+        runId: '123',
+        skillExecutions: [{ report, skillExecutionId: 'exec-abc' }],
+      }
+    );
+
+    expect(output.skills[0]?.findings[0]?.reportedBy).toEqual([
+      { skillExecutionId: 'exec-abc', skillName: 'test-skill', role: 'primary' },
+    ]);
+  });
+
   it('omits reportedBy entirely when no skillExecutions metadata is given', () => {
     const output = buildFindingsOutput([createReport()], createContext(), [], {
       timestamp: '2026-01-01T00:00:00.000Z',
@@ -544,6 +581,34 @@ describe('findings output schema', () => {
   });
 });
 
+describe('buildResolvedDefaults', () => {
+  it('extracts the five resolved-default fields from action inputs', () => {
+    expect(buildResolvedDefaults({
+      failOn: 'high',
+      reportOn: 'medium',
+      failCheck: true,
+      requestChanges: false,
+      maxFindings: 25,
+    })).toEqual({
+      failOn: 'high',
+      reportOn: 'medium',
+      failCheck: true,
+      requestChanges: false,
+      maxFindings: 25,
+    });
+  });
+
+  it('carries through undefined optional fields', () => {
+    expect(buildResolvedDefaults({ maxFindings: 50 })).toEqual({
+      failOn: undefined,
+      reportOn: undefined,
+      failCheck: undefined,
+      requestChanges: undefined,
+      maxFindings: 50,
+    });
+  });
+});
+
 describe('buildConfiguredSkillsList', () => {
   it('marks matched skills as triggered and unmatched skills as not', () => {
     const result = buildConfiguredSkillsList({
@@ -580,7 +645,7 @@ describe('buildConfiguredSkillsList', () => {
   });
 });
 
-function createFinding(): Finding {
+function createFinding(overrides: Partial<Finding> = {}): Finding {
   return {
     id: 'WRD-001',
     severity: 'high',
@@ -588,6 +653,7 @@ function createFinding(): Finding {
     title: 'Finding title',
     description: 'Finding description',
     location: { path: 'src/index.ts', startLine: 1 },
+    ...overrides,
   };
 }
 

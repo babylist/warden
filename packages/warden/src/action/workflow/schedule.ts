@@ -24,6 +24,7 @@ import type { EventContext, SkillReport } from '../../types/index.js';
 import type { FindingProcessingEvent } from '../../sdk/types.js';
 import { Sentry, logger, setRepositoryScope, emitRunMetric } from '../../sentry.js';
 import type { ActionInputs } from '../inputs.js';
+import { buildResolvedDefaults } from '../reporting/output.js';
 import type { SkillExecutionMeta } from '../reporting/output.js';
 import {
   setOutput,
@@ -341,13 +342,7 @@ async function runScheduleWorkflowInner(
       actionRef: inputs.actionRef,
       skippedTriggers,
       skillExecutions,
-      resolvedDefaults: {
-        failOn: inputs.failOn,
-        reportOn: inputs.reportOn,
-        failCheck: inputs.failCheck,
-        requestChanges: inputs.requestChanges,
-        maxFindings: inputs.maxFindings,
-      },
+      resolvedDefaults: buildResolvedDefaults(inputs),
     });
     console.log(`Findings written to ${findingsPath}`);
   } catch (error) {

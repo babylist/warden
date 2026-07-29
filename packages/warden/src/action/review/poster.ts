@@ -509,7 +509,7 @@ export async function postTriggerReview(
       activeWardenCommentIds,
       findingObservations: [
         ...findingObservations,
-        ...findingsToMarkFailed.map((finding) => ({ outcome: 'failed' as const, finding, skill })),
+        ...findingsToMarkFailed.map((finding) => ({ outcome: 'failed' as const, finding, skill, skillExecutionId: result.skillExecutionId })),
       ],
       shouldFail: false,
     };

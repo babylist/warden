@@ -3,6 +3,7 @@ import type { Octokit } from '@octokit/rest';
 import {
   generateContentHash,
   generateFindingMetadata,
+  generateLocationHashKey,
   generateMarker,
   parseWardenFindingMetadata,
   parseMarker,
@@ -35,6 +36,25 @@ describe('generateContentHash', () => {
     const hash1 = generateContentHash('Title A', 'Description');
     const hash2 = generateContentHash('Title B', 'Description');
     expect(hash1).not.toBe(hash2);
+  });
+});
+
+describe('generateLocationHashKey', () => {
+  it('disambiguates identical content hashes at different locations', () => {
+    const hash = generateContentHash('Same title', 'Same description');
+    const keyA = generateLocationHashKey('src/a.ts', 1, hash);
+    const keyB = generateLocationHashKey('src/b.ts', 99, hash);
+    expect(keyA).not.toBe(keyB);
+  });
+
+  it('produces the same key for the same path, line, and hash', () => {
+    const hash = generateContentHash('Title', 'Description');
+    expect(generateLocationHashKey('src/a.ts', 1, hash)).toBe(generateLocationHashKey('src/a.ts', 1, hash));
+  });
+
+  it('treats an undefined path as an empty string', () => {
+    const hash = generateContentHash('Title', 'Description');
+    expect(generateLocationHashKey(undefined, 0, hash)).toBe(`:0:${hash}`);
   });
 });
 
