@@ -30,6 +30,7 @@ import {
   setOutput,
   setFailed,
   ActionFailedError,
+  clearStaleDoneMarker,
   logGroup,
   logGroupEnd,
   prepareRuntimeEnvironment,
@@ -183,6 +184,7 @@ async function runScheduleWorkflowInner(
     repository: { owner, name: repo, fullName: `${owner}/${repo}`, defaultBranch },
     repoPath,
   };
+  clearStaleDoneMarker(scheduleContext);
 
   const allReports: SkillReport[] = [];
   const skillExecutions: SkillExecutionMeta[] = [];

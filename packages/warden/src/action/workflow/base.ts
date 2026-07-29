@@ -371,6 +371,25 @@ export function getFindingsOutputPath(repoPath?: string): string {
 }
 
 /**
+ * Remove a `.done` marker left over from a previous run at this same path.
+ * Call once, before a run's first write (live or final) — a live write only
+ * happens after the first trigger settles, so without this a stale `.done`
+ * from a prior run would make a brand-new, still in-progress run look
+ * finished to a follower for however long that first trigger takes.
+ */
+export function clearStaleDoneMarker(context: EventContext): void {
+  const filePath = getFindingsOutputPath(context.repoPath);
+  if (!existsSync(`${filePath}.done`)) {
+    return;
+  }
+  try {
+    unlinkSync(`${filePath}.done`);
+  } catch {
+    // Best-effort cleanup; a stale marker left behind is not fatal.
+  }
+}
+
+/**
  * Write structured findings data to a JSON file for external export (GCS, S3, etc.).
  *
  * Sets `findings-file` to a repo-relative path when possible so downstream
@@ -402,10 +421,9 @@ export function writeFindingsOutput(
  * throws — a transient write hiccup here must not abort a run the way a
  * final-write failure legitimately can.
  *
- * Removes any `.done` sidecar left over from a previous run at this same
- * path before writing, so a persistent/self-hosted runner (or a repeated
- * local `warden runs follow` invocation reusing the same paths) never sees a
- * stale `.done` and reports a brand-new, still in-progress run as finished.
+ * Also clears a stale `.done` sidecar left over from a previous run as a
+ * defensive backstop — the primary guarantee is `clearStaleDoneMarker`
+ * called once up front by the caller, before this run's first write.
  */
 export function writeFindingsOutputLive(
   reports: SkillReport[],
@@ -414,14 +432,8 @@ export function writeFindingsOutputLive(
   options: BuildFindingsOutputOptions = {}
 ): void {
   try {
+    clearStaleDoneMarker(context);
     const filePath = getFindingsOutputPath(context.repoPath);
-    if (existsSync(`${filePath}.done`)) {
-      try {
-        unlinkSync(`${filePath}.done`);
-      } catch {
-        // Best-effort cleanup; a stale marker left behind is not fatal.
-      }
-    }
     const output = buildFindingsOutput(reports, context, findingObservations, options);
     writeFileAtomic(filePath, JSON.stringify(output, null, 2));
   } catch (error) {

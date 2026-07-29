@@ -68,6 +68,7 @@ import {
   setOutput,
   setFailed,
   ActionFailedError,
+  clearStaleDoneMarker,
   ensureClaudeAuth,
   logGroup,
   logGroupEnd,
@@ -174,11 +175,13 @@ function reportsPullRequestCheck(trigger: ResolvedTrigger, context: EventContext
 }
 
 /** Why a resolved trigger didn't match this event, for the findings output's skippedTriggers[]. */
+/**
+ * The only caller, `toSkippedTriggers`, is always fed a list pre-filtered by
+ * `reportsPullRequestCheck` to `pull_request`/`'*'`-type triggers, so this
+ * only ever needs to explain why a PR-scoped trigger didn't fire this run —
+ * not schedule/local triggers, which never reach this function.
+ */
 function deriveSkippedReason(trigger: ResolvedTrigger, context: EventContext): z.infer<typeof SkippedTriggerReasonSchema> {
-  if (trigger.type === 'local') return 'no_event_match';
-  if (trigger.type === 'schedule') {
-    return context.eventType === 'schedule' ? 'no_changes' : 'no_event_match';
-  }
   if (trigger.type === 'pull_request') {
     if (context.eventType !== 'pull_request') return 'no_event_match';
     if (!trigger.actions?.includes(context.action)) return 'no_event_match';
@@ -220,10 +223,17 @@ function toSkillExecutions(results: TriggerResult[]): SkillExecutionMeta[] {
       checkRunUrl: r.checkRunUrl,
       checkRunId: r.checkRunId,
       reviewEvent: r.renderResult?.review?.event,
-      // determineConclusion never returns 'cancelled' — that value exists on
-      // CheckConclusion for actual check-run API responses (aborted runs),
-      // which this export doesn't currently read from.
-      checkConclusion: determineConclusion(r.report.findings, r.failOn, r.failCheck),
+      // Matches buildSkillCheckPayload's own conclusion computation
+      // (confidence-filtered first) so this mirrors what actually posted to
+      // the check run at checkRunUrl/checkRunId. determineConclusion never
+      // returns 'cancelled' — that value exists on CheckConclusion for actual
+      // check-run API responses (aborted runs), which this export doesn't
+      // currently read from.
+      checkConclusion: determineConclusion(
+        filterFindings(r.report.findings, undefined, r.minConfidence),
+        r.failOn,
+        r.failCheck
+      ),
       findingProcessingEvents: r.findingProcessingEvents,
     }));
 }
@@ -1858,6 +1868,8 @@ async function runAnalyzeMode(
         triggerResults: [],
         configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
         actionRef: inputs.actionRef,
+        skippedTriggers: toSkippedTriggers(skippedTriggers, context),
+        resolvedDefaults: buildResolvedDefaults(inputs),
       });
       logAction(`Findings written to ${findingsPath}`);
     } catch (error) {
@@ -1948,6 +1960,9 @@ async function runReportMode(
         const findingsPath = writeFindingsOutput([], context, [], {
           triggerResults: [],
           configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
+          actionRef: inputs.actionRef,
+          skippedTriggers: toSkippedTriggers(skippedTriggers, context),
+          resolvedDefaults: buildResolvedDefaults(inputs),
         });
         logAction(`Findings written to ${findingsPath}`);
       } catch (error) {
@@ -1985,6 +2000,9 @@ async function runReportMode(
         const findingsPath = writeFindingsOutput([], context, cleanupFindingObservations, {
           triggerResults: [],
           configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
+          actionRef: inputs.actionRef,
+          skippedTriggers: toSkippedTriggers(skippedTriggers, context),
+          resolvedDefaults: buildResolvedDefaults(inputs),
         });
         logAction(`Findings written to ${findingsPath}`);
       } catch (error) {
@@ -2104,6 +2122,7 @@ export async function runPRWorkflow(
         postChecks,
       } = initResult;
       span.setAttribute('warden.trigger.count', matchedTriggers.length);
+      clearStaleDoneMarker(context);
 
       // Set Sentry context after building event context
       if (context.pullRequest) {
@@ -2151,6 +2170,9 @@ export async function runPRWorkflow(
         try {
           writeFindingsOutput([], context, [], {
             configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
+            actionRef: inputs.actionRef,
+            skippedTriggers: toSkippedTriggers(skippedTriggers, context),
+            resolvedDefaults: buildResolvedDefaults(inputs),
           });
         } catch (error) {
           warnAction(`Failed to write findings output: ${error}`);
@@ -2173,6 +2195,9 @@ export async function runPRWorkflow(
           try {
             writeFindingsOutput([], context, cleanupFindingObservations, {
               configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
+              actionRef: inputs.actionRef,
+              skippedTriggers: toSkippedTriggers(skippedTriggers, context),
+              resolvedDefaults: buildResolvedDefaults(inputs),
             });
           } catch (error) {
             warnAction(`Failed to write findings output: ${error}`);

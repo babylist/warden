@@ -16,6 +16,7 @@ vi.mock('../../utils/exec.js', async (importOriginal) => {
 
 import { execFileNonInteractive, execNonInteractive } from '../../utils/exec.js';
 import {
+  clearStaleDoneMarker,
   getFindingsOutputPath,
   prepareRuntimeEnvironment,
   writeFindingsOutput,
@@ -107,6 +108,40 @@ describe('findings output', () => {
     process.env['RUNNER_TEMP'] = runnerTemp;
 
     expect(getFindingsOutputPath()).toBe(join(runnerTemp, 'warden-findings.json'));
+  });
+});
+
+describe('clearStaleDoneMarker', () => {
+  let tempDir: string;
+  let previousGithubWorkspace: string | undefined;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(join(tmpdir(), 'warden-clear-done-'));
+    previousGithubWorkspace = process.env['GITHUB_WORKSPACE'];
+    process.env['GITHUB_WORKSPACE'] = tempDir;
+  });
+
+  afterEach(() => {
+    if (previousGithubWorkspace === undefined) {
+      delete process.env['GITHUB_WORKSPACE'];
+    } else {
+      process.env['GITHUB_WORKSPACE'] = previousGithubWorkspace;
+    }
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('removes a .done marker left over from a previous run at the same path', () => {
+    const filePath = getFindingsOutputPath(tempDir);
+    mkdirSync(tempDir, { recursive: true });
+    writeFileSync(`${filePath}.done`, '');
+
+    clearStaleDoneMarker(createContext(tempDir));
+
+    expect(existsSync(`${filePath}.done`)).toBe(false);
+  });
+
+  it('is a no-op when no .done marker exists', () => {
+    expect(() => clearStaleDoneMarker(createContext(tempDir))).not.toThrow();
   });
 });
 

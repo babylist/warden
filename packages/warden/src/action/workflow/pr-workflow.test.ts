@@ -113,6 +113,7 @@ vi.mock('./base.js', async () => {
     getAuthenticatedBotLogin: vi.fn(() => Promise.resolve('warden[bot]')),
     writeFindingsOutput: vi.fn(actual.writeFindingsOutput),
     writeFindingsOutputLive: vi.fn(actual.writeFindingsOutputLive),
+    clearStaleDoneMarker: vi.fn(actual.clearStaleDoneMarker),
   };
 });
 
@@ -120,7 +121,7 @@ vi.mock('./base.js', async () => {
 import { runSkillTask } from '../../cli/output/tasks.js';
 import { fetchExistingComments, deduplicateFindings, processDuplicateActions } from '../../output/dedup.js';
 import { evaluateFixAttempts } from '../fix-evaluation/index.js';
-import { setFailed, writeFindingsOutput, writeFindingsOutputLive } from './base.js';
+import { setFailed, writeFindingsOutput, writeFindingsOutputLive, clearStaleDoneMarker } from './base.js';
 import { runPRWorkflow } from './pr-workflow.js';
 import { clearSkillsCache } from '../../skills/loader.js';
 import { Semaphore } from '../../utils/index.js';
@@ -135,6 +136,7 @@ const mockEvaluateFixAttempts = vi.mocked(evaluateFixAttempts);
 const mockSetFailed = vi.mocked(setFailed);
 const mockWriteFindingsOutput = vi.mocked(writeFindingsOutput);
 const mockWriteFindingsOutputLive = vi.mocked(writeFindingsOutputLive);
+const mockClearStaleDoneMarker = vi.mocked(clearStaleDoneMarker);
 
 // Type helper for mocking Octokit responses
 type GetPullResponse = Awaited<ReturnType<Octokit['pulls']['get']>>;
@@ -407,10 +409,10 @@ describe('runPRWorkflow', () => {
           repository: expect.objectContaining({ fullName: 'test-owner/test-repo' }),
         }),
         [],
-        {
+        expect.objectContaining({
           triggerResults: [],
           configuredSkills: [{ name: 'test-skill', triggered: false }],
-        }
+        })
       );
     });
 
@@ -1498,6 +1500,41 @@ describe('runPRWorkflow', () => {
       ]);
     });
 
+    it('clears a stale .done marker before the first trigger settles, not lazily on the first live write', async () => {
+      mockRunSkillTask.mockResolvedValue({ name: 'test-trigger', report: createSkillReport({ skill: 'test-skill' }) });
+
+      await runPRWorkflow(mockOctokit, createDefaultInputs(), 'pull_request', EVENT_PAYLOAD_PATH, FIXTURES_DIR);
+
+      expect(mockClearStaleDoneMarker).toHaveBeenCalledTimes(1);
+      expect(mockClearStaleDoneMarker.mock.invocationCallOrder[0]!)
+        .toBeLessThan(mockRunSkillTask.mock.invocationCallOrder[0]!);
+    });
+
+    it('computes checkConclusion from confidence-filtered findings, matching what actually posts to the check run', async () => {
+      // High severity but low confidence, with minConfidence defaulting to
+      // 'medium': the finding is filtered out of the posted check's
+      // conclusion, so the real check run succeeds even though failOn:
+      // 'high' + failCheck: true would fail on the raw findings.
+      const lowConfidenceFinding = createFinding({ severity: 'high', confidence: 'low' });
+      mockRunSkillTask.mockResolvedValue({
+        name: 'test-trigger',
+        report: createSkillReport({ skill: 'test-skill', findings: [lowConfidenceFinding] }),
+      });
+
+      await runPRWorkflow(
+        mockOctokit,
+        createDefaultInputs({ failOn: 'high', failCheck: true }),
+        'pull_request',
+        EVENT_PAYLOAD_PATH,
+        FIXTURES_DIR
+      );
+
+      const [, , , finalOptions] = mockWriteFindingsOutput.mock.calls[0]!;
+      expect(finalOptions?.skillExecutions).toEqual([
+        expect.objectContaining({ checkConclusion: 'success' }),
+      ]);
+    });
+
     it('honors the parallel input when dispatching matched triggers', async () => {
       let activeRuns = 0;
       let maxActiveRuns = 0;
@@ -1930,6 +1967,13 @@ describe('runPRWorkflow', () => {
       expect(createCheck).toHaveBeenCalledWith(
         expect.objectContaining({ name: 'warden: run-skill' })
       );
+
+      // skipped-skill's paths filter (docs/**) doesn't match this event's
+      // changed files — deriveSkippedReason's path_filter fallthrough.
+      const [, , , finalOptions] = mockWriteFindingsOutput.mock.calls[0]!;
+      expect(finalOptions?.skippedTriggers).toEqual([
+        expect.objectContaining({ skillName: 'skipped-skill', reason: 'path_filter' }),
+      ]);
       expect(updateCheck).toHaveBeenCalledWith(
         expect.objectContaining({
           conclusion: 'neutral',
@@ -1965,6 +2009,13 @@ describe('runPRWorkflow', () => {
           }),
         })
       );
+
+      // The trigger only fires on 'labeled'; this fixture replays an 'opened'
+      // event — deriveSkippedReason's no_event_match branch.
+      const [, , , finalOptions] = mockWriteFindingsOutput.mock.calls[0]!;
+      expect(finalOptions?.skippedTriggers).toEqual([
+        expect.objectContaining({ skillName: 'labeled-skill', reason: 'no_event_match' }),
+      ]);
     });
 
     it('does not create or update any checks when postChecks is false, but still posts the review', async () => {
@@ -2610,9 +2661,9 @@ describe('runPRWorkflow', () => {
             resolvedReason: 'fix_evaluation',
           }),
         ],
-        {
+        expect.objectContaining({
           configuredSkills: [{ name: 'test-skill', triggered: false }],
-        }
+        })
       );
     });
 

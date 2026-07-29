@@ -2,7 +2,6 @@ import { z } from 'zod';
 import type { EventContext, SkillReport } from '../../types/index.js';
 import {
   AuxiliaryUsageMapSchema,
-  ConfidenceThresholdSchema,
   FindingSchema,
   findingLine,
   GitHubEventTypeSchema,
@@ -60,15 +59,16 @@ const HarnessSchema = z.object({
   actionRef: z.string().optional(),
 });
 
+/**
+ * Action-level fallbacks every trigger falls back to when its own config
+ * doesn't override them. Deliberately narrower than a per-trigger
+ * ResolvedTrigger: model/runtime/minConfidence/verifyFindings are resolved
+ * per skill/trigger in this repo, not at the action level, so there's no
+ * single run-wide value to report for them here.
+ */
 const ResolvedDefaultsSchema = z.object({
   failOn: SeverityThresholdSchema.optional(),
   reportOn: SeverityThresholdSchema.optional(),
-  minConfidence: ConfidenceThresholdSchema.optional(),
-  model: z.string().optional(),
-  auxiliaryModel: z.string().optional(),
-  synthesisModel: z.string().optional(),
-  runtime: z.string().optional(),
-  verifyFindings: z.boolean().optional(),
   failCheck: z.boolean().optional(),
   requestChanges: z.boolean().optional(),
   maxFindings: z.number().int().nonnegative().optional(),
