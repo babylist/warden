@@ -240,6 +240,40 @@ describe('mergeCrossLocationFindings', () => {
     }));
   });
 
+  it('resolves a chained/overlapping merge to the final survivor, not an intermediate winner', async () => {
+    // Regression: two overlapping groups where f2 is absorbed into f1, then
+    // f1 itself is absorbed into f3. f2's replacement must resolve to f3 (the
+    // finding that actually survives into `result.findings`), not f1 — f1
+    // stops existing in the output once its own group runs.
+    const findings = [
+      makeFinding({ id: 'f1', severity: 'medium', title: 'Same root cause', location: { path: 'src/a.ts', startLine: 1 } }),
+      makeFinding({ id: 'f2', severity: 'low', title: 'Same root cause', location: { path: 'src/b.ts', startLine: 2 } }),
+      makeFinding({ id: 'f3', severity: 'high', title: 'Same root cause', location: { path: 'src/a.ts', startLine: 5 } }),
+    ];
+
+    mockCallHaiku.mockResolvedValue({
+      success: true,
+      data: [[1, 2], [1, 3]],
+      usage: { inputTokens: 100, outputTokens: 10, costUSD: 0.001 },
+    });
+
+    const onFindingProcessing = vi.fn();
+    const result = await mergeCrossLocationFindings(findings, {
+      apiKey: 'test-key',
+      repoPath: tempDir,
+      onFindingProcessing,
+    });
+
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0]!.id).toBe('f3');
+    expect(onFindingProcessing).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'merge',
+      action: 'merged',
+      finding: findings[1],
+      replacement: expect.objectContaining({ id: 'f3' }),
+    }));
+  });
+
   it('merges 3+ locations in one group', async () => {
     const findings = [
       makeFinding({ id: 'f1', severity: 'medium', location: { path: 'src/a.ts', startLine: 1 } }),

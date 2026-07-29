@@ -38,7 +38,7 @@ describe('findings output schema', () => {
       version: '1',
       timestamp: '2026-01-01T00:00:00.000Z',
       runAttempt: undefined,
-      harness: undefined,
+      harness: { name: 'warden', version: expect.any(String), actionRef: undefined },
       repository: {
         owner: context.repository.owner,
         name: context.repository.name,

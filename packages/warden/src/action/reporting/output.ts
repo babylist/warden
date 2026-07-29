@@ -415,9 +415,7 @@ export function buildFindingsOutput(
     version: '1',
     timestamp: options.timestamp ?? new Date().toISOString(),
     runAttempt: options.runAttempt,
-    ...(options.actionRef !== undefined && {
-      harness: { name: 'warden' as const, version: getVersion(), actionRef: options.actionRef },
-    }),
+    harness: { name: 'warden' as const, version: getVersion(), actionRef: options.actionRef },
     repository: {
       owner: context.repository.owner,
       name: context.repository.name,

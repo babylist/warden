@@ -459,10 +459,15 @@ export function applyMergeGroups(
 }
 
 /**
- * The winner an absorbed finding was recorded against may itself have been
- * folded into a later group's merge; `replacements` holds the final version.
+ * The winner an absorbed finding was recorded against may itself have gone on
+ * to be absorbed into a later, overlapping group's winner (e.g. groups
+ * `[[1,2],[1,3]]`: finding 2 absorbed into 1, then 1 itself absorbed into 3).
+ * `absorbedToWinner` only records the immediate winner at absorption time, so
+ * walk it forward to the final survivor — a finding, once absorbed, is
+ * excluded from every later group (see the `!absorbed.has(f)` filter above),
+ * so it can never become a winner again, and this chain can't cycle.
  * Looking this up by winner identity (rather than re-deriving it from
- * location) avoids silently losing the link when the absorbed finding's
+ * location) also avoids silently losing the link when the absorbed finding's
  * location coincides with the winner's own primary location, which isn't
  * present in the winner's `additionalLocations`.
  */
@@ -471,8 +476,11 @@ function findReplacementForAbsorbed(
   replacements: Map<Finding, Finding>,
   absorbedToWinner: Map<Finding, Finding>
 ): Finding | undefined {
-  const winner = absorbedToWinner.get(finding);
+  let winner = absorbedToWinner.get(finding);
   if (!winner) return undefined;
+  for (let next = absorbedToWinner.get(winner); next; next = absorbedToWinner.get(winner)) {
+    winner = next;
+  }
   return replacements.get(winner) ?? winner;
 }
 
