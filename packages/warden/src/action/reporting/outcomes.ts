@@ -18,8 +18,6 @@ export const DedupeDetailSchema = z.object({
   source: z.enum(['warden', 'external']),
   matchType: z.enum(['hash', 'semantic']),
   existingFindingId: z.string().optional(),
-  /** skillExecutionId that produced the matched comment, when known (unavailable for comments fetched from GitHub). */
-  existingSkillExecutionId: z.string().optional(),
   existingCommentId: z.number().int().positive().optional(),
   existingThreadId: z.string().optional(),
   existingResolved: z.boolean().optional(),
@@ -39,8 +37,6 @@ interface BaseFindingObservation {
 
 export interface PostedFindingObservation extends BaseFindingObservation {
   outcome: 'posted';
-  githubCommentId?: number;
-  githubCommentUrl?: string;
 }
 
 export interface DedupedFindingObservation extends BaseFindingObservation {
@@ -75,8 +71,6 @@ export const FindingObservationSchema = z.discriminatedUnion('outcome', [
     finding: FindingSchema,
     skill: z.string().optional(),
     skillExecutionId: z.string().optional(),
-    githubCommentId: z.number().int().positive().optional(),
-    githubCommentUrl: z.string().optional(),
   }),
   z.object({
     outcome: z.literal('deduped'),

@@ -442,7 +442,6 @@ describe('findings output schema', () => {
             source: 'warden',
             matchType: 'hash',
             existingFindingId: 'prior-id',
-            existingSkillExecutionId: 'exec-prior',
             existingSkills: ['test-skill', 'other-skill'],
           },
         },
@@ -456,7 +455,7 @@ describe('findings output schema', () => {
 
     expect(output.skills[0]?.findings[0]?.reportedBy).toEqual([
       { skillExecutionId: 'exec-abc', skillName: 'test-skill', role: 'primary' },
-      { skillExecutionId: 'exec-prior', skillName: 'other-skill', role: 'corroborating', matchType: 'hash' },
+      { skillName: 'other-skill', role: 'corroborating', matchType: 'hash' },
     ]);
   });
 
@@ -480,7 +479,6 @@ describe('findings output schema', () => {
             source: 'warden',
             matchType: 'hash',
             existingFindingId: 'prior-id',
-            existingSkillExecutionId: 'exec-prior',
             existingSkills: ['other-skill', 'some-prior-skill'],
           },
         },

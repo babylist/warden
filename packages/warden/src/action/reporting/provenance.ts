@@ -33,7 +33,7 @@ export type FindingProvenance = z.infer<typeof FindingProvenanceSchema>;
 
 export const DiscardedFindingSchema = z.object({
   originSkillExecutionId: z.string().optional(),
-  stage: z.enum(['verification_rejected', 'merge_absorbed']),
+  stage: z.enum(['verification_rejected', 'merge_absorbed', 'dedupe_dropped']),
   severity: SeveritySchema,
   title: z.string(),
   location: LocationSchema.optional(),
@@ -57,16 +57,16 @@ export interface ProvenanceAndDiscarded {
 
 /**
  * Build per-finding provenance and the list of discarded candidates from
- * captured `FindingProcessingEvent`s. Only `verification`/`rejected`,
- * `verification`/`revised`, and `merge`/`merged` events carry data this
- * export needs — `dedupe` and `fix_gate` events are out of scope here.
+ * captured `FindingProcessingEvent`s. Handles `verification`/`rejected`,
+ * `verification`/`revised`, `merge`/`merged`, and `dedupe`/`dropped` events —
+ * `fix_gate` events are out of scope here (they don't remove a finding, they
+ * strip a proposed fix from one that's kept).
  *
- * Keyed by `event.replacement.id`, which is stable at the point these events
- * fire (`sdk/verify.ts` preserves the original id across a revision). If a
- * finding is later recentered onto a different id by cross-run dedupe
- * (`poster.ts`'s `recenterReportFindingIds`, which runs after this), the
- * lookup in `output.ts` misses and that finding's provenance is silently
- * omitted rather than misattributed.
+ * `poster.ts`'s `recenterReportFindingIds` keeps this lookup valid across
+ * cross-run dedupe: when it recenters a survivor's `id` onto a pre-existing
+ * comment's id, it remaps this same finding's id inside any already-captured
+ * `FindingProcessingEvent`s so the id this map is keyed by (and the id
+ * `output.ts` looks it up by) stay in sync.
  */
 export function buildProvenanceAndDiscarded(executions: FindingExecutionEvents[]): ProvenanceAndDiscarded {
   const provenanceByFindingId = new Map<string, FindingProvenance>();
@@ -74,6 +74,20 @@ export function buildProvenanceAndDiscarded(executions: FindingExecutionEvents[]
 
   for (const { skillExecutionId, model, events } of executions) {
     for (const event of events) {
+      if (event.stage === 'dedupe' && event.action === 'dropped') {
+        discarded.push({
+          originSkillExecutionId: skillExecutionId,
+          stage: 'dedupe_dropped',
+          severity: event.finding.severity,
+          title: event.finding.title,
+          location: event.finding.location,
+          model,
+          reason: event.reason,
+          survivorFindingId: event.replacement?.id,
+        });
+        continue;
+      }
+
       if (event.stage === 'verification' && event.action === 'rejected') {
         discarded.push({
           originSkillExecutionId: skillExecutionId,

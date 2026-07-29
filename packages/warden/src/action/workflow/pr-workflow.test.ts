@@ -766,6 +766,47 @@ describe('runPRWorkflow', () => {
       );
     });
 
+    it('report mode rejects a legacy fallback join when 2+ current triggers share a name and skill', async () => {
+      // Regression: only ONE artifact row lacks triggerId here, so the old
+      // ambiguity check (which only looked for 2+ artifact rows or 2+
+      // triggers sharing a triggerId) saw nothing ambiguous and would have
+      // silently bound this row to whichever trigger asked for it first —
+      // even though two current triggers share this row's fallback
+      // name+skill key and either could legitimately claim it.
+      const highFinding = createFinding({ id: 'high-finding', severity: 'high' });
+      const lowFinding = createFinding({ id: 'low-finding', severity: 'low' });
+      const highReport = createSkillReport({ summary: 'High report', findings: [highFinding] });
+      const lowReport = createSkillReport({ summary: 'Low report', findings: [lowFinding] });
+      const findingsFile = writeFindingsArtifact([highReport, lowReport], [
+        {
+          triggerId: duplicateTriggerId('high'),
+          triggerName: 'test-skill',
+          skillName: 'test-skill',
+          report: highReport,
+        },
+        {
+          // No triggerId: only this row needs the legacy name+skill fallback.
+          triggerName: 'test-skill',
+          skillName: 'test-skill',
+          report: lowReport,
+        },
+      ]);
+
+      try {
+        await expect(
+          runPRWorkflow(
+            mockOctokit,
+            createDefaultInputs({ mode: 'report', findingsFile }),
+            'pull_request',
+            EVENT_PAYLOAD_PATH,
+            DUPLICATE_TRIGGER_FIXTURES_DIR
+          )
+        ).rejects.toThrow('legacy name/skill fallback is ambiguous');
+      } finally {
+        rmSync(dirname(findingsFile), { recursive: true, force: true });
+      }
+    });
+
     it('report mode fails GitHub check write errors without creating in-progress checks', async () => {
       const report = createSkillReport({ findings: [createFinding()] });
       const findingsFile = writeFindingsArtifact([report], [

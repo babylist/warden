@@ -242,6 +242,9 @@ describe('postTriggerReview', () => {
       body: '',
       comments: [expect.objectContaining({ path: 'test.ts', line: 10, side: 'RIGHT', body: 'Test comment' })],
     });
+    // Regression: the export's reviewEvent must reflect what actually
+    // posted, not renderResult's pre-posting intent.
+    expect(result.reviewEventPosted).toBe('COMMENT');
   });
 
   it('carries skillExecutionId from the trigger result onto posted observations', async () => {
@@ -405,6 +408,11 @@ describe('postTriggerReview', () => {
     expect(postResult.posted).toBe(false);
     expect(mockOctokit.pulls.createReview).not.toHaveBeenCalled();
     expect(processDuplicateActions).not.toHaveBeenCalled();
+    // Regression: these findings were about to post — the export must record
+    // why they didn't, not silently drop them from findingObservations.
+    expect(
+      postResult.findingObservations.filter((o) => o.outcome === 'skipped' && o.skippedReason === 'review_not_posted')
+    ).toHaveLength(2);
   });
 
   it('skips the review write when the PR head advances during duplicate processing', async () => {
@@ -466,6 +474,11 @@ describe('postTriggerReview', () => {
       expect(mockOctokit.pulls.get).toHaveBeenCalledTimes(2);
       // No swallowed error: the findings were not marked failed.
       expect(postResult.findingObservations.filter((o) => o.outcome === 'failed')).toEqual([]);
+      // Regression: the finding that would have posted must be recorded as
+      // blocked, not vanish from the export.
+      expect(
+        postResult.findingObservations.filter((o) => o.outcome === 'skipped' && o.skippedReason === 'review_not_posted')
+      ).toEqual([expect.objectContaining({ finding: findings[0] })]);
     } finally {
       dateNowSpy.mockRestore();
     }
@@ -827,6 +840,17 @@ describe('postTriggerReview', () => {
       reportOn: 'low',
       failOn: 'high',
       requestChanges: true,
+      // Captured during skill execution, before this recenter — its finding
+      // id must move in lockstep with the report's own recentered id so
+      // provenance.ts's id-keyed lookup doesn't miss.
+      findingProcessingEvents: [
+        {
+          stage: 'verification',
+          action: 'revised',
+          finding: { ...finding, title: 'Original wording' },
+          replacement: finding,
+        },
+      ],
     };
 
     const existingComment = createExistingComment({ isWarden: true, findingId: 'WRZ-XPL' });
@@ -872,6 +896,9 @@ describe('postTriggerReview', () => {
     expect([...postResult.activeWardenCommentIds]).toEqual([1]);
     expect(result.report?.findings[0]?.id).toBe('WRZ-XPL');
     expect(result.report?.findings[0]?.reportedId).toBe('WRZ-XPL');
+    // Regression: the captured processing event's replacement id must move
+    // with the recenter, or provenance.ts's id-keyed lookup silently misses.
+    expect(result.findingProcessingEvents?.[0]?.replacement?.id).toBe('WRZ-XPL');
     expect(postResult.findingObservations).toEqual([
       expect.objectContaining({
         outcome: 'deduped',

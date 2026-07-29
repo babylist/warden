@@ -196,6 +196,50 @@ describe('mergeCrossLocationFindings', () => {
     }));
   });
 
+  it('still attributes the absorbed finding to its winner when both share the exact same location', async () => {
+    // Regression: mergeGroupLocations seeds `seen` with the winner's own
+    // location, so a loser at that same location is filtered out of
+    // additionalLocations entirely — findReplacementForAbsorbed used to
+    // location-match against additionalLocations only, so it silently
+    // returned no replacement (and buildProvenanceAndDiscarded would then
+    // drop the whole merge event) in exactly this case.
+    const findings = [
+      makeFinding({
+        id: 'f1',
+        severity: 'high',
+        title: 'Missing null check',
+        location: { path: 'src/a.ts', startLine: 3 },
+      }),
+      makeFinding({
+        id: 'f2',
+        severity: 'medium',
+        title: 'Missing null check (duplicate wording)',
+        location: { path: 'src/a.ts', startLine: 3 },
+      }),
+    ];
+
+    mockCallHaiku.mockResolvedValue({
+      success: true,
+      data: [[1, 2]],
+      usage: { inputTokens: 100, outputTokens: 10, costUSD: 0.001 },
+    });
+
+    const onFindingProcessing = vi.fn();
+    const result = await mergeCrossLocationFindings(findings, {
+      apiKey: 'test-key',
+      repoPath: tempDir,
+      onFindingProcessing,
+    });
+
+    expect(result.findings).toHaveLength(1);
+    expect(onFindingProcessing).toHaveBeenCalledWith(expect.objectContaining({
+      stage: 'merge',
+      action: 'merged',
+      finding: findings[1],
+      replacement: expect.objectContaining({ id: 'f1' }),
+    }));
+  });
+
   it('merges 3+ locations in one group', async () => {
     const findings = [
       makeFinding({ id: 'f1', severity: 'medium', location: { path: 'src/a.ts', startLine: 1 } }),

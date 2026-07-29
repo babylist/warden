@@ -24,7 +24,7 @@ import type { EventContext, SkillReport } from '../../types/index.js';
 import type { FindingProcessingEvent } from '../../sdk/types.js';
 import { Sentry, logger, setRepositoryScope, emitRunMetric } from '../../sentry.js';
 import type { ActionInputs } from '../inputs.js';
-import { buildResolvedDefaults } from '../reporting/output.js';
+import { buildBaseOutputOptions } from '../reporting/output.js';
 import type { SkillExecutionMeta } from '../reporting/output.js';
 import {
   setOutput,
@@ -45,7 +45,7 @@ interface SkippedScheduleTrigger {
   skillName: string;
   triggerId?: string;
   triggerName?: string;
-  reason: 'no_changes' | 'pending';
+  reason: 'no_changes' | 'pending' | 'error';
 }
 
 // -----------------------------------------------------------------------------
@@ -76,6 +76,7 @@ async function runScheduleWorkflowInner(
 ): Promise<void> {
   const githubRepository = process.env['GITHUB_REPOSITORY'];
   setRepositoryScope(githubRepository);
+  clearStaleDoneMarker(repoPath);
 
   logGroup('Loading configuration');
   if (inputs.baseConfigPath) {
@@ -118,7 +119,7 @@ async function runScheduleWorkflowInner(
           action: 'scheduled',
           repository: { owner: o, name: n, fullName, defaultBranch: '' },
           repoPath,
-        });
+        }, [], buildBaseOutputOptions(inputs, []));
       } catch (writeError) {
         console.error(`::warning::Failed to write findings output: ${writeError}`);
       }
@@ -149,7 +150,7 @@ async function runScheduleWorkflowInner(
         action: 'scheduled',
         repository: { owner: o, name: n, fullName, defaultBranch: '' },
         repoPath,
-      });
+      }, [], buildBaseOutputOptions(inputs, []));
     } catch (writeError) {
       console.error(`::warning::Failed to write findings output: ${writeError}`);
     }
@@ -184,8 +185,6 @@ async function runScheduleWorkflowInner(
     repository: { owner, name: repo, fullName: `${owner}/${repo}`, defaultBranch },
     repoPath,
   };
-  clearStaleDoneMarker(scheduleContext);
-
   const allReports: SkillReport[] = [];
   const skillExecutions: SkillExecutionMeta[] = [];
   const skippedTriggers: SkippedScheduleTrigger[] = [];
@@ -202,8 +201,7 @@ async function runScheduleWorkflowInner(
       reason: 'pending',
     }));
     writeFindingsOutputLive([...allReports], scheduleContext, [], {
-      actionRef: inputs.actionRef,
-      skippedTriggers: [...skippedTriggers, ...pending],
+      ...buildBaseOutputOptions(inputs, [...skippedTriggers, ...pending]),
       skillExecutions: [...skillExecutions],
     });
   };
@@ -322,6 +320,7 @@ async function runScheduleWorkflowInner(
       });
       const errorMessage = error instanceof Error ? error.message : String(error);
       triggerErrors.push(`${resolved.name}: ${errorMessage}`);
+      skippedTriggers.push({ skillName: resolved.skill, triggerId: resolved.id, triggerName: resolved.name, reason: 'error' });
       console.error(`::warning::Trigger ${resolved.name} failed: ${error}`);
       logGroupEnd();
       writeLiveSnapshot(triggerIndex);
@@ -341,10 +340,8 @@ async function runScheduleWorkflowInner(
   // Write structured findings to file for external export (GCS, S3, etc.)
   try {
     const findingsPath = writeFindingsOutput(allReports, scheduleContext, [], {
-      actionRef: inputs.actionRef,
-      skippedTriggers,
+      ...buildBaseOutputOptions(inputs, skippedTriggers),
       skillExecutions,
-      resolvedDefaults: buildResolvedDefaults(inputs),
     });
     console.log(`Findings written to ${findingsPath}`);
   } catch (error) {

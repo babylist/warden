@@ -8,6 +8,7 @@
 import type { Octokit } from '@octokit/rest';
 import type { EventContext, Finding } from '../../types/index.js';
 import { filterFindings } from '../../types/index.js';
+import type { FindingProcessingEvent } from '../../sdk/types.js';
 import { shouldFail } from '../../triggers/matcher.js';
 import type { RenderResult } from '../../output/types.js';
 import { renderSkillReport, renderFindingsBody } from '../../output/renderer.js';
@@ -103,25 +104,48 @@ function buildDedupeObservations(
   }));
 }
 
-function recenterReportFindingIds(reportFindings: Finding[], actions: DeduplicateResult['duplicateActions']): Finding[] {
-  if (actions.length === 0) {
-    return reportFindings;
-  }
-
-  const ids = new Map(
+function recenterReportFindingIds(
+  reportFindings: Finding[],
+  actions: DeduplicateResult['duplicateActions']
+): { findings: Finding[]; idMap: Map<string, string> } {
+  const idMap = new Map(
     actions
       .filter((action) => action.originalFindingId !== action.finding.id)
       .map((action) => [action.originalFindingId, action.finding.id])
   );
 
-  if (ids.size === 0) {
-    return reportFindings;
+  if (idMap.size === 0) {
+    return { findings: reportFindings, idMap };
   }
 
-  return reportFindings.map((finding) => {
-    const recenteredId = ids.get(finding.id);
+  const findings = reportFindings.map((finding) => {
+    const recenteredId = idMap.get(finding.id);
     return recenteredId ? { ...finding, id: recenteredId, reportedId: recenteredId } : finding;
   });
+
+  return { findings, idMap };
+}
+
+function remapFindingId(finding: Finding, idMap: Map<string, string>): Finding {
+  const recenteredId = idMap.get(finding.id);
+  return recenteredId ? { ...finding, id: recenteredId, reportedId: recenteredId } : finding;
+}
+
+/**
+ * Keep captured `FindingProcessingEvent`s in sync with a recenter so
+ * `provenance.ts`'s id-keyed lookup doesn't miss: those events were captured
+ * during skill execution, before cross-run dedupe could recenter a finding's
+ * id onto a pre-existing comment's id.
+ */
+function remapFindingProcessingEvents(
+  events: FindingProcessingEvent[],
+  idMap: Map<string, string>
+): FindingProcessingEvent[] {
+  return events.map((event) => ({
+    ...event,
+    finding: remapFindingId(event.finding, idMap),
+    ...(event.replacement && { replacement: remapFindingId(event.replacement, idMap) }),
+  }));
 }
 
 // -----------------------------------------------------------------------------
@@ -330,7 +354,11 @@ export async function postTriggerReview(
         currentSkill: skill,
         maxRetries: ctx.maxRetries,
       });
-      result.report.findings = recenterReportFindingIds(result.report.findings, dedupResult.duplicateActions);
+      const recentered = recenterReportFindingIds(result.report.findings, dedupResult.duplicateActions);
+      result.report.findings = recentered.findings;
+      if (recentered.idMap.size > 0 && result.findingProcessingEvents) {
+        result.findingProcessingEvents = remapFindingProcessingEvents(result.findingProcessingEvents, recentered.idMap);
+      }
       findingsToPost = dedupResult.newFindings;
       findingsToMarkFailed = findingsToPost;
       findingObservations.push(...buildDedupeObservations(dedupResult.duplicateActions, skill, result.skillExecutionId));
@@ -362,6 +390,15 @@ export async function postTriggerReview(
     // head freshness before the first GitHub write (duplicate-action comment
     // updates below, then the review itself).
     if (!(await deps.feedbackGate.canWrite())) {
+      for (const finding of findingsToPost) {
+        findingObservations.push({
+          outcome: 'skipped',
+          finding,
+          skill,
+          skillExecutionId: result.skillExecutionId,
+          skippedReason: 'review_not_posted',
+        });
+      }
       return emptyReviewPostResult(newComments, activeWardenCommentIds, findingObservations);
     }
 
@@ -465,8 +502,20 @@ export async function postTriggerReview(
         return emptyReviewPostResult(newComments, activeWardenCommentIds, findingObservations);
       }
       if (postOutcome !== 'posted') {
+        if (postOutcome === 'blocked') {
+          for (const finding of postedFindings) {
+            findingObservations.push({
+              outcome: 'skipped',
+              finding,
+              skill,
+              skillExecutionId: result.skillExecutionId,
+              skippedReason: 'review_not_posted',
+            });
+          }
+        }
         return emptyReviewPostResult(newComments, activeWardenCommentIds, findingObservations);
       }
+      result.reviewEventPosted = renderResultToPost.review?.event;
       // COMMENT reviews post with an empty body, so locationless findings that
       // the renderer placed in the body never reach the PR. Record them as
       // checks-only instead of claiming they were posted.

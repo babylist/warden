@@ -135,13 +135,13 @@ describe('clearStaleDoneMarker', () => {
     mkdirSync(tempDir, { recursive: true });
     writeFileSync(`${filePath}.done`, '');
 
-    clearStaleDoneMarker(createContext(tempDir));
+    clearStaleDoneMarker(tempDir);
 
     expect(existsSync(`${filePath}.done`)).toBe(false);
   });
 
   it('is a no-op when no .done marker exists', () => {
-    expect(() => clearStaleDoneMarker(createContext(tempDir))).not.toThrow();
+    expect(() => clearStaleDoneMarker(tempDir)).not.toThrow();
   });
 });
 

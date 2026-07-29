@@ -131,6 +131,14 @@ export interface TriggerResult {
   error?: unknown;
   /** Verification/merge events captured during post-processing, for provenance export. */
   findingProcessingEvents?: FindingProcessingEvent[];
+  /**
+   * The review event actually posted to GitHub by `postTriggerReview`, set
+   * only when posting succeeds. Distinct from `renderResult.review.event`,
+   * which reflects pre-posting render intent and can diverge from what (if
+   * anything) actually posted — the gate can block the write, or posting can
+   * fall back to checks-only after rendering already decided an event.
+   */
+  reviewEventPosted?: 'APPROVE' | 'REQUEST_CHANGES' | 'COMMENT';
 }
 
 // -----------------------------------------------------------------------------

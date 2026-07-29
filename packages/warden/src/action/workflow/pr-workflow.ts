@@ -86,7 +86,7 @@ import type { z } from 'zod';
 import {
   FindingsOutputSchema,
   buildConfiguredSkillsList,
-  buildResolvedDefaults,
+  buildBaseOutputOptions,
   type SkippedTriggerReasonSchema,
   type FindingsOutput,
   type ReplayTriggerResult,
@@ -211,6 +211,27 @@ function toSkippedTriggers(
   }));
 }
 
+/**
+ * A trigger that threw before producing a report has no `report`, so
+ * `toSkillExecutions`'s filter (which requires one) can never include it —
+ * without this, an errored trigger vanishes from the export entirely aside
+ * from a console warning and (in analyze/report mode) a `triggerResults`
+ * row. Surfacing it here instead keeps it visible in the same place a
+ * schedule-mode trigger error is now surfaced.
+ */
+function toErroredSkippedTriggers(
+  results: TriggerResult[]
+): NonNullable<BuildFindingsOutputOptions['skippedTriggers']> {
+  return results
+    .filter((r) => r.error && !r.report)
+    .map((r) => ({
+      skillName: r.skillName,
+      triggerId: r.triggerId,
+      triggerName: r.triggerName,
+      reason: 'error' as const,
+    }));
+}
+
 /** Build per-execution metadata for the findings output from settled trigger results. */
 function toSkillExecutions(results: TriggerResult[]): SkillExecutionMeta[] {
   return results
@@ -222,7 +243,7 @@ function toSkillExecutions(results: TriggerResult[]): SkillExecutionMeta[] {
       triggerName: r.triggerName,
       checkRunUrl: r.checkRunUrl,
       checkRunId: r.checkRunId,
-      reviewEvent: r.renderResult?.review?.event,
+      reviewEvent: r.reviewEventPosted,
       // Matches buildSkillCheckPayload's own conclusion computation
       // (confidence-filtered first) so this mirrors what actually posted to
       // the check run at checkRunUrl/checkRunId. determineConclusion never
@@ -1109,10 +1130,11 @@ async function finalizeWorkflow(
     const findingsPath = writeFindingsOutput(reports, context, findingObservations, {
       triggerResults: toReplayTriggerResults(results),
       configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
-      actionRef: inputs.actionRef,
-      skippedTriggers: toSkippedTriggers(skippedTriggers, context),
+      ...buildBaseOutputOptions(inputs, [
+        ...toSkippedTriggers(skippedTriggers, context),
+        ...toErroredSkippedTriggers(results),
+      ]),
       skillExecutions: toSkillExecutions(results),
-      resolvedDefaults: buildResolvedDefaults(inputs),
     });
     logAction(`Findings written to ${findingsPath}`);
   } catch (error) {
@@ -1396,6 +1418,7 @@ function toReplayTriggerResults(results: TriggerResult[]): ReplayTriggerResult[]
     skillName: result.skillName,
     report: result.report,
     error: result.error,
+    findingProcessingEvents: result.findingProcessingEvents,
   }));
 }
 
@@ -1481,9 +1504,24 @@ function buildReportModeResults(
       failCheck,
       maxFindings,
     };
-    const outputResult =
-      outputResults.get(triggerReplayKey(trigger))?.shift() ??
-      outputResults.get(resultKey(trigger.name, trigger.skill))?.shift();
+    let outputResult = outputResults.get(triggerReplayKey(trigger))?.shift();
+    if (!outputResult) {
+      // Only a legacy artifact (predating triggerId) reaches this fallback.
+      // If 2+ current triggers share this name+skill, the fallback can't
+      // tell them apart — fail loudly instead of silently binding a report
+      // to the wrong trigger's policy (failOn/reportOn/etc).
+      const fallbackKey = resultKey(trigger.name, trigger.skill);
+      const sameFallbackKeyTriggers = matchedTriggers.filter(
+        (t) => resultKey(t.name, t.skill) === fallbackKey
+      );
+      if (sameFallbackKeyTriggers.length > 1) {
+        throw new Error(
+          `Findings file has no triggerId-matched result for trigger ${trigger.name} (${trigger.skill}), ` +
+            `and the legacy name/skill fallback is ambiguous: multiple current triggers share this name and skill`
+        );
+      }
+      outputResult = outputResults.get(fallbackKey)?.shift();
+    }
 
     if (!outputResult) {
       return {
@@ -1505,6 +1543,7 @@ function buildReportModeResults(
     return {
       ...baseResult,
       report: outputResult.report,
+      findingProcessingEvents: outputResult.findingProcessingEvents,
     };
   });
 
@@ -1568,7 +1607,9 @@ async function createCompletedSkillChecksForReport(
         minConfidence: result.minConfidence,
         failCheck: result.failCheck,
       });
-      updatedResults.push(withRenderedReviewResult({ ...result, checkRunUrl: check.url }));
+      updatedResults.push(
+        withRenderedReviewResult({ ...result, checkRunUrl: check.url, checkRunId: check.checkRunId })
+      );
       continue;
     }
 
@@ -1726,10 +1767,11 @@ async function finalizeReportWorkflow(
         allTriggers: options.resolvedTriggers ?? [],
         matchedTriggers: options.matchedTriggers ?? [],
       }),
-      actionRef: options.inputs.actionRef,
-      skippedTriggers: toSkippedTriggers(options.skippedTriggers ?? [], context),
+      ...buildBaseOutputOptions(options.inputs, [
+        ...toSkippedTriggers(options.skippedTriggers ?? [], context),
+        ...toErroredSkippedTriggers(results),
+      ]),
       skillExecutions: toSkillExecutions(results),
-      resolvedDefaults: buildResolvedDefaults(options.inputs),
     });
     logAction(`Findings written to ${findingsPath}`);
   } catch (error) {
@@ -1867,9 +1909,7 @@ async function runAnalyzeMode(
       const findingsPath = writeFindingsOutput([], context, [], {
         triggerResults: [],
         configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
-        actionRef: inputs.actionRef,
-        skippedTriggers: toSkippedTriggers(skippedTriggers, context),
-        resolvedDefaults: buildResolvedDefaults(inputs),
+        ...buildBaseOutputOptions(inputs, toSkippedTriggers(skippedTriggers, context)),
       });
       logAction(`Findings written to ${findingsPath}`);
     } catch (error) {
@@ -1889,8 +1929,10 @@ async function runAnalyzeMode(
       onTriggerComplete: (completedSoFar) => {
         const reportsSoFar = completedSoFar.flatMap((r) => (r.report ? [r.report] : []));
         writeFindingsOutputLive(reportsSoFar, context, [], {
-          actionRef: inputs.actionRef,
-          skippedTriggers: toSkippedTriggers(skippedTriggers, context),
+          ...buildBaseOutputOptions(inputs, [
+            ...toSkippedTriggers(skippedTriggers, context),
+            ...toErroredSkippedTriggers(completedSoFar),
+          ]),
           skillExecutions: toSkillExecutions(completedSoFar),
         });
       },
@@ -1906,10 +1948,11 @@ async function runAnalyzeMode(
     const findingsPath = writeFindingsOutput(reports, context, [], {
       triggerResults: toReplayTriggerResults(results),
       configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
-      actionRef: inputs.actionRef,
-      skippedTriggers: toSkippedTriggers(skippedTriggers, context),
+      ...buildBaseOutputOptions(inputs, [
+        ...toSkippedTriggers(skippedTriggers, context),
+        ...toErroredSkippedTriggers(results),
+      ]),
       skillExecutions: toSkillExecutions(results),
-      resolvedDefaults: buildResolvedDefaults(inputs),
     });
     logAction(`Findings written to ${findingsPath}`);
   } catch (error) {
@@ -1960,9 +2003,7 @@ async function runReportMode(
         const findingsPath = writeFindingsOutput([], context, [], {
           triggerResults: [],
           configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
-          actionRef: inputs.actionRef,
-          skippedTriggers: toSkippedTriggers(skippedTriggers, context),
-          resolvedDefaults: buildResolvedDefaults(inputs),
+          ...buildBaseOutputOptions(inputs, toSkippedTriggers(skippedTriggers, context)),
         });
         logAction(`Findings written to ${findingsPath}`);
       } catch (error) {
@@ -2000,9 +2041,7 @@ async function runReportMode(
         const findingsPath = writeFindingsOutput([], context, cleanupFindingObservations, {
           triggerResults: [],
           configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
-          actionRef: inputs.actionRef,
-          skippedTriggers: toSkippedTriggers(skippedTriggers, context),
-          resolvedDefaults: buildResolvedDefaults(inputs),
+          ...buildBaseOutputOptions(inputs, toSkippedTriggers(skippedTriggers, context)),
         });
         logAction(`Findings written to ${findingsPath}`);
       } catch (error) {
@@ -2103,6 +2142,8 @@ export async function runPRWorkflow(
   eventPath: string,
   repoPath: string
 ): Promise<void> {
+  clearStaleDoneMarker(repoPath);
+
   return Sentry.startSpan(
     { op: 'workflow.run', name: 'review pull_request' },
     async (span) => {
@@ -2122,7 +2163,6 @@ export async function runPRWorkflow(
         postChecks,
       } = initResult;
       span.setAttribute('warden.trigger.count', matchedTriggers.length);
-      clearStaleDoneMarker(context);
 
       // Set Sentry context after building event context
       if (context.pullRequest) {
@@ -2170,9 +2210,7 @@ export async function runPRWorkflow(
         try {
           writeFindingsOutput([], context, [], {
             configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
-            actionRef: inputs.actionRef,
-            skippedTriggers: toSkippedTriggers(skippedTriggers, context),
-            resolvedDefaults: buildResolvedDefaults(inputs),
+            ...buildBaseOutputOptions(inputs, toSkippedTriggers(skippedTriggers, context)),
           });
         } catch (error) {
           warnAction(`Failed to write findings output: ${error}`);
@@ -2195,9 +2233,7 @@ export async function runPRWorkflow(
           try {
             writeFindingsOutput([], context, cleanupFindingObservations, {
               configuredSkills: buildConfiguredSkillsList({ allTriggers: resolvedTriggers, matchedTriggers }),
-              actionRef: inputs.actionRef,
-              skippedTriggers: toSkippedTriggers(skippedTriggers, context),
-              resolvedDefaults: buildResolvedDefaults(inputs),
+              ...buildBaseOutputOptions(inputs, toSkippedTriggers(skippedTriggers, context)),
             });
           } catch (error) {
             warnAction(`Failed to write findings output: ${error}`);
@@ -2223,8 +2259,10 @@ export async function runPRWorkflow(
             onTriggerComplete: (completedSoFar) => {
               const reportsSoFar = completedSoFar.flatMap((r) => (r.report ? [r.report] : []));
               writeFindingsOutputLive(reportsSoFar, context, [], {
-                actionRef: inputs.actionRef,
-                skippedTriggers: toSkippedTriggers(skippedTriggers, context),
+                ...buildBaseOutputOptions(inputs, [
+                  ...toSkippedTriggers(skippedTriggers, context),
+                  ...toErroredSkippedTriggers(completedSoFar),
+                ]),
                 skillExecutions: toSkillExecutions(completedSoFar),
               });
             },

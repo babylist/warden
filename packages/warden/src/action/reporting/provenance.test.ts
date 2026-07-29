@@ -104,9 +104,26 @@ describe('buildProvenanceAndDiscarded', () => {
     });
   });
 
-  it('ignores dedupe and fix_gate events', () => {
+  it('records a dedupe-dropped finding in discardedFindings, keyed to its survivor', () => {
     const events: FindingProcessingEvent[] = [
-      { stage: 'dedupe', action: 'dropped', finding: makeFinding(), replacement: makeFinding({ id: 'kept' }) },
+      { stage: 'dedupe', action: 'dropped', finding: makeFinding(), replacement: makeFinding({ id: 'kept' }), reason: 'duplicate title and location' },
+    ];
+
+    const result = buildProvenanceAndDiscarded([{ skillExecutionId: 'exec-1', events }]);
+
+    expect(result.provenanceByFindingId.size).toBe(0);
+    expect(result.discarded).toEqual([
+      expect.objectContaining({
+        stage: 'dedupe_dropped',
+        originSkillExecutionId: 'exec-1',
+        survivorFindingId: 'kept',
+        reason: 'duplicate title and location',
+      }),
+    ]);
+  });
+
+  it('ignores fix_gate events', () => {
+    const events: FindingProcessingEvent[] = [
       { stage: 'fix_gate', action: 'stripped_fix', finding: makeFinding() },
     ];
 

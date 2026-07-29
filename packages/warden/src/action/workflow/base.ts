@@ -372,13 +372,15 @@ export function getFindingsOutputPath(repoPath?: string): string {
 
 /**
  * Remove a `.done` marker left over from a previous run at this same path.
- * Call once, before a run's first write (live or final) — a live write only
- * happens after the first trigger settles, so without this a stale `.done`
- * from a prior run would make a brand-new, still in-progress run look
- * finished to a follower for however long that first trigger takes.
+ * Call once, at the very start of the workflow, before any fallible setup
+ * (config load, API calls) — a live write only happens after the first
+ * trigger settles, so without this a stale `.done` from a prior run would
+ * make a brand-new, still in-progress run look finished to a follower for
+ * however long setup plus that first trigger takes. Takes `repoPath`
+ * directly (not `EventContext`) so it's callable before the context exists.
  */
-export function clearStaleDoneMarker(context: EventContext): void {
-  const filePath = getFindingsOutputPath(context.repoPath);
+export function clearStaleDoneMarker(repoPath: string | undefined): void {
+  const filePath = getFindingsOutputPath(repoPath);
   if (!existsSync(`${filePath}.done`)) {
     return;
   }
@@ -432,7 +434,7 @@ export function writeFindingsOutputLive(
   options: BuildFindingsOutputOptions = {}
 ): void {
   try {
-    clearStaleDoneMarker(context);
+    clearStaleDoneMarker(context.repoPath);
     const filePath = getFindingsOutputPath(context.repoPath);
     const output = buildFindingsOutput(reports, context, findingObservations, options);
     writeFileAtomic(filePath, JSON.stringify(output, null, 2));

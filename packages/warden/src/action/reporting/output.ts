@@ -49,8 +49,6 @@ const ExportedFindingSchema = z.object({
   /** Skills that independently flagged this finding, self included as `role: 'primary'`. */
   reportedBy: z.array(FindingAttributionSchema).optional(),
   provenance: FindingProvenanceSchema.optional(),
-  githubCommentId: z.number().int().positive().optional(),
-  githubCommentUrl: z.string().optional(),
 });
 
 const HarnessSchema = z.object({
@@ -81,6 +79,8 @@ export const SkippedTriggerReasonSchema = z.enum([
   'label_mismatch',
   'no_changes',
   'pending',
+  /** The trigger matched and ran, but threw before producing a report. */
+  'error',
 ]);
 
 const SkippedTriggerSchema = z.object({
@@ -93,6 +93,15 @@ const SkippedTriggerSchema = z.object({
 const TriggerErrorSchema = z.object({
   name: z.string().optional(),
   message: z.string(),
+});
+
+/** Mirrors `FindingProcessingEvent` (sdk/types.ts) so it can round-trip through the analyze/report replay artifact. */
+const ReplayFindingProcessingEventSchema = z.object({
+  stage: z.enum(['dedupe', 'verification', 'merge', 'fix_gate']),
+  action: z.enum(['dropped', 'rejected', 'revised', 'merged', 'stripped_fix']),
+  finding: FindingSchema,
+  reason: z.string().optional(),
+  replacement: FindingSchema.optional(),
 });
 
 // Durable analyze/report replay rows join by triggerName plus configured
@@ -119,6 +128,8 @@ export const TriggerRunResultSchema = z.discriminatedUnion('status', [
     status: z.literal('success'),
     report: ReplaySkillReportSchema,
     error: z.never().optional(),
+    /** Verification/merge/dedupe events captured during analyze mode, replayed so report mode's export still carries provenance/discardedFindings. */
+    findingProcessingEvents: z.array(ReplayFindingProcessingEventSchema).optional(),
   }),
   TriggerRunResultBaseSchema.extend({
     status: z.literal('error'),
@@ -220,6 +231,7 @@ export interface ReplayTriggerResult {
   skillName: string;
   report?: SkillReport;
   error?: unknown;
+  findingProcessingEvents?: FindingProcessingEvent[];
 }
 
 /** Per-execution metadata for one `reports[]` entry, matched by object identity. */
@@ -266,6 +278,25 @@ export function buildResolvedDefaults(inputs: {
     failCheck: inputs.failCheck,
     requestChanges: inputs.requestChanges,
     maxFindings: inputs.maxFindings,
+  };
+}
+
+/**
+ * Build the `actionRef`/`resolvedDefaults`/`skippedTriggers` triple every
+ * `writeFindingsOutput(Live)` call site needs. Centralizing this is what
+ * keeps a future field addition from requiring an edit at every one of the
+ * ~10 call sites across `pr-workflow.ts`/`schedule.ts` — the exact class of
+ * bug that let two of `schedule.ts`'s early returns ship without `actionRef`
+ * for a full round after `pr-workflow.ts`'s equivalent branches were fixed.
+ */
+export function buildBaseOutputOptions(
+  inputs: Parameters<typeof buildResolvedDefaults>[0] & { actionRef?: string },
+  skippedTriggers: BuildFindingsOutputOptions['skippedTriggers']
+): Pick<BuildFindingsOutputOptions, 'actionRef' | 'resolvedDefaults' | 'skippedTriggers'> {
+  return {
+    actionRef: inputs.actionRef,
+    resolvedDefaults: buildResolvedDefaults(inputs),
+    skippedTriggers,
   };
 }
 
@@ -320,6 +351,7 @@ function serializeTriggerResult(result: ReplayTriggerResult): z.infer<typeof Tri
       skillName: result.skillName,
       status: 'success',
       report: serializeReplayReport(result.report),
+      findingProcessingEvents: result.findingProcessingEvents,
     };
   }
 
@@ -447,7 +479,6 @@ export function buildFindingsOutput(
                 ...(dedupe?.existingSkills ?? [])
                   .filter((skillName) => skillName !== r.skill)
                   .map((skillName) => ({
-                    skillExecutionId: dedupe?.existingSkillExecutionId,
                     skillName,
                     role: 'corroborating' as const,
                     matchType: dedupe?.matchType,
