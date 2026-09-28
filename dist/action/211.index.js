@@ -14960,10 +14960,21 @@ ${(0,_prompt_sections_js__WEBPACK_IMPORTED_MODULE_5__/* .buildJsonOutputSection 
 Use "finding" only for verdict "revise". For revised findings, return the complete Warden finding object and keep the original id.
 `)}`;
 }
+// Unlike the hunk prompt, the verifier gets no diff, so the finding's own file
+// must appear in changed_files or it reads as unchanged by the PR. Pin it first
+// so the maxContextFiles truncation can't drop it on large PRs.
+function withFindingFileFirst(prContext, path) {
+    if (!prContext || !path || !prContext.changedFiles.includes(path))
+        return prContext;
+    return {
+        ...prContext,
+        changedFiles: [path, ...prContext.changedFiles.filter((f) => f !== path)],
+    };
+}
 function buildVerificationUserPrompt(finding, prContext) {
     return (0,_prompt_sections_js__WEBPACK_IMPORTED_MODULE_5__/* .joinPromptSections */ .hZ)([
         (0,_prompt_sections_js__WEBPACK_IMPORTED_MODULE_5__/* .buildPullRequestContextSection */ .Dg)(prContext),
-        (0,_prompt_sections_js__WEBPACK_IMPORTED_MODULE_5__/* .buildChangedFilesSection */ .Pq)(prContext, finding.location?.path),
+        (0,_prompt_sections_js__WEBPACK_IMPORTED_MODULE_5__/* .buildChangedFilesSection */ .Pq)(withFindingFileFirst(prContext, finding.location?.path)),
         (0,_prompt_sections_js__WEBPACK_IMPORTED_MODULE_5__/* .buildTaggedSection */ .sG)('candidate_finding', JSON.stringify(finding, null, 2)),
         `<task>
 Verify this candidate. Return keep, revise, or reject.
