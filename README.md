@@ -1,3 +1,6 @@
+> [!WARNING]
+> **Deprecated.** Babylist now runs upstream [`getsentry/warden`](https://github.com/getsentry/warden) directly. Every patch in this fork ships upstream as of v0.51.1, and the shared workflow in [`babylist/.github`](https://github.com/babylist/.github) pins `getsentry/warden`. This repository receives no further updates and will be archived.
+
 <p align="center">
   <img src="assets/warden-icon.svg" alt="Warden" width="128" height="128">
 </p>
